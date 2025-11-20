@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Partage – Prototype cartes & commande groupée</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Fredoka + Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-icon"></div>
+        <div class="brand-text">
+          <span class="brand-name">Partage</span>
+          <span class="brand-sub">Commandes groupées entre proches</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="mode-pill">
+          <span class="mode-dot"></span>
+          <span>Partageur</span>
+        </div>
+        <div class="avatar">PR</div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-header" id="builder-header">
+      <h1>Nouvelle commande</h1>
+    </div>
+
+    <!-- PANNEAU PARAMÈTRES (compact) -->
+    <section class="panel panel-params">
+      <div class="field-row">
+        <div class="field">
+          <label for="orderTitle" title="Nom visible par les participants">Titre</label>
+          <input type="text" id="orderTitle" placeholder="Ex. Foie gras – Quartier centre" />
+        </div>
+        <div class="field">
+          <label for="deadline" title="Date de clôture de la commande">Date limite</label>
+          <input type="date" id="deadline" />
+        </div>
+        <div class="field field-share">
+          <label for="sharePercent" title="Pourcentage d’articles gardés gratuitement par le partageur">
+            Part partageur (%)
+          </label>
+          <div class="share-row">
+            <input type="range" id="sharePercent" min="0" max="50" step="1" value="10" />
+            <span class="pill-value"><span id="sharePercentLabel">10</span>&nbsp;%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="minWeightKg" title="Poids minimum total pour lancer la commande">Poids minimum (kg)</label>
+          <input type="number" id="minWeightKg" min="0" step="0.1" value="5" />
+          <div id="weightError" class="error-text hidden">
+            Indique un poids minimum &gt; 0.
+          </div>
+        </div>
+        <div class="field">
+          <label for="maxWeightKg" title="Poids à partir duquel tu fermes la commande (facultatif)">Poids maximum (kg)</label>
+          <input type="number" id="maxWeightKg" min="0" step="0.1" value="20" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="clientMessage" title="Message qui sera affiché aux participants">
+          Message participants
+        </label>
+        <textarea id="clientMessage" placeholder="Ex. Retrait chez moi, à l’adresse enregistrée."></textarea>
+      </div>
+    </section>
+
+    <!-- TABLE + RÉCAP -->
+    <section id="builder-screen">
+      <div class="builder-layout">
+        <!-- Table -->
+        <div class="panel-table">
+          <h2 class="panel-title">Table de cartes</h2>
+          <div id="dropZone" class="drop-zone empty" title="Glisse les cartes depuis le deck">
+            <span>Aucune carte encore posée</span>
+            <div id="tableCards" class="table-cards"></div>
+          </div>
+        </div>
+
+        <!-- Récap -->
+        <div class="panel-recap">
+          <h2 class="panel-title">Récap</h2>
+          <div id="recapGlobal"></div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Produit</th>
+                <th>Base</th>
+                <th>Logistique</th>
+                <th>Part partageur</th>
+                <th>Prix client</th>
+              </tr>
+            </thead>
+            <tbody id="recapProductsBody"></tbody>
+          </table>
+          <p id="recapEmpty" class="recap-empty">
+            Pose au moins une carte et indique un poids minimum.
+          </p>
+
+          <div class="actions-row">
+            <button class="main-btn" id="btnGenerate">Voir la page client</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VUE CLIENT -->
+    <section id="client-screen" class="hidden">
+      <div class="pill-mode-client">Vue client</div>
+      <h2 id="clientTitle">Commande groupée – Ferme Menaoude</h2>
+      <p id="clientSubtitle" class="client-subtitle"></p>
+
+      <div id="clientMessageBox" class="client-message hidden"></div>
+
+      <div id="clientProducts" class="client-products-grid"></div>
+
+      <p class="client-hint">
+        La logistique est calculée sur un poids minimum. Le prix inclut la part du partageur.
+      </p>
+
+      <div class="actions-row">
+        <button class="secondary" id="btnBackBuilder">Modifier</button>
+        <button class="main-btn" id="btnShare">Partager</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- DECK EN BAS -->
+  <section id="deckDrawer" class="open">
+    <div class="deck-shell">
+      <div class="deck-header" id="deckToggle">
+        <span class="deck-arrow" id="deckArrow">▼</span>
+        <span>Deck de cartes – Ferme Menaoude</span>
+      </div>
+      <div class="deck-content">
+        <div id="deck" class="deck-grid"><!-- cartes créées en JS --></div>
+      </div>
+    </div>
+  </section>
+
+  <script src="script.js"></script>
+</body>
+</html>
