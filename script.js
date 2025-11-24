@@ -255,10 +255,6 @@
     recapGlobal.innerHTML = `
       <div class="recap-card">
         <h3>Vue d’ensemble</h3>
-        <p>Poids produits (1 unité) : <strong>${totalWeightProducts.toFixed(
-          2
-        )} kg</strong></p>
-        <p>Poids minimum saisi : <strong>${minWeight.toFixed(2)} kg</strong></p>
         <p>Poids pris pour la logistique : <strong>${effectiveWeight.toFixed(
           2
         )} kg</strong></p>
