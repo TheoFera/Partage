@@ -940,12 +940,6 @@ export default function App() {
     );
   };
 
-  const getHomeHeading = () => {
-    return {
-      title: 'Produits',
-      subtitle: `Decouvrez les produits autour de chez vous.`,
-    };
-  };
   const getPageTitle = () => {
     if (isAuthPage) return 'Connexion';
     if (location.pathname.startsWith('/commande/nouvelle')) return 'Nouvelle commande';
@@ -962,7 +956,6 @@ export default function App() {
     return '';
   };
 
-  const homeHeading = getHomeHeading();
   const pageTitle = getPageTitle();
   const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
   const isAddProductView = location.pathname === '/produit/nouveau';
@@ -972,7 +965,9 @@ export default function App() {
     isAuthenticated &&
     (location.pathname === '/profil' ||
       (!!user?.handle && location.pathname === `/profil/${user.handle}`));
-  const mainPadding = isOrderView ? 'pt-24 pb-24' : 'pt-20 pb-24';
+  const isHome = activeTab === 'home';
+  const mainPadding = 'pb-24';
+  const mainPaddingTop = isOrderView ? 96 : isHome ? 64 : 80; // px values
   const mainPaddingBottom = isOrderView ? '12rem' : '10rem';
   const profileHeaderActions =
     activeTab === 'profile' && !isOrderView && isOwnProfileView ? (
@@ -1253,7 +1248,7 @@ export default function App() {
   }, [showSearch]);
 
   return (
-    <div className="min-h-screen bg-[#F9F2E4] overflow-x-hidden">
+    <div className="min-h-screen bg-[#F9F2E4] overflow-x-visible">
       <Toaster position="top-center" richColors offset={96} />
       <Header
         showSearch={showSearch}
@@ -1267,12 +1262,12 @@ export default function App() {
 
       <main
         className={`max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-10 ${mainPadding}`}
-        style={{ paddingBottom: mainPaddingBottom }}
+        style={{ paddingTop: `${mainPaddingTop}px`, paddingBottom: mainPaddingBottom }}
       >
         {isOrderView ? (
           <div className="mb-6">
             <h1 className="text-[#1F2937]">Vue participant</h1>
-            <p className="text-[#6B7280]">Ajustez les quantites, partagez et changez la visibilite.</p>
+            <p className="text-[#6B7280]">Ajustez les quantités, partagez et changez la visibilité.</p>
           </div>
         ) : isProductView && selectedProduct ? (
           <div className="mb-6">
@@ -1282,7 +1277,7 @@ export default function App() {
         ) : isAuthPage ? (
           <div className="mb-6">
             <h1 className="text-[#1F2937]">{pageTitle || 'Connexion'}</h1>
-            <p className="text-[#6B7280]">Accedez a votre compte ou creez-en un pour continuer.</p>
+            <p className="text-[#6B7280]">Accédez à votre compte ou créez-en un pour continuer.</p>
           </div>
         ) : isOrderCreation || isAddProductView ? (
           <div className="mb-6">
@@ -1293,16 +1288,11 @@ export default function App() {
                 : 'Ajoutez une reference produit a votre vitrine.'}
             </p>
           </div>
-        ) : activeTab === 'home' ? (
-          <div className="mb-8">
-            <h1 className="text-[#1F2937] mb-2">{homeHeading.title}</h1>
-            <p className="text-[#6B7280]">{homeHeading.subtitle}</p>
-          </div>
-        ) : (
+        ) : activeTab !== 'home' ? (
           <div className="mb-6">
             <h1 className="text-[#1F2937]">{pageTitle}</h1>
           </div>
-        )}
+        ) : null}
 
         <Routes>
           <Route path="/" element={renderProductGrid()} />

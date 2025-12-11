@@ -29,7 +29,10 @@ export function Logo({ className = '', onClick }: { className?: string; onClick?
           <circle cx="140" cy="160" r="34" />
         </g>
       </svg>
-      <span className="font-['Fredoka'] text-[#FF6B4A]" style={{ fontSize: '1.5rem', fontWeight: 600 }}>
+      <span
+        className="font-['Fredoka'] text-[#FF6B4A] header-logo-text"
+        style={{ fontSize: '1.5rem', fontWeight: 600 }}
+      >
         Partage
       </span>
     </Wrapper>

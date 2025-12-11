@@ -26,37 +26,43 @@ export function Header({
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 z-50">
+    <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] z-50">
       <div className="max-w-screen-xl mx-auto px-4 py-3">
-        <div className="flex items-center gap-3 md:gap-4 w-full">
+        <div className="flex items-center gap-4 md:gap-4 w-full min-w-0">
           <Logo onClick={onLogoClick} className={onLogoClick ? 'cursor-pointer' : ''} />
 
           {showSearch ? (
-            <div className="flex-1 min-w-[240px] md:min-w-[320px] max-w-xl flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
-                <input
-                  type="text"
-                  placeholder="Rechercher un produit..."
-                  value={searchQuery}
-                  onChange={handleSearch}
-                  className="w-full pl-10 pr-4 py-2 bg-[#F9FAFB] border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A] transition-colors"
-                />
+            <div className="flex-1 min-w-0 flex items-center gap-2">
+              <div
+                className="flex items-center gap-2"
+                style={{ flex: '0 1 580px', minWidth: '20px', maxWidth: '400px' }}
+              >
+                <div className="relative flex-1 min-w-[140px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
+                  <input
+                    type="text"
+                    placeholder="Rechercher un produit..."
+                    value={searchQuery}
+                    onChange={handleSearch}
+                    className="w-full pl-10 pr-4 py-2 bg-[#F9FAFB] border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A] transition-colors"
+                  />
+                </div>
+                {onToggleFilters && (
+                  <button
+                    type="button"
+                    onClick={onToggleFilters}
+                    className={`header-filter-button shrink-0 flex items-center justify-center gap-2 px-3 h-10 rounded-full border text-sm font-semibold whitespace-nowrap transition-colors ${
+                      filtersActive
+                        ? 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm'
+                        : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/70'
+                    }`}
+                    style={{ lineHeight: 1.1 }}
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                    <span className="header-filter-label">Filtres</span>
+                  </button>
+                )}
               </div>
-              {onToggleFilters && (
-                <button
-                  type="button"
-                  onClick={onToggleFilters}
-                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-full border text-sm font-semibold transition-colors ${
-                    filtersActive
-                      ? 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm'
-                      : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/70'
-                  }`}
-                >
-                  <SlidersHorizontal className="w-4 h-4" />
-                  <span className="hidden sm:inline">Filtres</span>
-                </button>
-              )}
             </div>
           ) : (
             <div className="flex-1" />

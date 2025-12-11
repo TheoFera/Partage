@@ -48,7 +48,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!supabaseClient) {
-      toast.error('Supabase n est pas configure. Utilisez le mode demo pour tester.');
+      toast.error('Supabase n est pas configuré. Utilisez le mode demo pour tester.');
       return;
     }
     setLoading(true);
@@ -58,10 +58,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         if (error) throw error;
         if (data.user) {
           onAuthSuccess(data.user);
-          toast.success('Connexion reussie');
+          toast.success('Connexion réussie');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.info('Verifiez vos emails pour confirmer votre connexion.');
+          toast.info('Vérifiez vos emails pour confirmer votre connexion.');
         }
       } else {
         const safeHandle = sanitizeHandle(handleValue || email);
@@ -80,7 +80,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
             return;
           }
           if (existing) {
-            toast.error('Ce tag est deja utilise. Merci d en choisir un autre.');
+            toast.error('Ce tag est deja utilisé. Merci d en choisir un autre.');
             return;
           }
         }
@@ -109,7 +109,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.success('Compte cree et connecte');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.success('Compte cree. Consultez vos emails pour activer votre acces.');
+          toast.success('Compte crée. Consultez vos emails pour activer votre accès.');
         }
       }
     } catch (error) {
@@ -127,17 +127,14 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
 
   return (
     <div className="w-full flex justify-center px-2 sm:px-4 py-6 sm:py-10">
-      <div className="w-full max-w-5xl grid lg:grid-cols-2 gap-6 bg-white border border-[#FFE0D1] rounded-3xl shadow-xl overflow-hidden">
+      <div className="w-full max-w-5xl grid lg:grid-cols-2 bg-white border border-[#FFE0D1] rounded-3xl shadow-xl overflow-hidden">
         <div className="p-8 md:p-10 bg-white text-[#1F2937] flex flex-col justify-between">
-          <div className="flex items-center gap-3 mb-8">
-            <Logo onClick={handleLogoClick} className="cursor-pointer" />
-          </div>
           <div className="space-y-4">
             <h1 className="text-3xl md:text-4xl font-bold leading-tight">
               Rejoignez la communauté des partageurs
             </h1>
             <p className="text-base text-[#4B5563] leading-relaxed">
-              Connectez-vous pour travailler en direct avec des producteurs ou vous procurer des produits auprès des
+              Connectez-vous pour travailler en direct avec des producteurs ou procurez-vous des produits auprès des
               partageurs de votre quartier.
             </p>
           </div>
@@ -334,7 +331,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               disabled={loading}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#FF6B4A] text-white font-semibold shadow-md hover:bg-[#FF5A39] transition-colors disabled:opacity-60"
             >
-              {loading ? 'Traitement...' : mode === 'login' ? 'Se connecter' : 'Creer et continuer'}
+              {loading ? 'Traitement...' : mode === 'login' ? 'Se connecter' : 'Créer et continuer'}
               <ArrowRight className="w-5 h-5" />
             </button>
           </form>
@@ -348,7 +345,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
               className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
             >
-              {mode === 'login' ? 'Creer un compte' : 'Se connecter'}
+              {mode === 'login' ? 'Créer un compte' : 'Se connecter'}
             </button>
           </div>
 

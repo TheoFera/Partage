@@ -61,15 +61,14 @@ const productFilterOptions = [
   { id: 'epicerie-sucree', label: 'Épicerie Sucrée' },
   { id: 'epicerie-salee', label: 'Épicerie Salée' },
   { id: 'boissons', label: 'Boissons' },
-  { id: 'cosmetiques', label: 'Cosmétiques' },
   { id: 'beaute-bien-etre', label: 'Beauté & Bien-être' },
 ];
 
 const attributeFilterOptions = [
   { id: 'bio', label: 'Bio' },
   { id: 'sans-nitrite', label: 'Sans nitrite' },
-  { id: 'circuit-court', label: 'Circuit court' },
-  { id: 'vrac', label: 'Vrac' },
+  { id: 'aop', label: 'AOP' },
+  { id: 'label-rouge', label: 'Label Rouge' },
 ];
 
 const producerFilterOptions = [
@@ -316,13 +315,80 @@ export function ProductsLanding({
 
   return (
     <div className="space-y-6">
-      <section className="relative rounded-3xl border border-[#FFE0D1] bg-white p-4 sm:p-6 shadow-sm">
-        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4 items-center">
-          <div className="space-y-3">
-            <h2 className="text-2xl sm:text-3xl text-[#1F2937] font-semibold">
-              Cherchez des produits qui vous intéressent et rejoignez une commande existante ou lancez la votre s'il n'y en a pas autour.
-            </h2>
-          </div>
+      <section
+        className="relative isolate overflow-hidden"
+        style={{
+          position: 'relative',
+          left: '50%',
+          marginLeft: '-50vw',
+          marginRight: '-50vw',
+          width: '100vw',
+          maxWidth: '100vw',
+          minHeight: '480px',
+          color: '#111827',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          className="absolute inset-0"
+          style={{ inset: 0, position: 'absolute' }}
+        >
+          <img
+            src="/banniere.jpg"
+            alt="Champs maraichers avec producteurs et animaux en plein air"
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              objectPosition: 'center center',
+              display: 'block',
+            }}
+            loading="lazy"
+          />
+          <div
+            className="absolute inset-0"
+            style={{
+              inset: 0,
+              background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.5) 100%, rgba(255, 255, 255, 0.8) 50%, rgba(255, 255, 255, 0.4) 0%)',
+            }}
+          />
+        </div>
+
+        <div
+          className="relative text-center"
+          style={{
+            position: 'relative',
+            maxWidth: '1500px',
+            margin: '0 auto',
+            padding: '122px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '26px',
+          }}
+        >
+          <h2
+            style={{
+              fontSize: 'clamp(28px, 5vw, 48px)',
+              fontWeight: 800,
+              lineHeight: 1.15,
+              color: '#0F172A',
+              margin: 0,
+            }}
+          >
+            Bons produits en direct des producteurs.
+          </h2>
+          <p
+            style={{
+              fontSize: 'clamp(26px, 4vw, 30px)',
+              fontWeight: 600,
+              lineHeight: 1.15,
+              color: '#0F172A',
+              maxWidth: '780px',
+              margin: '0 auto',
+            }}
+          >
+            Participez à une commande près de chez vous ou créez la vôtre et gardez en gratuitement une part.
+          </p>
         </div>
       </section>
 
@@ -356,7 +422,7 @@ export function ProductsLanding({
               }
             />
             <FilterGroup
-              label="Caracteristiques"
+              label="Caractéristiques"
               icon={<Leaf className="w-4 h-4" />}
               options={attributeFilterOptions}
               activeValues={attributes}
