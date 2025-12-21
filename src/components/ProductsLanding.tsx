@@ -419,7 +419,7 @@ export function ProductsLanding({
           style={{ inset: 0, position: 'absolute' }}
         >
           <img
-            src="/banniere.jpg"
+            src={`${import.meta.env.BASE_URL}banniere.jpg`}
             alt="Champs maraichers avec producteurs et animaux en plein air"
             style={{
               width: '100%',
