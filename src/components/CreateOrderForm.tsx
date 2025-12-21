@@ -1,6 +1,7 @@
 import React from 'react';
 import { DeckCard } from '../types';
-import { Calendar, MapPin, Package, Percent } from 'lucide-react';
+import { Calendar, MapPin, Package, Percent, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CARD_WIDTH, CARD_HEIGHT, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface CreateOrderFormProps {
@@ -37,7 +38,9 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
   const [maxWeight, setMaxWeight] = React.useState(20);
   const [deadline, setDeadline] = React.useState('');
   const [message, setMessage] = React.useState('');
-  const [pickupAddress, setPickupAddress] = React.useState('15 Rue de la République, 75001 Paris');
+  const [pickupStreet, setPickupStreet] = React.useState('');
+  const [pickupCity, setPickupCity] = React.useState('');
+  const [pickupPostcode, setPickupPostcode] = React.useState('');
   const [pickupSlots, setPickupSlots] = React.useState<PickupSlot[]>(defaultSlots);
 
   const shareFraction = Math.min(Math.max(sharerPercentage / 100, 0), 0.8);
@@ -117,6 +120,8 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
     setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, [key]: value } : slot)));
   };
 
+  const selectionCardWidth = CARD_WIDTH;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedProducts.length === 0) {
@@ -128,6 +133,10 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
       .filter((slot) => slot.enabled)
       .map((slot) => ({ day: slot.day, label: slot.label, start: slot.start, end: slot.end }));
 
+    const pickupAddress = [pickupStreet, [pickupPostcode, pickupCity].filter(Boolean).join(' ') || undefined]
+      .filter(Boolean)
+      .join(', ');
+
     onCreateOrder({
       title,
       products: selectedProductsData,
@@ -137,6 +146,9 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
       maxWeight,
       deadline: deadline ? new Date(deadline) : null,
       message,
+      pickupStreet,
+      pickupCity,
+      pickupPostcode,
       pickupAddress,
       pickupSlots: activeSlots,
       totals: {
@@ -155,9 +167,9 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
         <div className="w-24 h-24 rounded-full bg-[#FF6B4A]/20 flex items-center justify-center mb-4">
           <Package className="w-12 h-12 text-[#FF6B4A]" />
         </div>
-        <h3 className="text-[#1F2937] mb-2">Votre selection est vide</h3>
+        <h3 className="text-[#1F2937] mb-2">Votre sélection est vide</h3>
         <p className="text-[#6B7280] text-center max-w-sm">
-          Utilisez le bouton "Creer" sur une carte produit pour pre-remplir une commande ici.
+          Utilisez le bouton "Créer" depuis les pages "Produits".
         </p>
       </div>
     );
@@ -176,11 +188,11 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
       <div className="create-order-layout gap-6">
         <div className="space-y-6">
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-            <h2 className="text-[#1F2937] mb-2">Nouvelle commande</h2>
+            <h2 className="text-[#1F2937] mb-2">Paramètres de la commande</h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Titre</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Nom de la commande</label>
                 <input
                   type="text"
                   value={title}
@@ -232,7 +244,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
                 </button>
               </div>
               <p className="text-xs text-[#6B7280] mt-2">
-                Les commandes privées restent visibles uniquement dans votre profil.
+                Les commandes privées ne sont trouvables que par le lien de la commande.
               </p>
             </div>
 
@@ -278,18 +290,45 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Adresse de retrait</label>
+              <div className="space-y-3">
+                <label className="block text-sm text-[#6B7280]">Adresse de retrait</label>
                 <div className="relative">
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
                   <input
                     type="text"
-                    value={pickupAddress}
-                    onChange={(e) => setPickupAddress(e.target.value)}
-                    placeholder="Adresse complète"
+                    value={pickupStreet}
+                    onChange={(e) => setPickupStreet(e.target.value)}
+                    placeholder="Ex. 15 Rue de la Republique"
                     className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    required
                   />
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <input
+                      type="text"
+                      value={pickupCity}
+                      onChange={(e) => setPickupCity(e.target.value)}
+                      placeholder="Ville"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      value={pickupPostcode}
+                      onChange={(e) => setPickupPostcode(e.target.value)}
+                      placeholder="Code postal"
+                      pattern="\\d{4,5}"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                      required
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-[#6B7280]">
+                  L&apos;adresse précise n'est communiquée aux participants qu'après paiement.
+                </p>
               </div>
 
               <div>
@@ -298,10 +337,36 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   placeholder="Ex. Retrait chez moi, à l'adresse enregistrée."
-                  rows={2}
+                  rows={5}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
                 />
               </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-6 shadow-sm">
+            <h3 className="text-[#1F2937] mb-4">
+              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} a inclure dans la commande
+            </h3>
+
+            <div className="space-y-6">
+      {Object.entries(groupedByProducer).map(([producerId, group]) => (
+        <div key={producerId} className="space-y-2">
+          <p className="text-sm text-[#6B7280]" style={{ fontWeight: 500 }}>
+            
+          </p>
+                  <ProducerProductCarousel
+                    products={group.products}
+                    selectedProducts={selectedProducts}
+                    onToggleSelection={(productId, wasSelected) => {
+                      setSelectedProducts((prev) =>
+                        wasSelected ? prev.filter((id) => id !== productId) : [...prev, productId]
+                      );
+                    }}
+                    cardWidth={selectionCardWidth}
+                  />
+                </div>
+              ))}
             </div>
           </div>
 
@@ -361,62 +426,6 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
                   <span>Précisez une plage horaire par jour pour éviter les confusions.</span>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h3 className="text-[#1F2937] mb-4">Produits à inclure</h3>
-            <p className="text-sm text-[#6B7280] mb-4">
-              Glissez les cartes des produits que vous souhaitez inclure dans cette commande.
-            </p>
-
-            <div className="space-y-4">
-              {Object.entries(groupedByProducer).map(([producerId, group]) => (
-                <div key={producerId}>
-                  <p className="text-sm text-[#6B7280] mb-2" style={{ fontWeight: 500 }}>
-                    {group.producerName}
-                  </p>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {group.products.map((product) => (
-                      <button
-                        key={product.id}
-                        type="button"
-                        onClick={() => toggleProduct(product.id)}
-                        className={`relative rounded-xl overflow-hidden border-2 transition-all ${
-                          selectedProducts.includes(product.id)
-                            ? 'border-[#28C1A5] shadow-lg'
-                            : 'border-gray-200 hover:border-[#FFD166]'
-                        }`}
-                      >
-                        <div className="aspect-square">
-                          <ImageWithFallback
-                            src={product.imageUrl}
-                            alt={product.name}
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <div className="p-2 bg-white">
-                          <p className="text-sm text-[#1F2937] truncate">{product.name}</p>
-                          <div className="flex items-center justify-between text-xs">
-                            <p className="text-[#FF6B4A]">{product.price.toFixed(2)} €</p>
-                            <span className="px-2 py-0.5 bg-[#F9FAFB] border border-gray-200 rounded-full text-[#1F2937]">
-                              {product.measurement === 'kg' ? 'Kg' : 'Unité'}
-                            </span>
-                          </div>
-                          <p className="text-xs text-[#6B7280]">{product.unit}</p>
-                        </div>
-                        {selectedProducts.includes(product.id) && (
-                          <div className="absolute top-2 right-2 w-6 h-6 bg-[#28C1A5] rounded-full flex items-center justify-center">
-                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -498,5 +507,182 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
         )}
       </div>
     </form>
+  );
+}
+
+function ProducerProductCarousel({
+  products,
+  selectedProducts,
+  onToggleSelection,
+  cardWidth,
+}: {
+  products: DeckCard[];
+  selectedProducts: string[];
+  onToggleSelection: (productId: string, wasSelected: boolean) => void;
+  cardWidth: number;
+}) {
+  const [startIndex, setStartIndex] = React.useState(0);
+  const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  const computeVisible = React.useCallback((width: number) => {
+    const available = Math.max(0, width - CONTAINER_SIDE_PADDING * 2 + CARD_GAP);
+    const perCard = CARD_WIDTH + CARD_GAP;
+    return Math.max(MIN_VISIBLE_CARDS, Math.floor(available / perCard) || 0);
+  }, []);
+
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const width = entry?.contentRect?.width ?? el.clientWidth;
+      const next = computeVisible(width);
+      setVisibleCount((prev) => (prev === next ? prev : next));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [computeVisible]);
+
+  React.useEffect(() => {
+    const maxIndex = Math.max(0, products.length - visibleCount);
+    setStartIndex((prev) => Math.min(prev, maxIndex));
+  }, [products.length, visibleCount]);
+
+  const useCarousel = products.length > visibleCount;
+  const maxIndex = Math.max(0, products.length - visibleCount);
+
+  const containerMinWidth =
+    MIN_VISIBLE_CARDS * CARD_WIDTH +
+    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
+
+  const containerStyle: React.CSSProperties = {
+    minWidth: `${containerMinWidth}px`,
+    width: '100%',
+    paddingInline: CONTAINER_SIDE_PADDING,
+    position: 'relative',
+  };
+
+  const productsToShow = useCarousel
+    ? products.slice(startIndex, startIndex + visibleCount)
+    : products;
+
+  const canScrollLeft = useCarousel && startIndex > 0;
+  const canScrollRight = useCarousel && startIndex < maxIndex;
+
+  const goLeft = () => {
+    if (!canScrollLeft) return;
+    setStartIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const goRight = () => {
+    if (!canScrollRight) return;
+    setStartIndex((prev) => Math.min(prev + 1, maxIndex));
+  };
+
+  return (
+    <div className="relative" style={containerStyle} ref={containerRef}>
+      <div
+        className="flex gap-3"
+        style={{
+          alignItems: 'stretch',
+          justifyContent: 'center',
+          userSelect: 'none',
+        }}
+      >
+        {productsToShow.map((product) => {
+          const isSelected = selectedProducts.includes(product.id);
+          return (
+            <button
+              key={product.id}
+              type="button"
+              onClick={() => onToggleSelection(product.id, isSelected)}
+              style={{
+                width: `${cardWidth}px`,
+                minWidth: `${cardWidth}px`,
+                flex: `0 0 ${cardWidth}px`,
+                minHeight: `${CARD_HEIGHT}px`,
+                height: `${CARD_HEIGHT}px`,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                border: '2px solid',
+                borderColor: isSelected ? '#FF6B4A' : '#e5e7eb',
+                borderRadius: 16,
+                background: '#fff',
+                boxShadow: isSelected
+                  ? '0 14px 30px rgba(255,107,74,0.3)'
+                  : '0 12px 26px rgba(17,24,39,0.06)',
+                padding: 0,
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease',
+              }}
+            >
+              <div style={{ width: '100%', height: '105px', background: '#f3f4f6', flexShrink: 0 }}>
+                <ImageWithFallback
+                  src={product.imageUrl}
+                  alt={product.name}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                />
+              </div>
+              <div style={{ padding: '10px 12px', textAlign: 'left', display: 'grid', gap: 6, flex: 1 }}>
+                <p style={{ margin: 0, color: '#6B7280', fontSize: 12, lineHeight: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {product.producerName}
+                </p>
+                <p style={{ margin: 0, color: '#111827', fontWeight: 700, fontSize: 15, lineHeight: '20px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {product.name}
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                  <span style={{ color: '#FF6B4A', fontWeight: 700, fontSize: 15 }}>
+                    {product.price.toFixed(2)} €
+                  </span>
+                  <span style={{ fontSize: 11, color: '#374151' }}>
+                    / {product.measurement === 'kg' ? 'Kg' : 'Unité'} ({product.unit})
+                  </span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {canScrollLeft && (
+        <button
+          type="button"
+          onClick={goLeft}
+          aria-label="Défiler vers la gauche"
+          className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full border transition"
+          style={{
+            borderColor: '#FF6B4A',
+            background: '#FF6B4A',
+            boxShadow: '0 12px 26px rgba(255,107,74,0.35)',
+            width: 39,
+            height: 39,
+          }}
+        >
+          <ChevronLeft className="text-white mx-auto" style={{ width: 20, height: 20 }} />
+        </button>
+      )}
+
+      {canScrollRight && (
+        <button
+          type="button"
+          onClick={goRight}
+          aria-label="Défiler vers la droite"
+          className="absolute right-0 top-1/2 -translate-y-1/2 rounded-full border transition"
+          style={{
+            borderColor: '#FF6B4A',
+            background: '#FF6B4A',
+            boxShadow: '0 12px 26px rgba(255,107,74,0.35)',
+            width: 39,
+            height: 39,
+          }}
+        >
+          <ChevronRight className="text-white mx-auto" style={{ width: 20, height: 20 }} />
+        </button>
+      )}
+    </div>
   );
 }

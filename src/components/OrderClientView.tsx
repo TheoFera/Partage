@@ -8,18 +8,19 @@ import {
   Lock,
   MapPin,
   Scale,
-  Share2,
   ShoppingCart,
   Users,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { GroupOrder } from '../types';
-import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ProductResultCard } from './ProductsLanding';
+import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { toast } from 'sonner';
 
 interface OrderClientViewProps {
   order: GroupOrder;
   onClose: () => void;
-  onShare?: (order: GroupOrder) => void;
   onVisibilityChange?: (visibility: GroupOrder['visibility']) => void;
   onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
   isOwner?: boolean;
@@ -56,10 +57,11 @@ function getProductWeightKg(product: GroupOrder['products'][number]) {
   return 0.25;
 }
 
+const ORDER_CARD_WIDTH = CARD_WIDTH;
+
 export function OrderClientView({
   order,
   onClose,
-  onShare,
   onVisibilityChange,
   onPurchase,
   isOwner = true,
@@ -132,13 +134,6 @@ export function OrderClientView({
     });
   };
 
-  const handleShare = () => {
-    const url = `${window.location.origin}/order/${order.id}`;
-    navigator.clipboard?.writeText(url).catch(() => undefined);
-    toast.success('Lien de commande copie dans le presse-papier');
-    onShare?.(order);
-  };
-
   const handleVisibilityToggle = () => {
     if (!isOwner) return;
     const next = order.visibility === 'public' ? 'private' : 'public';
@@ -159,6 +154,14 @@ export function OrderClientView({
     setQuantities(resetQuantities);
     toast.success('Quantites enregistrees pour cette commande.');
   };
+
+  const pickupAddress =
+    order.pickupAddress ||
+    [order.pickupStreet, [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') || undefined]
+      .filter(Boolean)
+      .join(', ') ||
+    [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') ||
+    'Lieu précis communiqué après paiement';
 
   const pickupLine = order.pickupSlots?.length
     ? order.pickupSlots
@@ -194,14 +197,6 @@ export function OrderClientView({
           Retour
         </button>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={handleShare}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#FF6B4A] text-[#FF6B4A] bg-white shadow-sm hover:bg-[#FFF1E6] transition-colors"
-          >
-            <Share2 className="w-4 h-4" />
-            Copier le lien
-          </button>
           {isOwner && (
             <button
               type="button"
@@ -264,7 +259,7 @@ export function OrderClientView({
                     Retrait
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg leading-tight">{pickupLine}</p>
-                  <p className="text-xs text-[#6B7280]">{order.pickupAddress}</p>
+                  <p className="text-xs text-[#6B7280]">{pickupAddress}</p>
                 </div>
               </div>
 
@@ -289,83 +284,17 @@ export function OrderClientView({
 
             {order.products.length === 0 ? (
               <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
-                Aucun produit n'est associé a cette commande pour l'instant.
+                Aucun produit n'est associe a cette commande pour l'instant.
               </div>
             ) : (
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {order.products.map((product) => (
-                  <article
-                    key={product.id}
-                    className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col"
-                  >
-                    <div className="relative h-40 bg-[#F3F4F6]">
-                      <ImageWithFallback
-                        src={product.imageUrl}
-                        alt={product.name}
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute top-3 left-3 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/90 text-[#1F2937] border border-gray-100">
-                        <Scale className="w-3.5 h-3.5 text-[#FF6B4A]" />
-                        {product.measurement === 'kg' ? 'Au poids' : 'A la piece'}
-                      </div>
-                    </div>
-
-                    <div className="p-4 space-y-3 flex-1 flex flex-col">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-base font-semibold text-[#1F2937] leading-tight">{product.name}</p>
-                          <p className="text-[11px] uppercase tracking-wide text-[#6B7280]">
-                            {product.producerName} - {product.producerLocation}
-                          </p>
-                        </div>
-                        <span className="text-xs px-2 py-1 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#4B5563]">
-                          {product.unit}
-                        </span>
-                      </div>
-
-                      <div className="space-y-1">
-                        <p className="text-[#FF6B4A] font-semibold text-lg">{formatPrice(product.price)}</p>
-                        <p className="text-[12px] text-[#6B7280]">
-                          Environ {getProductWeightKg(product).toFixed(2)} kg par carte
-                        </p>
-                      </div>
-
-                      <div className="mt-auto space-y-2">
-                        <span className="text-sm text-[#1F2937] font-medium">Quantité souhaitée</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleQuantityChange(product.id, -1)}
-                            className="w-9 h-9 rounded-full border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A] transition-colors"
-                            aria-label={`Retirer une carte de ${product.name}`}
-                          >
-                            -
-                          </button>
-                          <input
-                            type="number"
-                            min={0}
-                            value={quantities[product.id] ?? 0}
-                            onChange={(e) => {
-                              const value = Math.max(0, Number(e.target.value) || 0);
-                              setQuantities((prev) => ({ ...prev, [product.id]: value }));
-                            }}
-                            className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
-                            aria-label={`Quantite pour ${product.name}`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleQuantityChange(product.id, 1)}
-                            className="w-9 h-9 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] border border-[#FF6B4A]/30 hover:bg-[#FF6B4A]/20 transition-colors"
-                            aria-label={`Ajouter une carte de ${product.name}`}
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
+              <OrderProductsCarousel
+                products={order.products}
+                quantities={quantities}
+                onDeltaQuantity={handleQuantityChange}
+                onDirectQuantity={(productId, value) =>
+                  setQuantities((prev) => ({ ...prev, [productId]: Math.max(0, value) }))
+                }
+              />
             )}
           </div>
         </div>
@@ -433,15 +362,7 @@ export function OrderClientView({
               </p>
             </div>
             <div className="h-px bg-gray-100" />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={handleShare}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#FF6B4A] text-[#FF6B4A] bg-white shadow-sm hover:bg-[#FFF1E6] transition-colors"
-              >
-                <Share2 className="w-4 h-4" />
-                Partager
-              </button>
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={handlePurchase}
@@ -455,6 +376,170 @@ export function OrderClientView({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function OrderProductsCarousel({
+  products,
+  quantities,
+  onDeltaQuantity,
+  onDirectQuantity,
+}: {
+  products: GroupOrder['products'];
+  quantities: Record<string, number>;
+  onDeltaQuantity: (productId: string, delta: number) => void;
+  onDirectQuantity: (productId: string, value: number) => void;
+}) {
+  const [startIndex, setStartIndex] = React.useState(0);
+  const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  const computeVisible = React.useCallback((width: number) => {
+    const available = Math.max(0, width - CONTAINER_SIDE_PADDING * 2 + CARD_GAP);
+    const perCard = CARD_WIDTH + CARD_GAP;
+    return Math.max(MIN_VISIBLE_CARDS, Math.floor(available / perCard) || 0);
+  }, []);
+
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const width = entry?.contentRect?.width ?? el.clientWidth;
+      const next = computeVisible(width);
+      setVisibleCount((prev) => (prev === next ? prev : next));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [computeVisible]);
+
+  React.useEffect(() => {
+    const maxIndex = Math.max(0, products.length - visibleCount);
+    setStartIndex((prev) => Math.min(prev, maxIndex));
+  }, [products.length, visibleCount]);
+
+  const useCarousel = products.length > visibleCount;
+  const maxIndex = Math.max(0, products.length - visibleCount);
+
+  const containerMinWidth =
+    MIN_VISIBLE_CARDS * CARD_WIDTH +
+    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
+
+  const containerStyle: React.CSSProperties = {
+    minWidth: `${containerMinWidth}px`,
+    width: '100%',
+    paddingInline: CONTAINER_SIDE_PADDING,
+    position: 'relative',
+  };
+
+  const productsToShow = useCarousel
+    ? products.slice(startIndex, startIndex + visibleCount)
+    : products;
+
+  const canScrollLeft = useCarousel && startIndex > 0;
+  const canScrollRight = useCarousel && startIndex < maxIndex;
+
+  const goLeft = () => {
+    if (!canScrollLeft) return;
+    setStartIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const goRight = () => {
+    if (!canScrollRight) return;
+    setStartIndex((prev) => Math.min(prev + 1, maxIndex));
+  };
+
+  return (
+    <div className="relative" style={containerStyle} ref={containerRef}>
+      <div className="flex gap-3" style={{ alignItems: 'stretch', justifyContent: 'flex-start' }}>
+        {productsToShow.map((product) => {
+          const quantity = quantities[product.id] ?? 0;
+          return (
+            <div
+              key={product.id}
+              style={{
+                width: `${ORDER_CARD_WIDTH}px`,
+                minWidth: `${ORDER_CARD_WIDTH}px`,
+                flex: `0 0 ${ORDER_CARD_WIDTH}px`,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <ProductResultCard
+                product={product}
+                related={[]}
+                canSave={false}
+                inDeck={false}
+                onOpen={() => undefined}
+                onOpenProducer={() => undefined}
+                showSelectionControl={false}
+                cardWidth={ORDER_CARD_WIDTH}
+                compact
+              />
+              <div className="w-full space-y-2" style={{ maxWidth: ORDER_CARD_WIDTH }}>
+                <p className="text-[12px] text-[#6B7280] text-center">
+                  Environ {getProductWeightKg(product).toFixed(2)} kg par carte
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onDeltaQuantity(product.id, -1)}
+                    className="w-9 h-9 rounded-full border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A] transition-colors"
+                    aria-label={`Retirer une carte de ${product.name}`}
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min={0}
+                    value={quantity}
+                    onChange={(e) => {
+                      const value = Math.max(0, Number(e.target.value) || 0);
+                      onDirectQuantity(product.id, value);
+                    }}
+                    className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
+                    aria-label={`Quantite pour ${product.name}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onDeltaQuantity(product.id, 1)}
+                    className="w-9 h-9 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] border border-[#FF6B4A]/30 hover:bg-[#FF6B4A]/20 transition-colors"
+                    aria-label={`Ajouter une carte de ${product.name}`}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {canScrollLeft && (
+        <button
+          type="button"
+          onClick={goLeft}
+          aria-label="Défiler vers la gauche"
+          className="absolute left-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full border border-gray-200 bg-white shadow hover:border-[#FF6B4A] transition"
+        >
+          <ChevronLeft className="w-4 h-4 text-[#FF6B4A] mx-auto" />
+        </button>
+      )}
+
+      {canScrollRight && (
+        <button
+          type="button"
+          onClick={goRight}
+          aria-label="Défiler vers la droite"
+          className="absolute right-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full border border-gray-200 bg-white shadow hover:border-[#FF6B4A] transition"
+        >
+          <ChevronRight className="w-4 h-4 text-[#FF6B4A] mx-auto" />
+        </button>
+      )}
     </div>
   );
 }

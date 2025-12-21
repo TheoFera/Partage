@@ -1,0 +1,1 @@
+    if (activeTab === 'create') return 'Découvrir';

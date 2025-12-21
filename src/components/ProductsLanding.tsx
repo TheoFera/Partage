@@ -12,6 +12,14 @@ import {
   Leaf,
   Heart,
 } from 'lucide-react';
+import {
+  CARD_WIDTH,
+  CARD_HEIGHT,
+  CARD_GAP,
+  MAX_VISIBLE_CARDS,
+  MIN_VISIBLE_CARDS,
+  CONTAINER_SIDE_PADDING,
+} from '../constants/cards';
 
 type SearchScope = 'products' | 'producers' | 'combined';
 
@@ -28,13 +36,15 @@ interface ProductsLandingProps {
   onOpenProducer?: (product: Product) => void;
   onOpenOrder: (orderId: string) => void;
   onStartOrderFromProduct?: (product: Product) => void;
+  onOpenSharer?: (sharerName: string) => void;
+  onSelectProducerCategory?: (tag: string) => void;
   filtersOpen: boolean;
   onToggleFilters: () => void;
 }
 
 type ProductGroupVariant = 'producer' | 'order';
 
-interface ProductGroupDescriptor {
+export interface ProductGroupDescriptor {
   id: string;
   title: string;
   location: string;
@@ -43,13 +53,12 @@ interface ProductGroupDescriptor {
   variant: ProductGroupVariant;
   orderId?: string;
   sharerName?: string;
+  minWeight?: number;
+  maxWeight?: number;
+  orderedWeight?: number;
+  deadline?: Date;
+  avatarUrl?: string;
 }
-
-const CARD_WIDTH = 150;
-const CARD_HEIGHT = 230;
-const CARD_GAP = 10;
-const MAX_VISIBLE_CARDS = 2;
-const CONTAINER_SIDE_PADDING = 9;
 
 const productFilterOptions = [
   { id: 'fruits-legumes', label: 'Fruits & Légumes' },
@@ -83,6 +92,11 @@ const producerFilterOptions = [
   { id: 'autre', label: 'Autre' },
 ];
 
+const producerTagLabelMap: Record<string, string> = producerFilterOptions.reduce(
+  (acc, option) => ({ ...acc, [option.id]: option.label }),
+  {} as Record<string, string>
+);
+
 const producerTagsMap: Record<string, string[]> = {
   'current-user': ['maraicher'],
   p2: ['apiculteur'],
@@ -111,6 +125,49 @@ const stripDistance = (value?: string) => {
     .replace(/\s*[-–—]?\s*\d+(?:[.,]\d+)?\s*km/gi, '')
     .replace(/\s*[-–—]\s*$/, '')
     .trim();
+};
+
+const extractPostcode = (value?: string) => {
+  if (!value) return undefined;
+  const match = value.match(/\b(75\d{3}|\d{5})\b/);
+  return match ? match[1] : undefined;
+};
+
+const formatParisArrondissement = (postcode?: string | null) => {
+  if (!postcode) return null;
+  const match = `${postcode}`.match(/75(\d{3})/);
+  if (!match) return null;
+  const arrondissement = parseInt(match[1].slice(-2), 10);
+  if (!Number.isFinite(arrondissement) || arrondissement < 1 || arrondissement > 20) return null;
+  const suffix = arrondissement === 1 ? '1er' : `${arrondissement}e`;
+  return `Paris ${suffix}`;
+};
+
+const extractCityFromAddressLike = (value?: string) => {
+  if (!value) return '';
+  const stripped = stripDistance(value);
+  const parts = stripped.split(',').map((part) => part.trim()).filter(Boolean);
+  const lastPart = parts.length ? parts[parts.length - 1] : stripped;
+  const postcodeCity = lastPart.match(/\b\d{4,5}\s+(.+)/);
+  if (postcodeCity) return postcodeCity[1].trim();
+  return lastPart.replace(/\b\d{4,5}\b/g, '').trim();
+};
+
+const formatCityLabel = (city?: string, postcode?: string, fallback?: string) => {
+  const normalizedCity = city?.trim();
+  const fromFallbackPostcode = extractPostcode(fallback);
+  const parisLabel = formatParisArrondissement(postcode ?? fromFallbackPostcode);
+  if (parisLabel && (!normalizedCity || normalizedCity.toLowerCase() === 'paris')) {
+    return parisLabel;
+  }
+  if (normalizedCity) return normalizedCity;
+  const coarse = extractCityFromAddressLike(fallback);
+  return coarse || 'Proche de vous';
+};
+
+const getProducerCategoryLabel = (tags: string[]) => {
+  const label = tags.map((tag) => producerTagLabelMap[tag]).filter(Boolean)[0];
+  return label || producerTagLabelMap.autre || 'Autre';
 };
 
 const getProductAttributes = (product: Product) => {
@@ -159,6 +216,8 @@ export function ProductsLanding({
   onOpenProduct,
   onOpenProducer,
   onOpenOrder,
+  onOpenSharer,
+  onSelectProducerCategory,
   onStartOrderFromProduct,
   filtersOpen,
   onToggleFilters,
@@ -169,8 +228,15 @@ export function ProductsLanding({
   const [attributes, setAttributes] = React.useState<string[]>([]);
   const [inStockOnly, setInStockOnly] = React.useState(false);
   const [localOnly, setLocalOnly] = React.useState(false);
+  const handleSelectProducerCategory = React.useCallback(
+    (tag: string) =>
+      setProducerFilters((prev) => (prev.includes(tag) ? prev : [...prev, tag])),
+    []
+  );
+  const categoryClick = onSelectProducerCategory ?? handleSelectProducerCategory;
 
   const deckIds = React.useMemo(() => new Set(deck.map((card) => card.id)), [deck]);
+  const showSelectionControls = Boolean(onAddToDeck || onRemoveFromDeck);
   const toggleSelection = React.useCallback(
     (product: Product, isSelected: boolean) => {
       if (isSelected) {
@@ -216,6 +282,7 @@ export function ProductsLanding({
         id: string;
         name: string;
         location: string;
+        postcode?: string;
         tags: string[];
         products: Product[];
       }
@@ -223,10 +290,12 @@ export function ProductsLanding({
 
     productResults.forEach((product) => {
       const tags = producerTagsMap[product.producerId] ?? ['local'];
+      const postcode = extractPostcode(product.producerLocation);
       const existing = grouped.get(product.producerId) ?? {
         id: product.producerId,
         name: product.producerName,
-        location: stripDistance(product.producerLocation),
+        location: formatCityLabel(undefined, postcode, product.producerLocation),
+        postcode,
         tags,
         products: [],
       };
@@ -275,30 +344,39 @@ export function ProductsLanding({
     return producerProductRows.map((producer) => ({
       id: producer.id,
       title: producer.name,
-      location: producer.location,
+      location: producer.postcode ? `${producer.location} ${producer.postcode}` : producer.location,
       tags: producer.tags,
       products: producer.products,
       variant: 'producer',
+      avatarUrl: producer.products[0]?.imageUrl,
     }));
   }, [producerProductRows]);
 
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
       const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
-      const locationRaw =
-        order.pickupAddress || sortedProducts[0]?.producerLocation || order.producerName;
-      const location = stripDistance(locationRaw);
+      const locationFallback =
+        order.pickupAddress || order.mapLocation?.areaLabel || sortedProducts[0]?.producerLocation || order.producerName;
+      const location = formatCityLabel(order.pickupCity, order.pickupPostcode, locationFallback);
+      const locationWithPostcode = order.pickupPostcode
+        ? `${location} ${order.pickupPostcode}`
+        : location;
       const productCountLabel =
         sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
       return {
         id: order.id,
         orderId: order.id,
         title: order.title || order.producerName,
-        location,
+        location: locationWithPostcode,
         tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
         products: sortedProducts,
         variant: 'order',
         sharerName: order.sharerName,
+        minWeight: order.minWeight,
+        maxWeight: order.maxWeight,
+        orderedWeight: order.orderedWeight,
+        deadline: order.deadline,
+        avatarUrl: sortedProducts[0]?.imageUrl,
       };
     });
   }, [ordersResults]);
@@ -315,20 +393,27 @@ export function ProductsLanding({
 
   return (
     <div className="space-y-6">
-      <section
-        className="relative isolate overflow-hidden"
+      <div
         style={{
           position: 'relative',
           left: '50%',
           marginLeft: '-50vw',
           marginRight: '-50vw',
           width: '100vw',
-          maxWidth: '100vw',
-          minHeight: '480px',
-          color: '#111827',
-          overflow: 'hidden',
+          overflowX: 'hidden',
         }}
       >
+        <section
+          className="relative isolate"
+          style={{
+            position: 'relative',
+            width: '100%',
+            maxWidth: '100%',
+            minHeight: '480px',
+            color: '#111827',
+            overflow: 'hidden',
+          }}
+        >
         <div
           className="absolute inset-0"
           style={{ inset: 0, position: 'absolute' }}
@@ -358,7 +443,7 @@ export function ProductsLanding({
           className="relative text-center"
           style={{
             position: 'relative',
-            maxWidth: '1500px',
+            maxWidth: '1400px',
             margin: '0 auto',
             padding: '122px 24px',
             display: 'flex',
@@ -375,22 +460,23 @@ export function ProductsLanding({
               margin: 0,
             }}
           >
-            Bons produits en direct des producteurs.
+            Moins d’intermédiaires, plus de qualité
           </h2>
           <p
             style={{
               fontSize: 'clamp(26px, 4vw, 30px)',
-              fontWeight: 600,
-              lineHeight: 1.15,
+              fontWeight: 620,
+              lineHeight: 1.35,
               color: '#0F172A',
-              maxWidth: '780px',
+              maxWidth: '880px',
               margin: '0 auto',
             }}
           >
-            Participez à une commande près de chez vous ou créez la vôtre et gardez en gratuitement une partie.
+            Participez à des commandes groupées près de chez vous ou créez les vôtres et recevez une part en tant que « partageur »
           </p>
         </div>
       </section>
+      </div>
 
       {filtersOpen && (
         <section className="bg-white rounded-3xl shadow-sm border border-gray-100 p-4 sm:p-6 -mt-12 relative z-10 space-y-4">
@@ -447,9 +533,10 @@ export function ProductsLanding({
           combinedGroups.length ? (
             <div className="px-1 sm:px-3 w-full">
               <div
-                className="mx-auto flex flex-wrap justify-center gap-3"
                 style={{
                   maxWidth: '1200px',
+                  margin: '0 auto',
+                  textAlign: 'center',
                   whiteSpace: 'normal',
                 }}
               >
@@ -457,25 +544,32 @@ export function ProductsLanding({
                   <div
                     key={`${group.variant}-${group.id}`}
                     style={{
-                      display: 'flex',
+                      display: 'inline-block',
+                      verticalAlign: 'top',
+                      marginRight: '12px',
+                      marginBottom: '12px',
+                      textAlign: 'left',
                     }}
                   >
-                    <ProductGroupContainer
-                      group={group}
-                      canSave={canSaveProduct}
-                      deckIds={deckIds}
-                      onSave={onAddToDeck}
-                      onRemoveFromDeck={onRemoveFromDeck}
-                      onToggleSelection={toggleSelection}
-                      onCreateOrder={onStartOrderFromProduct}
-                      onOpenProduct={onOpenProduct}
-                      onOpenOrder={onOpenOrder}
-                      onOpenProducer={onOpenProducer}
-                    />
-                  </div>
-                ))}
-              </div>
+                  <ProductGroupContainer
+                    group={group}
+                    canSave={canSaveProduct}
+                    deckIds={deckIds}
+                    onSave={onAddToDeck}
+                    onRemoveFromDeck={onRemoveFromDeck}
+                    onToggleSelection={toggleSelection}
+                    onCreateOrder={onStartOrderFromProduct}
+                    onOpenProduct={onOpenProduct}
+                    onOpenOrder={onOpenOrder}
+                    onOpenProducer={onOpenProducer}
+                    onOpenSharer={onOpenSharer}
+                    onSelectProducerCategory={categoryClick}
+                    showSelectionControl={showSelectionControls}
+                  />
+                </div>
+              ))}
             </div>
+          </div>
           ) : (
             <EmptyState
               title="Aucun résultat"
@@ -485,7 +579,16 @@ export function ProductsLanding({
         ) : showProducts ? (
           hasProducts ? (
             <div className="px-1 sm:px-3 w-full">
-              <div className="flex flex-wrap gap-3 items-stretch w-full justify-center">
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                  alignItems: 'stretch',
+                  width: '100%',
+                  justifyContent: 'center',
+                }}
+              >
                 {productResults.map((product) => (
                   <ProductResultCard
                     key={product.id}
@@ -503,6 +606,7 @@ export function ProductsLanding({
                     onOpenProducer={onOpenProducer}
                     onCreateOrder={onStartOrderFromProduct}
                     onOpen={onOpenProduct}
+                    showSelectionControl={showSelectionControls}
                     compact
                     cardWidth={CARD_WIDTH}
                   />
@@ -518,16 +622,23 @@ export function ProductsLanding({
         ) : hasProducers ? (
           <div className="px-1 sm:px-3 w-full">
             <div
-              className="mx-auto flex flex-wrap justify-center gap-3"
               style={{
                 maxWidth: '1200px',
+                margin: '0 auto',
+                textAlign: 'center',
                 whiteSpace: 'normal',
               }}
             >
               {producerGroups.map((group) => (
                 <div
                   key={`producer-${group.id}`}
-                  className="flex"
+                  style={{
+                    display: 'inline-block',
+                    verticalAlign: 'top',
+                    marginRight: '12px',
+                    marginBottom: '12px',
+                    textAlign: 'left',
+                  }}
                 >
                   <ProductGroupContainer
                     group={group}
@@ -539,6 +650,9 @@ export function ProductsLanding({
                     onCreateOrder={onStartOrderFromProduct}
                     onOpenProduct={onOpenProduct}
                     onOpenProducer={onOpenProducer}
+                    onOpenSharer={onOpenSharer}
+                    onSelectProducerCategory={categoryClick}
+                    showSelectionControl={showSelectionControls}
                   />
                 </div>
               ))}
@@ -639,7 +753,7 @@ function FilterGroup({
   );
 }
 
-function ProductResultCard({
+export function ProductResultCard({
   product,
   related: _related,
   canSave,
@@ -650,6 +764,7 @@ function ProductResultCard({
   onOpenProducer,
   onCreateOrder,
   onOpen,
+  showSelectionControl,
   compact = false,
   cardWidth = CARD_WIDTH,
 }: {
@@ -663,6 +778,7 @@ function ProductResultCard({
   onOpenProducer?: (product: Product) => void;
   onCreateOrder?: (product: Product) => void;
   onOpen: (productId: string) => void;
+  showSelectionControl?: boolean;
   compact?: boolean;
   cardWidth?: number;
 }) {
@@ -681,7 +797,7 @@ function ProductResultCard({
     minHeight: `${CARD_HEIGHT}px`,
     height: `${CARD_HEIGHT}px`,
   };
-  const imageStyle = compact ? { height: '125px' } : { height: '150px' };
+  const imageStyle = { height: '105px' };
   const headerText = product.producerName?.trim() ?? '';
   const handleHeartClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -701,6 +817,9 @@ function ProductResultCard({
     }
   };
 
+  const allowSelection = showSelectionControl ?? canSave;
+  const showSelectionButton = allowSelection && Boolean(onToggleSelection || onSave || onRemove);
+
   return (
     <div
       className="bg-white rounded-2xl border border-[#F1E3DA] shadow-[0_12px_30px_-18px_rgba(31,41,55,0.35)] overflow-hidden flex flex-col hover:shadow-lg transition-shadow flex-shrink-0 h-full"
@@ -712,18 +831,30 @@ function ProductResultCard({
           alt={product.name}
           className="w-full h-full object-cover"
         />
-        {canSave && (onToggleSelection || onSave || onRemove) && (
+        {showSelectionButton && (
           <button
             type="button"
             onClick={handleHeartClick}
-            className={`absolute top-3 right-3 w-10 h-10 rounded-full bg-white/90 shadow-sm flex items-center justify-center hover:shadow-md transition-transform duration-200 ease-out ${
-              heartPulse ? 'scale-115 ring-2 ring-[#FF6B4A]/60 shadow-lg' : ''
-            }`}
+            style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              width: 34,
+              height: 34,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'transform 160ms ease-out',
+              transform: heartPulse ? 'scale(0.95)' : 'scale(0.85)',
+              pointerEvents: 'auto',
+              zIndex: 20,
+            }}
             aria-label={selected ? 'Retirer de la sélection' : 'Ajouter à la sélection'}
             aria-pressed={selected}
           >
             <Heart
-              className="w-5 h-5 transition-colors"
+              className="transition-colors"
+              style={{ width: 20, height: 20 }}
               stroke={selected ? '#FF6B4A' : '#FF3B1F'}
               fill={selected ? '#FF6B4A' : 'transparent'}
               strokeWidth={1.8}
@@ -731,7 +862,10 @@ function ProductResultCard({
           </button>
         )}
       </div>
-      <div className="p-3.5 space-y-3 flex-1 flex flex-col">
+      <div
+        className="p-3.5 space-y-2 flex-1 flex flex-col"
+        style={{ paddingLeft: '4px' }}
+      >
         <div className="space-y-1 min-w-0">
           {headerText && (
             <button
@@ -755,30 +889,18 @@ function ProductResultCard({
           <span className="text-lg font-semibold text-[#FF6B4A]">
             {product.price.toFixed(2)} €
           </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#374151]">
-            {product.unit} - {measurementLabel}
+          <span className="text-[10px] px-0 py-0.5 bg-[#F9FAFB] text-[#374151]">
+            {measurementLabel} ({product.unit})
           </span>
         </div>
 
-        <div className="flex items-center justify-between pt-1 mt-auto">
-          <div className="flex items-center gap-2.5">
-            {onCreateOrder && (
-              <button
-                type="button"
-                onClick={() => onCreateOrder(product)}
-                className="px-3.5 py-1.5 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors shadow-sm"
-              >
-                Créer
-              </button>
-            )}
-          </div>
-        </div>
+        
       </div>
     </div>
   );
 }
 
-function ProductGroupContainer({
+export function ProductGroupContainer({
   group,
   canSave,
   deckIds,
@@ -789,6 +911,10 @@ function ProductGroupContainer({
   onOpenProduct,
   onOpenOrder,
   onOpenProducer,
+  onOpenSharer,
+  onSelectProducerCategory,
+  selected,
+  showSelectionControl,
 }: {
   group: ProductGroupDescriptor;
   canSave: boolean;
@@ -800,8 +926,17 @@ function ProductGroupContainer({
   onOpenProduct: (productId: string) => void;
   onOpenOrder?: (orderId: string) => void;
   onOpenProducer?: (product: Product) => void;
+  onOpenSharer?: (sharerName: string) => void;
+  onSelectProducerCategory?: (tag: string) => void;
+  selected?: boolean;
+  showSelectionControl?: boolean;
 }) {
   const useCarousel = group.products.length > MAX_VISIBLE_CARDS;
+  const [headerHover, setHeaderHover] = React.useState(false);
+  const [bodyHover, setBodyHover] = React.useState(false);
+  const [supportsHover, setSupportsHover] = React.useState(true);
+  const [overlayOpen, setOverlayOpen] = React.useState(false);
+  const avatarUrl = group.avatarUrl || group.products[0]?.imageUrl;
 
   // Index de départ des produits visibles dans le carrousel
   const [startIndex, setStartIndex] = React.useState(0);
@@ -814,9 +949,12 @@ function ProductGroupContainer({
 
   const visibleSlots = useCarousel
     ? MAX_VISIBLE_CARDS
-    : Math.max(1, group.products.length);
+    : Math.max(MIN_VISIBLE_CARDS, group.products.length);
 
-  const containerMinWidth = CARD_WIDTH + CONTAINER_SIDE_PADDING * 2;
+  const containerMinWidth =
+    MIN_VISIBLE_CARDS * CARD_WIDTH +
+    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
   const containerMaxWidth =
     visibleSlots * CARD_WIDTH +
     (visibleSlots - 1) * CARD_GAP +
@@ -833,6 +971,10 @@ function ProductGroupContainer({
 
   const isOrder = group.variant === 'order';
   const firstProduct = group.products[0];
+  const hostLabel = isOrder
+    ? group.sharerName || firstProduct?.producerName || group.title
+    : getProducerCategoryLabel(group.tags);
+  const shouldShowHostLabel = Boolean(hostLabel);
 
   // Produits effectivement affichés
   const productsToShow = useCarousel
@@ -849,59 +991,358 @@ function ProductGroupContainer({
     setStartIndex((prev) => Math.min(prev + 1, maxIndex));
   };
 
+  const orderProgress = React.useMemo(() => {
+    if (group.variant !== 'order') return null;
+    const target = group.minWeight ?? group.maxWeight ?? 0;
+    const current = group.orderedWeight ?? 0;
+    if (!(target > 0)) return { ratio: 0, label: null };
+    const ratio = Math.max(0, Math.min(1, current / target));
+    const percentLabel = `${Math.round(ratio * 100)}%`;
+    return { ratio, label: percentLabel };
+  }, [group.maxWeight, group.minWeight, group.orderedWeight, group.variant]);
+
+  const availabilityProgress = React.useMemo(() => {
+    if (group.variant !== 'producer') return null;
+    const total = group.products.length || 1;
+    const inStockCount = group.products.filter((p) => p.inStock).length;
+    const ratio = Math.max(0, Math.min(1, inStockCount / total));
+    const label = `${inStockCount}/${total} dispo`;
+    return { ratio, label };
+  }, [group.products, group.variant]);
+
+  const deadlineLabel = React.useMemo(() => {
+    if (group.variant !== 'order' || !group.deadline) return null;
+    const date = group.deadline instanceof Date ? group.deadline : new Date(group.deadline);
+    if (!Number.isFinite(date.getTime())) return null;
+    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+  }, [group.deadline, group.variant]);
+
+
+
+  const handleAvatarClick = () => {
+    if (isOrder) {
+      if (group.sharerName) {
+        onOpenSharer?.(group.sharerName);
+        return;
+      }
+      if (firstProduct) {
+        onOpenProducer?.(firstProduct);
+        return;
+      }
+    }
+    if (firstProduct) onOpenProducer?.(firstProduct);
+  };
+
+  const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const pointerDragRef = React.useRef<{ x: number; y: number; id?: number } | null>(null);
+
+  const handleTouchStart = (event: React.TouchEvent) => {
+    if (!useCarousel) return;
+    setBodyHover(true);
+    const touch = event.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const resetTouch = () => {
+    touchStartRef.current = null;
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent) => {
+    if (!useCarousel || !touchStartRef.current) return;
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - touchStartRef.current.x;
+    resetTouch();
+    setBodyHover(false);
+    if (Math.abs(deltaX) < 6) return;
+    if (deltaX < 0) {
+      goRight();
+    } else {
+      goLeft();
+    }
+  };
+
+  const handleTouchCancel = () => resetTouch();
+
+  const handlePointerDown = (event: React.PointerEvent) => {
+    if (!useCarousel) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const targetEl = event.target as HTMLElement | null;
+    if (targetEl && targetEl.closest('button')) return;
+    pointerDragRef.current = { x: event.clientX, y: event.clientY, id: event.pointerId };
+  };
+
+  const handlePointerUp = (event: React.PointerEvent) => {
+    if (!useCarousel || !pointerDragRef.current) return;
+    if (pointerDragRef.current.id !== undefined && pointerDragRef.current.id !== event.pointerId) return;
+    const deltaX = event.clientX - pointerDragRef.current.x;
+    const deltaY = event.clientY - pointerDragRef.current.y;
+    pointerDragRef.current = null;
+    if (Math.abs(deltaX) < 30 || Math.abs(deltaX) < Math.abs(deltaY)) return;
+    if (deltaX < 0) {
+      goRight();
+    } else {
+      goLeft();
+    }
+  };
+
+  const handlePointerCancel = () => {
+    pointerDragRef.current = null;
+  };
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(hover: hover) and (pointer: fine)');
+    const update = () => setSupportsHover(media.matches);
+    update();
+    if (media.addEventListener) {
+      media.addEventListener('change', update);
+      return () => media.removeEventListener('change', update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  React.useEffect(() => {
+    if (supportsHover) setOverlayOpen(false);
+  }, [supportsHover]);
+
+  const wheelLockRef = React.useRef(false);
+
+  const handleWheel = (event: React.WheelEvent) => {
+    if (!useCarousel) return;
+    if (Math.abs(event.deltaX) < 5) return;
+    if (wheelLockRef.current) return;
+    wheelLockRef.current = true;
+    window.setTimeout(() => {
+      wheelLockRef.current = false;
+    }, 60);
+    event.preventDefault();
+    if (event.deltaX > 0) {
+      goRight();
+    } else if (event.deltaX < 0) {
+      goLeft();
+    }
+  };
+
+  const handleHeaderClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (supportsHover) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    setOverlayOpen((prev) => !prev);
+  };
+
+  const showHeaderOverlay = supportsHover ? headerHover : overlayOpen;
+
   return (
     <div
-      className="relative overflow-hidden rounded-2xl border border-[#FFE0D1] bg-white shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full"
+      className={`relative overflow-hidden rounded-2xl bg-white shadow-[0_20px_50px_-28px_rgba(255,107,74,0.35)] flex flex-col h-full border transition-colors ${
+        selected ? 'border-2 border-[#FF6B4A]' : 'border border-[#FFE0D1]'
+      }`}
       style={containerStyle}
     >
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b border-[#FFE0D1] bg-white">
+      <div
+        className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b border-[#FFE0D1] bg-white"
+        style={{ position: 'relative', overflow: 'hidden' }}
+        onMouseEnter={() => setHeaderHover(true)}
+        onMouseLeave={() => setHeaderHover(false)}
+        onClick={handleHeaderClick}
+      >
         <div className="space-y-1 min-w-0">
           <p className="text-xs text-[#6B7280] flex items-center gap-1 truncate">
             <MapPin className="w-3 h-3" />
             {group.location}
           </p>
-          <h4 className="text-base font-semibold text-[#1F2937] truncate">
-            {group.title}
-          </h4>
-          {isOrder && group.sharerName && (
-            <p className="text-xs text-[#6B7280] truncate">
-              Par {group.sharerName}
+          {isOrder ? (
+            <p
+              className="text-left text-base font-semibold text-[#1F2937]"
+              style={{
+                display: 'block',
+                width: '100%',
+                maxWidth: '100%',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {group.title}
             </p>
+          ) : (
+            <p className="text-left text-base font-semibold text-[#1F2937] truncate">{group.title}</p>
           )}
         </div>
-        <div className="flex items-stretch sm:items-end gap-2 sm:w-auto">
-          {!isOrder && onCreateOrder && firstProduct && (
-            <button
-              type="button"
-              onClick={() => onCreateOrder(firstProduct)}
-              className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
-            >
-              Créer
-            </button>
-          )}
-          {isOrder && onOpenOrder && (
-            <button
-              type="button"
-              onClick={() => onOpenOrder(group.orderId ?? group.id)}
-              className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
-            >
-              Participer
-            </button>
-          )}
+
+        {avatarUrl && (
+          <button
+            type="button"
+            onClick={handleAvatarClick}
+            aria-label={isOrder ? 'Voir le partageur' : 'Voir le producteur'}
+            style={{
+              position: 'absolute',
+              top: 10.5,
+              right: 3,
+              width: 45,
+              height: 45,
+              borderRadius: '50%',
+              overflow: 'hidden',
+              border: '1px solid rgba(255, 224, 209, 0.42)',
+              background: '#fff',
+              padding: 0,
+              zIndex: 8,
+              cursor: 'pointer',
+            }}
+          >
+            <ImageWithFallback
+              src={avatarUrl}
+              alt={isOrder ? group.sharerName || 'Partageur' : firstProduct?.producerName || 'Producteur'}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          </button>
+        )}
+
+        {/* Hover overlay */}
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(255, 255, 255, 0.92)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: `12px 12px 8px 16px`,
+            opacity: showHeaderOverlay ? 1 : 0,
+            transition: 'opacity 160ms ease-out',
+            pointerEvents: showHeaderOverlay ? 'auto' : 'none',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {isOrder ? (
+              <>
+                {deadlineLabel ? (
+                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                    Clôture : {deadlineLabel}
+                  </p>
+                ) : null}
+                {orderProgress ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: '100%',
+                        height: '8px',
+                        borderRadius: '9999px',
+                        background: '#F3F4F6',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${Math.round(orderProgress.ratio * 100)}%`,
+                          height: '100%',
+                          borderRadius: '9999px',
+                          background: '#FF6B4A',
+                          transition: 'width 180ms ease-out',
+                        }}
+                      />
+                    </div>
+                    <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
+                      Avancement {orderProgress.label ?? ''}
+                    </span>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              availabilityProgress && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                    Disponibilité
+                  </p>
+                  <div
+                    style={{
+                      position: 'relative',
+                      width: '100%',
+                      height: '8px',
+                      borderRadius: '9999px',
+                      background: '#F3F4F6',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.round(availabilityProgress.ratio * 100)}%`,
+                        height: '100%',
+                        borderRadius: '9999px',
+                        background: '#34D399',
+                        transition: 'width 180ms ease-out',
+                      }}
+                    />
+                  </div>
+                  <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
+                    {availabilityProgress.label}
+                  </span>
+                </div>
+              )
+            )}
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              flexShrink: 0,
+              marginLeft: 'auto',
+              marginRight: avatarUrl ? 48 : 0,
+            }}
+          >
+            {!isOrder && onCreateOrder && firstProduct && (
+              <button
+                type="button"
+                onClick={() => onCreateOrder(firstProduct)}
+                className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
+                style={{ minWidth: '90px' }}
+              >
+                Créer
+              </button>
+            )}
+            {isOrder && onOpenOrder && (
+              <button
+                type="button"
+                onClick={() => onOpenOrder(group.orderId ?? group.id)}
+                className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
+                style={{ minWidth: '90px' }}
+              >
+                Participer
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Corps : carrousel logique ou liste simple */}
       <div
         className="p-3 sm:p-4 flex-1 flex"
-        style={{ paddingInline: CONTAINER_SIDE_PADDING }}
+        style={{ padding: CONTAINER_SIDE_PADDING}}
+        onMouseEnter={() => setBodyHover(true)}
+        onMouseLeave={() => setBodyHover(false)}
       >
         {useCarousel ? (
-          <div className="relative w-full">
+          <div
+            className="relative w-full"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchCancel}
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
+            onWheel={handleWheel}
+            onMouseEnter={() => setBodyHover(true)}
+            onMouseLeave={() => setBodyHover(false)}
+            >
             <div
               className="flex gap-2 w-full justify-center"
-              style={{ alignItems: 'stretch' }}
+              style={{ alignItems: 'stretch', userSelect: 'none' }}
             >
               {productsToShow.map((product) => (
                 <div
@@ -922,6 +1363,7 @@ function ProductGroupContainer({
                 onToggleSelection={onToggleSelection}
                 onOpenProducer={onOpenProducer}
                 onOpen={onOpenProduct}
+                showSelectionControl={showSelectionControl}
                 compact
                 cardWidth={CARD_WIDTH}
               />
@@ -934,9 +1376,29 @@ function ProductGroupContainer({
               <button
                 type="button"
                 onClick={goLeft}
-                className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
+                aria-label="Faire défiler vers la gauche"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  width: 35,
+                  height: 35,
+                  borderRadius: 9999,
+                  border: '1px solid rgba(255, 255, 255, 0.9)',
+                  background: '#FF6B4A',
+                  boxShadow: '0 14px 28px rgba(0,0,0,0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: bodyHover ? 1 : 0,
+                  transform: `translateY(-50%) scale(${bodyHover ? 1 : 0.9})`,
+                  transition: 'opacity 140ms ease-out, transform 140ms ease-out',
+                  pointerEvents: canScrollLeft ? 'auto' : 'none',
+                  cursor: canScrollLeft ? 'pointer' : 'default',
+                  zIndex: 4,
+                }}
               >
-                <ChevronLeft className="w-4 h-4 text-[#374151]" />
+                <ChevronLeft size={20} color="#FFFFFF" />
               </button>
             )}
 
@@ -944,9 +1406,29 @@ function ProductGroupContainer({
               <button
                 type="button"
                 onClick={goRight}
-                className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/90 border border-gray-200 shadow-sm rounded-full w-8 h-8 flex items-center justify-center"
+                aria-label="Faire défiler vers la droite"
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: '50%',
+                  width: 35,
+                  height: 35,
+                  borderRadius: 9999,
+                  border: '1px solid rgba(255, 255, 255, 0.9)',
+                  background: '#FF6B4A',
+                  boxShadow: '0 14px 28px rgba(0,0,0,0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: bodyHover ? 1 : 0,
+                  transform: `translateY(-50%) scale(${bodyHover ? 1 : 0.9})`,
+                  transition: 'opacity 140ms ease-out, transform 140ms ease-out',
+                  pointerEvents: canScrollRight ? 'auto' : 'none',
+                  cursor: canScrollRight ? 'pointer' : 'default',
+                  zIndex: 4,
+                }}
               >
-                <ChevronRight className="w-4 h-4 text-[#374151]" />
+                <ChevronRight size={20} color="#FFFFFF" />
               </button>
             )}
           </div>
@@ -967,6 +1449,7 @@ function ProductGroupContainer({
                 onToggleSelection={onToggleSelection}
                 onOpenProducer={onOpenProducer}
                 onOpen={onOpenProduct}
+                showSelectionControl={showSelectionControl}
                 compact
                 cardWidth={CARD_WIDTH}
               />
@@ -987,3 +1470,4 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
+

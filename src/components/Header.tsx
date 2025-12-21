@@ -26,7 +26,7 @@ export function Header({
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] z-50">
+    <header className="app-header fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] z-50">
       <div className="max-w-screen-xl mx-auto px-4 py-3">
         <div className="flex items-center gap-4 md:gap-4 w-full min-w-0">
           <Logo onClick={onLogoClick} className={onLogoClick ? 'cursor-pointer' : ''} />

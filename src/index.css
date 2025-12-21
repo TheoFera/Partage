@@ -1,4 +1,4 @@
-/*! tailwindcss v4.1.3 | MIT License | https://tailwindcss.com */
+﻿/*! tailwindcss v4.1.3 | MIT License | https://tailwindcss.com */
 @layer properties {
   @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
     *, :before, :after, ::backdrop {
@@ -333,6 +333,7 @@
     --card-bg: #fff;
     --text-primary: #1f2937;
     --text-secondary: #6b7280;
+    --scrollbar-compensation: 0px;
   }
 
   * {
@@ -343,6 +344,7 @@
     color: #1f2937;
     background-color: #F9F2E5;
     font-family: Inter, system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
   }
 
   h1 {
@@ -1146,6 +1148,56 @@
   background: linear-gradient(135deg, #ffd166 0%, #ff6b4a 100%);
 }
 
+.app-shell {
+  width: calc(100% + var(--scrollbar-compensation, 0px));
+  margin-right: calc(-1 * var(--scrollbar-compensation, 0px));
+}
+
+.app-header {
+  right: calc(-1 * var(--scrollbar-compensation, 0px));
+}
+
+
+.header-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  background: #ffffff;
+  color: #1f2937;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.header-action-button--primary {
+  background: #ff6b4a;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.header-action-button--primary:hover {
+  background: #ff5a39;
+}
+
+.header-action-button--ghost {
+  border-color: #e5e7eb;
+}
+
+.header-action-button--ghost:hover {
+  border-color: rgba(255, 107, 74, 0.7);
+}
+
+.header-action-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
 /* Header responsive tweaks */
 @media (max-width: 640px) {
   .header-logo-text {
@@ -1154,11 +1206,15 @@
   .header-filter-label {
     display: none;
   }
+  .header-action-label {
+    display: none;
+  }
   .header-filter-button {
     min-width: 40px;
     padding-inline: 10px;
   }
 }
+
 }
 
 @property --tw-translate-x {
@@ -1366,3 +1422,110 @@
   syntax: "*";
   inherits: false
 }
+
+/* Profile responsive tweaks */
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-contact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.profile-contact-row a,
+.profile-contact-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.profile-header-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.profile-visibility-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-avatar {
+  width: 128px;
+  height: 128px;
+  border-radius: 9999px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.profile-product-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.profile-group-list {
+  max-width: 1200px;
+  margin: 0 auto;
+  text-align: center;
+  white-space: normal;
+}
+
+.profile-group-item {
+  display: inline-block;
+  vertical-align: top;
+  margin-right: 12px;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+@media (max-width: 640px) {
+  .profile-product-grid {
+    justify-content: center;
+  }
+
+  .profile-group-item {
+    margin-right: 0;
+  }
+
+  .profile-header-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .profile-header-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .profile-header-actions button {
+    width: 100%;
+  }
+
+  .profile-stat-value {
+    font-size: 1.5rem;
+  }
+
+  .profile-edit-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .profile-edit-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .profile-edit-hero button {
+    width: 100%;
+  }
+}
+

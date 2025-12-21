@@ -70,6 +70,9 @@ export interface GroupOrder {
   maxWeight: number;
   orderedWeight?: number;
   deadline: Date;
+  pickupStreet?: string;
+  pickupCity?: string;
+  pickupPostcode?: string;
   pickupAddress: string;
   message: string;
   status: 'open' | 'closed' | 'completed';
@@ -88,4 +91,215 @@ export interface GroupOrder {
     radiusMeters: number;
     areaLabel: string;
   };
+}
+
+export type ConservationMode = 'frais' | 'ambiant' | 'congele';
+
+export interface ProductVariant {
+  id: string;
+  label: string;
+  poidsNet: string;
+  conditionnement: string;
+  uniteVente: 'kg' | 'piece' | 'lot' | string;
+  codeEAN?: string;
+}
+
+export interface PriceReference {
+  devise: 'EUR' | string;
+  prixIndicatifUnitaire: number;
+  unite: 'kg' | 'piece' | 'lot' | string;
+  prixIndicatifAuKg?: number;
+  mention?: string;
+}
+
+export interface EvidenceLink {
+  type: 'pdf' | 'lien';
+  label: string;
+  url: string;
+}
+
+export interface ProductionConditions {
+  modeProduction?: string;
+  intrantsPesticides?: {
+    utilise: boolean;
+    details?: string;
+    explicationPedagogique?: string;
+  };
+  bienEtreAnimal?: string;
+  social?: string;
+  environnement?: string;
+  preuves?: EvidenceLink[];
+}
+
+export interface Ingredient {
+  nom: string;
+  produitLieId?: string;
+}
+
+export interface NutritionFacts {
+  energie?: string;
+  matieresGrasses?: string;
+  acidesGrasSatures?: string;
+  glucides?: string;
+  sucres?: string;
+  fibres?: string;
+  proteines?: string;
+  sel?: string;
+  [key: string]: string | undefined;
+}
+
+export interface CompositionEtiquette {
+  denominationVente?: string;
+  ingredients?: Ingredient[];
+  allergenes?: string[];
+  nutrition?: NutritionFacts;
+  additifs?: string[];
+  conseilsUtilisation?: string;
+  conservationDetaillee?: string;
+}
+
+export interface TraceDocument {
+  type: 'pdf' | 'lien';
+  label: string;
+  url: string;
+}
+
+export interface TimelineStep {
+  etape: string;
+  lieu?: string;
+  date?: string;
+  preuve?: TraceDocument;
+}
+
+export interface Tracabilite {
+  paysOrigine?: string;
+  lieuProduction?: string;
+  lieuTransformation?: string;
+  lieuAbattage?: string;
+  datesImportantes?: { label: string; date: string }[];
+  preuves?: TraceDocument[];
+  timeline?: TimelineStep[];
+}
+
+export interface ProductionLot {
+  id: string;
+  nomLot: string;
+  debut: string;
+  fin: string;
+  periodeDisponibilite?: { debut: string; fin: string };
+  qteTotale?: number;
+  qteRestante?: number;
+  DLC_DDM?: string;
+  DLC_aReceptionEstimee?: string;
+  commentaire?: string;
+  numeroLot?: string;
+  piecesJointes?: TraceDocument[];
+  statut: 'a_venir' | 'en_cours' | 'epuise';
+}
+
+export interface RepartitionPoste {
+  nom: string;
+  valeur: number;
+  type: 'eur' | 'percent';
+  details?: string;
+}
+
+export interface RepartitionValeur {
+  mode: 'estimatif' | 'detaille';
+  uniteReference: 'kg' | 'piece' | 'lot';
+  totalReference?: number;
+  postes: RepartitionPoste[];
+  notePedagogique?: string;
+}
+
+export interface AvisEntry {
+  auteur: string;
+  note: number;
+  date: string;
+  commentaire: string;
+}
+
+export interface Avis {
+  noteMoyenne: number;
+  nbAvis: number;
+  listeAvis: AvisEntry[];
+}
+
+export interface QuestionEntry {
+  question: string;
+  reponse?: string;
+  date: string;
+}
+
+export interface Questions {
+  activer: boolean;
+  listeQnA: QuestionEntry[];
+}
+
+export interface LinkedProduct {
+  id: string;
+  name: string;
+  category?: string;
+  producerName?: string;
+  city?: string;
+  badges?: string[];
+}
+
+export interface ProduitsLies {
+  autresFormats?: LinkedProduct[];
+  autresDuProducteur?: LinkedProduct[];
+  similaires?: LinkedProduct[];
+}
+
+export interface ResumePictos {
+  origineZone?: string;
+  paysOrigine?: string;
+  modeConservation?: ConservationMode;
+  dlcAReceptionEstimee?: string;
+  formatConditionnement?: string;
+  portions?: string;
+  chaineDuFroid?: boolean;
+  chaineAnimal?: {
+    naissance?: string;
+    elevage?: string;
+    abattage?: string;
+    transformation?: string;
+  };
+}
+
+export interface ProductDetail {
+  productId: string;
+  name: string;
+  category?: string;
+  shortDescription?: string;
+  longDescription?: string;
+  productImage?: { url: string; alt: string; etiquetteUrl?: string };
+  producer: {
+    id: string;
+    name: string;
+    city: string;
+    photo?: string;
+    badgesProducteur?: string[];
+    shortStory?: string;
+    liens?: EvidenceLink[];
+  };
+  conservationMode?: ConservationMode;
+  portions?: string;
+  originCountry?: string;
+  zones?: string[];
+  dlcEstimee?: string;
+  conditionnementPrincipal?: string;
+  formats?: ProductVariant[];
+  priceReference?: PriceReference;
+  officialBadges?: string[];
+  platformBadges?: string[];
+  productionConditions?: ProductionConditions;
+  compositionEtiquette?: CompositionEtiquette;
+  tracabilite?: Tracabilite;
+  productions?: ProductionLot[];
+  repartitionValeur?: RepartitionValeur;
+  avis?: Avis;
+  questions?: Questions;
+  produitsLies?: ProduitsLies;
+  resumePictos?: ResumePictos;
 }

@@ -5,7 +5,6 @@ import {
   Grid,
   Bookmark,
   ShoppingBag,
-  X,
   Check,
   Sparkles,
   Globe,
@@ -14,11 +13,10 @@ import {
   Upload,
   Phone,
   Building2,
-  Heart,
-  ArrowRight,
 } from 'lucide-react';
 import { DeckCard, GroupOrder, Product, User } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
 import { toast } from 'sonner';
 
 type TabKey = 'products' | 'orders' | 'selection';
@@ -39,11 +37,6 @@ const DEFAULT_PROFILE_AVATAR =
     </svg>`
   );
 
-const stripDistance = (value?: string) => {
-  if (!value) return '';
-  return value.replace(/\s*[-\u2013]?\s*\d+(?:[.,]\d+)?\s*km/gi, '').replace(/\s*[-\u2013]\s*$/, '').trim();
-};
-
 interface ProfileViewProps {
   user: User;
   producerProducts: Product[];
@@ -55,7 +48,6 @@ interface ProfileViewProps {
   onMessageUser?: () => void;
   mode?: 'view' | 'edit';
   onModeChange?: (mode: 'view' | 'edit') => void;
-  onShareProfile?: () => void;
   onUpdateUser: (user: Partial<User>) => void;
   onRemoveFromDeck: (productId: string) => void;
   onAddToDeck?: (product: Product) => void;
@@ -77,7 +69,6 @@ export function ProfileView({
   onMessageUser,
   mode: modeProp,
   onModeChange,
-  onShareProfile,
   onUpdateUser,
   onRemoveFromDeck,
   onAddToDeck,
@@ -125,7 +116,7 @@ export function ProfileView({
     }
   }, [onMessageUser]);
 
-  const orderCards = React.useMemo(() => {
+  const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     const mergedMap = new Map<string, GroupOrder>();
     const visible = isOwnProfile ? orders : orders.filter((order) => order.visibility === 'public');
     visible.forEach((order) => {
@@ -134,43 +125,60 @@ export function ProfileView({
 
     return Array.from(mergedMap.values()).map((order) => {
       const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);
-      const cover = order.products[0]?.imageUrl ?? 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=400&q=80';
-      const subtitle = order.products[0]?.producerName || order.producerName || order.sharerName;
+      const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
+      const location =
+        order.pickupAddress ||
+        order.mapLocation?.areaLabel ||
+        sortedProducts[0]?.producerLocation ||
+        order.producerName ||
+        order.sharerName ||
+        '';
       return {
-        order,
-        key: order.id,
+        id: order.id,
+        orderId: order.id,
         title: order.title,
-        subtitle,
-        imageUrl: cover,
-        badge: order.visibility === 'private' ? 'Privé' : 'Public',
-        price: `${order.participants} participant${order.participants > 1 ? 's' : ''}`,
-        meta: `Clôture ${deadlineDate.toLocaleDateString('fr-FR', {
-          day: '2-digit',
-          month: 'short',
-        })}`,
-        status: statusLabels[order.status],
+        location,
+        tags: [],
+        products: sortedProducts,
+        variant: 'order',
+        sharerName: order.sharerName || order.producerName,
+        minWeight: order.minWeight,
+        maxWeight: order.maxWeight,
+        orderedWeight: order.orderedWeight,
+        deadline: deadlineDate,
+        avatarUrl: sortedProducts[0]?.imageUrl,
       };
     });
   }, [orders, isOwnProfile]);
 
+  const productCount = producerProducts.length;
+  const ordersCount = orderGroups.length;
+  const selectionCount = deck.length;
+
+  const tabCounts: Record<TabKey, { value: number; meta: string }> = {
+    products: { value: productCount, meta: '' },
+    orders: { value: ordersCount, meta: '' },
+    selection: { value: selectionCount, meta: '' },
+  };
+
   const tabOptions = React.useMemo(
     () =>
       [
-        { id: 'products' as TabKey, label: 'Produits', icon: Grid, visible: user.role === 'producer' },
+        { id: 'products' as TabKey, label: 'Produits', icon: Grid, visible: isOwnProfile || productCount > 0 },
         {
           id: 'orders' as TabKey,
           label: 'Commandes',
           icon: ShoppingBag,
-          visible: true,
+          visible: isOwnProfile || ordersCount > 0,
         },
         {
           id: 'selection' as TabKey,
           label: 'Sélection',
           icon: Bookmark,
-          visible: true,
+          visible: isOwnProfile || selectionCount > 0,
         },
       ].filter((tab) => tab.visible),
-    [user.role]
+    [isOwnProfile, productCount, ordersCount, selectionCount]
   );
 
   React.useEffect(() => {
@@ -179,6 +187,29 @@ export function ProfileView({
       setActiveTab(firstVisible);
     }
   }, [tabOptions, activeTab]);
+
+  const selectionSet = React.useMemo(() => selectionIds ?? new Set(deck.map((card) => card.id)), [deck, selectionIds]);
+  const handleToggleSelection = React.useCallback(
+    (product: Product, isSelected?: boolean) => {
+      const alreadySelected = typeof isSelected === 'boolean' ? isSelected : selectionSet.has(product.id);
+      if (alreadySelected) {
+        onRemoveFromDeck(product.id);
+        return;
+      }
+      if (onAddToDeck) {
+        onAddToDeck(product);
+      }
+    },
+    [onAddToDeck, onRemoveFromDeck, selectionSet]
+  );
+  const handleOpenProduct = React.useCallback(
+    (productId: string) => {
+      if (onOpenProduct) {
+        onOpenProduct(productId);
+      }
+    },
+    [onOpenProduct]
+  );
 
   if (mode === 'edit') {
     return (
@@ -190,66 +221,56 @@ export function ProfileView({
     );
   }
 
-  const tabCounts: Record<TabKey, { value: number; meta: string }> = {
-    products: { value: producerProducts.length, meta: '' },
-    orders: { value: orderCards.length, meta: '' },
-    selection: { value: deck.length, meta: '' },
-  };
   const tabStats = tabOptions.map((tab) => ({
     ...tab,
     value: tabCounts[tab.id]?.value ?? 0,
     meta: tabCounts[tab.id]?.meta ?? tab.label,
   }));
-  const selectionSet = React.useMemo(() => selectionIds ?? new Set(deck.map((card) => card.id)), [deck, selectionIds]);
-  const handleToggleSelection = React.useCallback(
-    (product: Product) => {
-      if (selectionSet.has(product.id)) {
-        onRemoveFromDeck(product.id);
-        return;
-      }
-      if (onAddToDeck) {
-        onAddToDeck(product);
-      }
-    },
-    [onAddToDeck, onRemoveFromDeck, selectionSet]
-  );
   const showAddProductCta = isOwnProfile && user.role === 'producer' && Boolean(onAddProductClick);
+  const selectionActionsEnabled = Boolean(onAddToDeck || onRemoveFromDeck);
+  const canSaveProducts = selectionActionsEnabled;
+  const canEditSelection = selectionActionsEnabled;
 
   const renderTabContent = () => {
-    if (activeTab === 'products') {
-      const addButton = showAddProductCta ? (
-        <div className="flex justify-end mb-3">
-          <button
-            type="button"
-            onClick={onAddProductClick}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm font-semibold hover:bg-[#FF5A39] transition-colors"
-          >
-            Ajouter un produit
-          </button>
-        </div>
-      ) : null;
+    const activeTabIsVisible = tabOptions.some((tab) => tab.id === activeTab);
+    if (!activeTabIsVisible) {
+      return (
+        <EmptyState
+          title="Aucun contenu"
+          subtitle="Ce profil n'a pas encore d'onglet public disponible."
+        />
+      );
+    }
 
+    const addButton = showAddProductCta ? (
+      <div className="flex justify-end mb-3">
+        <button
+          type="button"
+          onClick={onAddProductClick}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm font-semibold hover:bg-[#FF5A39] transition-colors"
+        >
+          Ajouter un produit
+        </button>
+      </div>
+    ) : null;
+
+    if (activeTab === 'products') {
       return producerProducts.length ? (
         <div className="space-y-4">
-          {addButton}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+          <div className="profile-product-grid">
             {producerProducts.map((product) => (
-              <ProductTile
+              <ProductResultCard
                 key={product.id}
                 product={product}
-                title={product.name}
-                producerName={product.producerName}
-                location={stripDistance(product.producerLocation)}
-                imageUrl={product.imageUrl}
-                price={product.price}
-                badge="Produit"
-                unit={product.unit}
-                measurement={product.measurement}
-                inStock={product.inStock}
-                inSelection={selectionSet.has(product.id)}
-                onToggleSelection={handleToggleSelection}
-                onClick={onOpenProduct ? () => onOpenProduct(product.id) : undefined}
-                onCreateOrder={onStartOrderFromProduct ? () => onStartOrderFromProduct(product) : undefined}
+                related={[]}
+                canSave={canSaveProducts}
+                inDeck={selectionSet.has(product.id)}
+                onSave={onAddToDeck}
+                onRemove={onRemoveFromDeck}
+                onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
+                onCreateOrder={onStartOrderFromProduct}
+                onOpen={handleOpenProduct}
+                showSelectionControl={selectionActionsEnabled}
               />
             ))}
           </div>
@@ -266,66 +287,53 @@ export function ProfileView({
     }
 
     if (activeTab === 'orders') {
-      return orderCards.length ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-          {orderCards.map((item) => (
-            <ProductTile
-              key={item.key}
-              title={item.title}
-              producerName={item.subtitle}
-              location={stripDistance(item.subtitle)}
-              imageUrl={item.imageUrl}
-              price={item.price}
-              badge={item.badge}
-              meta={`${item.status} - ${item.meta}`}
-              onClick={onOpenOrder ? () => onOpenOrder(item.order.id) : undefined}
-            />
+      return orderGroups.length ? (
+        <div className="profile-group-list">
+          {orderGroups.map((group) => (
+            <div key={`order-${group.id}`} className="profile-group-item">
+              <ProductGroupContainer
+                group={group}
+                canSave={canSaveProducts}
+                deckIds={selectionSet}
+                onSave={onAddToDeck}
+                onRemoveFromDeck={onRemoveFromDeck}
+                onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
+                onOpenProduct={handleOpenProduct}
+                onOpenOrder={onOpenOrder}
+                showSelectionControl={selectionActionsEnabled}
+              />
+            </div>
           ))}
         </div>
       ) : (
         <EmptyState
           title="Aucune commande"
-          subtitle="Vos commandes passées et actives apparaîtront ici."
+          subtitle={
+            isOwnProfile
+              ? "Participez ou creez une commande pour que cet onglet ne soit pas vide. Cet onglet affiche aussi l'historique de vos commandes."
+              : 'Aucune commande visible.'
+          }
         />
       );
     }
 
     if (activeTab === 'selection') {
-      const addButton = showAddProductCta ? (
-        <div className="flex justify-end mb-3">
-          <button
-            type="button"
-            onClick={onAddProductClick}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm font-semibold hover:bg-[#FF5A39] transition-colors"
-          >
-            Ajouter un produit
-          </button>
-        </div>
-      ) : null;
-
       return deck.length ? (
         <div className="space-y-4">
-          {addButton}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+          <div className="profile-product-grid">
             {deck.map((card) => (
-              <ProductTile
+              <ProductResultCard
                 key={card.id}
                 product={card}
-                title={card.name}
-                producerName={card.producerName}
-                location={stripDistance(card.producerLocation)}
-                imageUrl={card.imageUrl}
-                price={card.price}
-                badge="Selection"
-                unit={card.unit}
-                measurement={card.measurement}
-                inStock={card.inStock}
-                inSelection={selectionSet.has(card.id)}
-                meta={stripDistance(card.producerLocation)}
-                onToggleSelection={handleToggleSelection}
-                onRemove={isOwnProfile ? () => onRemoveFromDeck(card.id) : undefined}
-                onClick={onOpenProduct ? () => onOpenProduct(card.id) : undefined}
-                onCreateOrder={onStartOrderFromProduct ? () => onStartOrderFromProduct(card) : undefined}
+                related={[]}
+                canSave={canEditSelection}
+                inDeck={selectionSet.has(card.id)}
+                onSave={onAddToDeck}
+                onRemove={onRemoveFromDeck}
+                onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
+                onCreateOrder={onStartOrderFromProduct}
+                onOpen={handleOpenProduct}
+                showSelectionControl={selectionActionsEnabled}
               />
             ))}
           </div>
@@ -348,8 +356,8 @@ export function ProfileView({
     <div className="space-y-8 md:space-y-10 pb-24">
       <div className="bg-white text-[#1F2937] rounded-2xl p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-6">
         <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-32 h-32 rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden flex-shrink-0 bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
+          <div className="profile-header-main flex items-center gap-4">
+            <div className="profile-avatar rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
               <ImageWithFallback
                 src={profileImageSrc}
                 alt={user.name}
@@ -367,26 +375,30 @@ export function ProfileView({
                 )}
               </div>
               <p className="text-sm text-[#6B7280]">@{profileHandle}</p>
-              {profileTagline && <p className="text-sm text-[#374151]">{profileTagline}</p>}
-              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+              {profileTagline && (
+                <p className="text-sm text-[#374151]" style={{ whiteSpace: 'pre-line' }}>
+                  {profileTagline}
+                </p>
+              )}
+              <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
                 <MapPin className="w-4 h-4" />
                 <span>{addressLabel}</span>
                 {!canShowAddress && <Lock className="w-4 h-4 text-[#9CA3AF]" />}
               </div>
               {(user.city || user.postcode) && (
-                <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
                   <Building2 className="w-4 h-4" />
                   <span>{[user.postcode, user.city].filter(Boolean).join(' ')}</span>
                 </div>
               )}
               {user.phonePublic && (
-                <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
                   <Phone className="w-4 h-4" />
                   <span>{user.phonePublic}</span>
                 </div>
               )}
               {(user.website || isOwnProfile) && (
-                <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
                   <Link2 className="w-4 h-4" />
                   {user.website ? (
                     <a href={user.website} className="text-[#FF6B4A] hover:underline" target="_blank" rel="noreferrer">
@@ -397,7 +409,7 @@ export function ProfileView({
                   )}
                 </div>
               )}
-              <div className="flex items-center gap-2">
+              <div className="profile-badges flex items-center gap-2">
                 <span className="px-3 py-1 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-xs text-[#B45309]">
                   {user.role === 'producer' ? 'Producteur' : user.role === 'sharer' ? 'Partageur' : 'Participant'}
                 </span>
@@ -425,9 +437,8 @@ export function ProfileView({
               </div>
             </div>
           </div>
-
           {!isOwnProfile && (
-            <div className="flex items-center gap-3 sm:ml-auto">
+            <div className="profile-header-actions flex items-center gap-3 sm:ml-auto">
               <button
                 type="button"
                 onClick={handleFollowClick}
@@ -449,7 +460,6 @@ export function ProfileView({
               </button>
             </div>
           )}
-
         </div>
 
         {(user.freshProductsCertified || user.socialLinks || user.openingHours) && (
@@ -519,7 +529,7 @@ export function ProfileView({
                   </div>
                 );
               })()}
-              <p className="text-3xl font-semibold text-[#1F2937]">{stat.value}</p>
+              <p className="profile-stat-value text-3xl font-semibold text-[#1F2937]">{stat.value}</p>
               {showMeta && <p className="text-xs text-[#6B7280]">{stat.meta}</p>}
             </button>
             );
@@ -529,192 +539,6 @@ export function ProfileView({
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 mt-6 md:mt-8">
         {renderTabContent()}
-      </div>
-    </div>
-  );
-}
-
-function ProductTile({
-  title,
-  producerName,
-  location,
-  imageUrl,
-  price,
-  badge,
-  meta,
-  unit,
-  measurement,
-  inStock,
-  product,
-  inSelection,
-  onToggleSelection,
-  onRemove,
-  onClick,
-  onCreateOrder,
-}: {
-  title: string;
-  producerName?: string;
-  location?: string;
-  imageUrl: string;
-  price?: string | number;
-  badge?: string;
-  meta?: string;
-  unit?: string;
-  measurement?: Product['measurement'];
-  inStock?: boolean;
-  product?: Product;
-  inSelection?: boolean;
-  onToggleSelection?: (product: Product) => void;
-  onRemove?: () => void;
-  onClick?: () => void;
-  onCreateOrder?: () => void;
-}) {
-  const cardClasses =
-    'relative rounded-2xl overflow-hidden border border-[#F1E3DA] bg-white shadow-[0_12px_30px_-18px_rgba(31,41,55,0.35)] transition-all hover:shadow-lg hover:-translate-y-0.5 h-full flex flex-col';
-  const clickable = Boolean(onClick);
-  const priceLabel = typeof price === 'number' ? `${price.toFixed(2)} EUR` : price;
-  const locationLabel = stripDistance(location || '');
-  const producerLabel = producerName ? producerName.trim() : '';
-  const headerParts: string[] = [];
-  if (producerLabel) headerParts.push(producerLabel);
-  if (locationLabel && locationLabel.toLowerCase() !== producerLabel.toLowerCase()) {
-    headerParts.push(locationLabel);
-  }
-  const headerText = headerParts.join(' · ');
-  const quantityLabel = unit?.trim();
-  const measurementLabel =
-    measurement === 'kg' ? 'Au kilo' : measurement === 'unit' ? "A l'unite" : undefined;
-  const quantityPill =
-    quantityLabel && measurementLabel
-      ? `${quantityLabel} - ${measurementLabel}`
-      : quantityLabel || measurementLabel;
-  const stockLabel = typeof inStock === 'boolean' ? (inStock ? 'En stock' : 'Rupture') : undefined;
-  const metaLabel = meta?.trim();
-  const showHeart = Boolean(onToggleSelection && product);
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!onClick) return;
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onClick();
-    }
-  };
-
-  return (
-    <div
-      className={`${cardClasses} ${clickable ? 'cursor-pointer' : ''}`}
-      onClick={onClick}
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onKeyDown={handleKeyDown}
-    >
-      <div className="relative aspect-[4/3]">
-        <ImageWithFallback
-          src={imageUrl}
-          alt={title}
-          className="w-full h-full object-cover"
-        />
-        {badge && (
-          <span className="absolute top-3 left-3 px-3 py-1 text-xs font-semibold rounded-full bg-black/70 text-white">
-            {badge}
-          </span>
-        )}
-        {showHeart && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (product && onToggleSelection) {
-                onToggleSelection(product);
-              }
-            }}
-            className="absolute top-3 right-3 w-10 h-10 rounded-full bg-white/90 shadow-sm flex items-center justify-center hover:shadow-md transition"
-            aria-pressed={Boolean(inSelection)}
-            aria-label={inSelection ? 'Retirer de la selection' : 'Ajouter a la selection'}
-          >
-            <Heart
-              className={`w-5 h-5 transition-colors ${
-                inSelection ? 'text-[#FF6B4A] fill-[#FF6B4A]' : 'text-[#FF6B4A] fill-white stroke-[#FF6B4A]'
-              }`}
-              strokeWidth={1.8}
-            />
-          </button>
-        )}
-        {onRemove && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-            className="absolute bottom-3 left-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 text-[#1F2937] text-xs font-semibold shadow-sm border border-gray-200 hover:border-[#FF6B4A]"
-          >
-            <X className="w-3 h-3" />
-            Retirer
-          </button>
-        )}
-      </div>
-      <div className="p-4 space-y-3 flex-1 flex flex-col">
-        {headerText && (
-          <p className="text-[12px] text-[#6B7280] flex items-center gap-2 truncate">
-            <MapPin className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">{headerText}</span>
-          </p>
-        )}
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-[#1F2937] line-clamp-2">{title}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {priceLabel && <span className="text-lg font-semibold text-[#FF6B4A]">{priceLabel}</span>}
-          {quantityPill && (
-            <span className="text-[11px] px-2 py-1 rounded-full bg-[#F9FAFB] border border-gray-200 text-[#374151]">
-              {quantityPill}
-            </span>
-          )}
-          {stockLabel && (
-            <span
-              className={`text-[11px] px-2 py-1 rounded-full border ${
-                inStock
-                  ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
-                  : 'bg-[#F3F4F6] border-[#E5E7EB] text-[#6B7280]'
-              }`}
-            >
-              {stockLabel}
-            </span>
-          )}
-          {metaLabel && (
-            <span className="text-[11px] px-2 py-1 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-[#B45309] truncate">
-              {metaLabel}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center justify-between pt-1 mt-auto">
-          {onCreateOrder && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateOrder();
-              }}
-              className="px-3.5 py-1.5 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors shadow-sm"
-            >
-              Creer
-            </button>
-          )}
-          {clickable && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onClick();
-              }}
-              className="inline-flex items-center gap-2 text-[13px] font-semibold text-[#FF6B4A] hover:text-[#FF5A39]"
-            >
-              Voir la fiche
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -868,7 +692,7 @@ function ProfileEditPanel({
 
   return (
     <div className="space-y-6 pb-12">
-      <div className="flex items-center justify-between">
+      <div className="profile-edit-header flex items-center justify-between">
         <div>
           <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
           <p className="text-sm text-[#6B7280]">Retrouvez les reglages de l ancien profil.</p>
@@ -883,9 +707,9 @@ function ProfileEditPanel({
 
 
       <div className="bg-white rounded-xl p-6 shadow-sm space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="profile-edit-hero flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-24 h-24 rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
+            <div className="profile-avatar rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
               <ImageWithFallback
                 src={previewImageSrc}
                 alt={name || user.name}
@@ -982,7 +806,7 @@ function ProfileEditPanel({
               </div>
               <div className="space-y-2">
                 <label className="block text-sm text-[#6B7280]">Visibilite du profil</label>
-                <div className="flex items-center gap-2">
+                <div className="profile-visibility-group flex items-center gap-2">
                   <VisibilityButton
                     label="Public"
                     icon={Globe}
@@ -1126,7 +950,7 @@ function ProfileEditPanel({
                   </select>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="profile-visibility-group flex items-center gap-2">
                 <VisibilityButton
                   label="Adresse visible"
                   icon={MapPin}
@@ -1304,6 +1128,7 @@ function ProfileEditPanel({
           </section>
         )}
       </div>
+
     </div>
   );
 }
@@ -1362,3 +1187,4 @@ function VisibilityButton({
     </button>
   );
 }
+
