@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Product, GroupOrder, DeckCard } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import {
@@ -9,6 +10,7 @@ import {
   ArrowRight,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Leaf,
   Heart,
 } from 'lucide-react';
@@ -182,28 +184,6 @@ const getProductAttributes = (product: Product) => {
 
   return attributes;
 };
-
-const FilterPill = ({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`px-3 py-1.5 rounded-full border text-sm transition-colors ${
-      active
-        ? 'bg-[#FF6B4A]/10 border-[#FF6B4A] text-[#B45309]'
-        : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/50'
-    }`}
-  >
-    {label}
-  </button>
-);
 
 export function ProductsLanding({
   products,
@@ -390,9 +370,71 @@ export function ProductsLanding({
   const showCombined = scope === 'combined';
   const hasProducts = productResults.length > 0;
   const hasProducers = producerResults.length > 0;
+  const filterAnchor =
+    typeof document !== 'undefined' ? document.getElementById('filters-anchor') : null;
+  const filtersPopover =
+    filtersOpen && filterAnchor
+      ? createPortal(
+          <div
+            id="filters-popover"
+            className="absolute right-0 mt-2 w-[min(92vw,420px)] rounded-2xl border border-gray-200 bg-white shadow-xl p-4 space-y-4 max-h-[70vh] overflow-y-auto z-[60]"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-[#1F2937]">Filtres</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <ScopeToggle active={scope === 'combined'} label="Tous" onClick={() => setScope('combined')} />
+              <ScopeToggle active={scope === 'products'} label="Produits" onClick={() => setScope('products')} />
+              <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => setScope('producers')} />
+            </div>
+            <div className="grid grid-cols-1 gap-3">
+              <FilterGroup
+                label="Filtres produits"
+                icon={<SlidersHorizontal className="w-4 h-4" />}
+                options={productFilterOptions}
+                activeValues={categories}
+                onToggle={(id) =>
+                  setCategories((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
+                }
+              />
+              <FilterGroup
+                label="Filtres producteurs"
+                icon={<Users className="w-4 h-4" />}
+                options={producerFilterOptions}
+                activeValues={producerFilters}
+                onToggle={(id) =>
+                  setProducerFilters((prev) =>
+                    prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]
+                  )
+                }
+              />
+              <FilterGroup
+                label="Caractéristiques"
+                icon={<Leaf className="w-4 h-4" />}
+                options={attributeFilterOptions}
+                activeValues={attributes}
+                onToggle={(id) =>
+                  setAttributes((prev) => (prev.includes(id) ? prev.filter((val) => val !== id) : [...prev, id]))
+                }
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onToggleFilters}
+                className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-sm font-semibold hover:bg-[#FF5A39] transition-colors"
+              >
+                Appliquer
+              </button>
+            </div>
+          </div>,
+          filterAnchor
+        )
+      : null;
 
   return (
     <div className="space-y-6">
+      {filtersPopover}
       <div
         style={{
           position: 'relative',
@@ -478,7 +520,7 @@ export function ProductsLanding({
       </section>
       </div>
 
-      {filtersOpen && (
+      {false && (
         <section className="bg-white rounded-3xl shadow-sm border border-gray-100 p-4 sm:p-6 -mt-12 relative z-10 space-y-4">
           <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
             <div className="flex items-center gap-2 flex-wrap">
@@ -528,7 +570,7 @@ export function ProductsLanding({
             </div>
         </section>
       )}
-              <section className="space-y-4">
+      <section className="space-y-4">
         {showCombined ? (
           combinedGroups.length ? (
             <div className="px-1 sm:px-3 w-full">
@@ -731,24 +773,53 @@ function FilterGroup({
   activeValues: string[];
   onToggle: (id: string) => void;
 }) {
+  const [open, setOpen] = React.useState(false);
+  const selectedCount = activeValues.length;
+  const summary = selectedCount
+    ? `${selectedCount} selectionne${selectedCount > 1 ? 's' : ''}`
+    : 'Tous';
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 text-sm text-[#374151]">
-        <span className="w-8 h-8 rounded-full bg-[#F9FAFB] border border-gray-200 flex items-center justify-center">
-          {icon}
-        </span>
-        <p className="font-semibold">{label}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => (
-          <FilterPill
-            key={option.id}
-            label={option.label}
-            active={activeValues.includes(option.id)}
-            onClick={() => onToggle(option.id)}
-          />
-        ))}
-      </div>
+    <div className="rounded-xl border border-gray-200 bg-white">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span className="w-8 h-8 rounded-full bg-[#F9FAFB] border border-gray-200 flex items-center justify-center">
+            {icon}
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-[#374151]">{label}</p>
+            <p className="text-xs text-[#6B7280]">{summary}</p>
+          </div>
+        </div>
+        <ChevronDown
+          className={`w-4 h-4 text-[#6B7280] transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {open && (
+        <div className="border-t border-gray-200 px-3 py-2">
+          <div className="max-h-52 overflow-y-auto pr-1 space-y-2">
+            {options.map((option) => {
+              const checked = activeValues.includes(option.id);
+              return (
+                <label key={option.id} className="flex items-center gap-2 text-sm text-[#374151]">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggle(option.id)}
+                    className="h-4 w-4 rounded border-gray-300 accent-[#FF6B4A]"
+                  />
+                  <span>{option.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -889,7 +960,7 @@ export function ProductResultCard({
           <span className="text-lg font-semibold text-[#FF6B4A]">
             {product.price.toFixed(2)} €
           </span>
-          <span className="text-[10px] px-0 py-0.5 bg-[#F9FAFB] text-[#374151]">
+          <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
             {measurementLabel} ({product.unit})
           </span>
         </div>
@@ -1470,4 +1541,3 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
     </div>
   );
 }
-

@@ -7,6 +7,16 @@ import { Logo } from './Logo';
 
 type AuthMode = 'login' | 'signup';
 
+type AuthLocationState = {
+  redirectTo?: string;
+  mode?: AuthMode;
+  signupPrefill?: {
+    address?: string;
+    city?: string;
+    postcode?: string;
+  };
+};
+
 interface AuthPageProps {
   supabaseClient: SupabaseClient | null;
   onAuthSuccess: (user: SupabaseAuthUser) => void;
@@ -16,20 +26,36 @@ interface AuthPageProps {
 export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const locationState = location.state as { redirectTo?: string; mode?: AuthMode } | null;
+  const locationState = location.state as AuthLocationState | null;
   const [mode, setMode] = React.useState<AuthMode>(locationState?.mode ?? 'login');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [fullName, setFullName] = React.useState('');
   const [handleValue, setHandleValue] = React.useState('');
   const [phone, setPhone] = React.useState('');
-  const [city, setCity] = React.useState('');
-  const [postcode, setPostcode] = React.useState('');
-  const [address, setAddress] = React.useState('');
+  const [city, setCity] = React.useState(locationState?.signupPrefill?.city ?? '');
+  const [postcode, setPostcode] = React.useState(locationState?.signupPrefill?.postcode ?? '');
+  const [address, setAddress] = React.useState(locationState?.signupPrefill?.address ?? '');
   const [accountType, setAccountType] = React.useState<'individual' | 'company' | 'association' | 'public_institution'>('individual');
   const [loading, setLoading] = React.useState(false);
 
-  const redirectTo = locationState?.redirectTo || location.pathname || '/';
+  const storedRedirect = React.useMemo(() => {
+    if (typeof window === 'undefined') return undefined;
+    try {
+      return window.sessionStorage.getItem('authRedirectTo') || undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const redirectTo = locationState?.redirectTo || storedRedirect || location.pathname || '/';
+
+  const clearStoredRedirect = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.removeItem('authRedirectTo');
+    } catch {}
+  }, []);
   const supabaseIsReady = Boolean(supabaseClient);
 
   const handleLogoClick = () => {
@@ -58,6 +84,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         if (error) throw error;
         if (data.user) {
           onAuthSuccess(data.user);
+          clearStoredRedirect();
           toast.success('Connexion réussie');
           navigate(redirectTo, { replace: true });
         } else {
@@ -106,6 +133,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         const newUser = data.user ?? data.session?.user;
         if (newUser) {
           onAuthSuccess(newUser);
+          clearStoredRedirect();
           toast.success('Compte cree et connecte');
           navigate(redirectTo, { replace: true });
         } else {
@@ -122,6 +150,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
 
   const handleDemo = () => {
     onDemoLogin();
+    clearStoredRedirect();
     navigate(redirectTo, { replace: true });
   };
 
@@ -367,3 +396,4 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     </div>
   );
 }
+

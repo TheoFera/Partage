@@ -48,19 +48,23 @@ export function Header({
                   />
                 </div>
                 {onToggleFilters && (
-                  <button
-                    type="button"
-                    onClick={onToggleFilters}
-                    className={`header-filter-button shrink-0 flex items-center justify-center gap-2 px-3 h-10 rounded-full border text-sm font-semibold whitespace-nowrap transition-colors ${
-                      filtersActive
-                        ? 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm'
-                        : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/70'
-                    }`}
-                    style={{ lineHeight: 1.1 }}
-                  >
-                    <SlidersHorizontal className="w-4 h-4" />
-                    <span className="header-filter-label">Filtres</span>
-                  </button>
+                  <div className="relative shrink-0 overflow-visible" id="filters-anchor">
+                    <button
+                      type="button"
+                      onClick={onToggleFilters}
+                      aria-expanded={filtersActive}
+                      aria-controls="filters-popover"
+                      className={`header-filter-button flex items-center justify-center gap-2 px-3 h-10 rounded-full border text-sm font-semibold whitespace-nowrap transition-colors ${
+                        filtersActive
+                          ? 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm'
+                          : 'bg-white border-gray-200 text-[#374151] hover:border-[#FF6B4A]/70'
+                      }`}
+                      style={{ lineHeight: 1.1 }}
+                    >
+                      <SlidersHorizontal className="w-4 h-4" />
+                      <span className="header-filter-label">Filtres</span>
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

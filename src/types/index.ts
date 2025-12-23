@@ -93,6 +93,14 @@ export interface GroupOrder {
   };
 }
 
+export interface OrderPurchaseDraft {
+  orderId: string;
+  quantities: Record<string, number>;
+  total: number;
+  weight: number;
+  baseOrderedWeight: number;
+}
+
 export type ConservationMode = 'frais' | 'ambiant' | 'congele';
 
 export interface ProductVariant {

@@ -345,7 +345,7 @@ export const buildDefaultProductDetail = (product: Product): ProductDetail => {
     name: product.name,
     category: product.category,
     shortDescription: product.description,
-    longDescription: `${product.description || 'Description a venir.'} Informations detaillees de test (fictive) pour valider le rendu.`,
+    longDescription: 'Informations detaillees de test (fictive) pour valider le rendu.',
     productImage: { url: product.imageUrl, alt: product.name },
     producer: {
       id: product.producerId,

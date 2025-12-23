@@ -1,25 +1,34 @@
 import React from 'react';
 import {
-  ArrowRight,
   Bell,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Circle,
   ExternalLink,
   Heart,
   Info,
+  Leaf,
   MapPin,
   Package,
   PenLine,
+  Percent,
   Plus,
-  Share2,
+  ShieldCheck,
   Star,
   Thermometer,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { GroupOrder, Product, ProductDetail, ProductionLot, RepartitionPoste } from '../types';
+import { ProductResultCard } from './ProductsLanding';
+import './ProductDetailView.css';
+import {
+  GroupOrder,
+  LinkedProduct,
+  Product,
+  ProductDetail,
+  ProductionLot,
+  RepartitionPoste,
+  TimelineStep,
+} from '../types';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -27,48 +36,100 @@ interface ProductDetailViewProps {
   ordersWithProduct: GroupOrder[];
   isOwner: boolean;
   isSaved?: boolean;
+  catalog?: Product[];
+  onHeaderActionsChange?: (actions: React.ReactNode) => void;
+  onOpenProducer?: (product: Product) => void;
+  onOpenRelatedProduct?: (productId: string) => void;
   onShare: () => void;
   onCreateOrder: () => void;
   onParticipate: () => void;
   onToggleSave?: (next: boolean) => void;
 }
 
-const SectionCard = ({
-  title,
-  summary,
-  children,
-  defaultOpen = false,
-}: {
-  title: string;
-  summary?: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) => {
-  const [open, setOpen] = React.useState(defaultOpen);
-  const sectionId = title.toLowerCase().replace(/\s+/g, '-');
+type DetailTabKey = 'circuit' | 'quality' | 'repartition' | 'consumption' | 'transparency';
 
-  return (
-    <div className="border border-[#F1E8D7] rounded-xl bg-white shadow-sm">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={sectionId}
-        onClick={() => setOpen((prev) => !prev)}
-        className="w-full flex items-start justify-between gap-3 px-4 sm:px-6 py-4 text-left"
-      >
-        <div className="flex-1 space-y-1">
-          <p className="text-base font-semibold text-[#1F2937]">{title}</p>
-          {summary ? <p className="text-sm text-[#6B7280]">{summary}</p> : null}
-        </div>
-        <span className="text-[#6B7280]">{open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</span>
-      </button>
-      {open ? (
-        <div id={sectionId} className="border-t border-[#F1E8D7] px-4 sm:px-6 py-5">
-          {children}
-        </div>
-      ) : null}
-    </div>
-  );
+const TAB_OPTIONS: Array<{ id: DetailTabKey; label: string; icon: React.ElementType }> = [
+  { id: 'circuit', label: 'Circuit-court', icon: Leaf },
+  { id: 'quality', label: 'Qualité', icon: ShieldCheck },
+  { id: 'repartition', label: 'Répartition du prix', icon: Percent },
+  { id: 'consumption', label: 'Consommation', icon: Users },
+  { id: 'transparency', label: 'Transparence', icon: Info },
+];
+
+const LABEL_DESCRIPTIONS: Record<string, string> = {
+  aop: "Appellation d'origine protegee avec cahier des charges strict.",
+  igp: 'Indication geographique protegee et traitee en zone delimitee.',
+  bio: 'Agriculture biologique certifiee, intrants controles.',
+  'label rouge': 'Qualite superieure controlee sur toute la filiere.',
+  hve: 'Haute Valeur Environnementale, pratiques durables.',
+  'bleu blanc coeur': 'Alimentation specifique et tracabilite nutritionnelle.',
+  tracable: 'Chaque lot est trace et documente.',
+  'circuit court': "Peu d'intermediaires, relation directe.",
+  'frais controle': 'Respect du froid et controles reguliers.',
+};
+
+const DEFAULT_STEP_EXPLANATIONS: Record<string, string> = {
+  production: 'Fenetre de disponibilite, pratiques de production et savoir-faire.',
+  transformation: 'Methode de transformation et gestes cles.',
+  abattage: "Etape d'abattage encadree et tracabilisee.",
+  conditionnement: 'Conditionnement, etiquetage et preparation des lots.',
+  retrait: 'Retrait/livraison, zones de distribution.',
+  livraison: 'Retrait/livraison, zones de distribution.',
+};
+
+const normalizeKey = (value: string) => value.toLowerCase().trim();
+
+const getLabelDescription = (label: string) => {
+  const key = normalizeKey(label);
+  return LABEL_DESCRIPTIONS[key] ?? `Cahier des charges a consulter pour "${label}".`;
+};
+
+const getPrimaryPickupLabel = (orders: GroupOrder[], fallback?: string) => {
+  const primary = orders[0];
+  const label =
+    [primary?.pickupCity, primary?.pickupPostcode].filter(Boolean).join(' ').trim() ||
+    primary?.mapLocation?.areaLabel ||
+    primary?.pickupAddress;
+  return label || fallback || '';
+};
+
+const resolveLocationForStep = (label: string, detail: ProductDetail, pickupLabel?: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('production')) return detail.tracabilite?.lieuProduction || detail.originCountry;
+  if (normalized.includes('transformation')) return detail.tracabilite?.lieuTransformation || detail.producer.city;
+  if (normalized.includes('abattage')) return detail.tracabilite?.lieuAbattage || detail.producer.city;
+  if (normalized.includes('conditionnement')) return detail.tracabilite?.lieuTransformation || detail.producer.city;
+  if (normalized.includes('retrait') || normalized.includes('livraison')) return pickupLabel;
+  return detail.producer.city || detail.originCountry;
+};
+
+const buildFallbackTimeline = (detail: ProductDetail, pickupLabel?: string): TimelineStep[] => {
+  if (detail.tracabilite?.datesImportantes?.length) {
+    return detail.tracabilite.datesImportantes.map((item) => ({
+      etape: item.label,
+      date: item.date,
+      lieu: resolveLocationForStep(item.label, detail, pickupLabel),
+    }));
+  }
+
+  const steps: TimelineStep[] = [];
+  const productionLocation = detail.tracabilite?.lieuProduction || detail.originCountry;
+  if (productionLocation) steps.push({ etape: 'Production', lieu: productionLocation });
+  const transformationLocation = detail.tracabilite?.lieuTransformation || detail.producer.city;
+  if (transformationLocation) steps.push({ etape: 'Transformation', lieu: transformationLocation });
+  if (detail.tracabilite?.lieuAbattage) {
+    steps.push({ etape: 'Abattage', lieu: detail.tracabilite.lieuAbattage });
+  }
+  if (transformationLocation) steps.push({ etape: 'Conditionnement', lieu: transformationLocation });
+  if (pickupLabel) steps.push({ etape: 'Retrait', lieu: pickupLabel });
+  return steps;
+};
+
+const getStepExplanation = (step: TimelineStep) => {
+  if (step.preuve?.label) return step.preuve.label;
+  const normalized = step.etape.toLowerCase();
+  const match = Object.keys(DEFAULT_STEP_EXPLANATIONS).find((key) => normalized.includes(key));
+  return (match && DEFAULT_STEP_EXPLANATIONS[match]) || 'Informations a renseigner sur cette etape.';
 };
 
 const formatValue = (post: RepartitionPoste) => {
@@ -121,8 +182,8 @@ const ValuePieChart = ({
   const total = slices.reduce((acc, slice) => acc + slice.value, 0);
   if (!Number.isFinite(total) || total <= 0) {
     return (
-      <div className="h-[220px] rounded-xl border border-dashed border-[#F1E8D7] bg-[#FFF6EB] flex items-center justify-center">
-        <p className="text-sm text-[#6B7280]">Renseignez des postes pour afficher le camembert.</p>
+      <div className="pd-chart__empty">
+        <p className="pd-chart__empty-text">Renseignez des postes pour afficher le camembert.</p>
       </div>
     );
   }
@@ -141,14 +202,14 @@ const ValuePieChart = ({
     });
 
   return (
-    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
+    <div className="pd-chart">
       <svg
         width={size}
         height={size}
         viewBox="0 0 100 100"
         role="img"
         aria-label="Camembert de repartition de la valeur"
-        className="shrink-0"
+        className="pd-chart__svg"
       >
         {computed.map((slice) => (
           <path
@@ -166,39 +227,37 @@ const ValuePieChart = ({
           Total
         </text>
         <text x={center} y={center + 10} textAnchor="middle" dominantBaseline="middle" fontSize="8" fill="#6B7280">
-          {total.toFixed(2)} EUR
+          {total.toFixed(2)} €
         </text>
       </svg>
 
-      <div className="flex-1 space-y-2">
+      <div className="pd-chart__legend">
         {computed.map((slice) => (
-          <div key={`${slice.label}-legend`} className="flex items-center justify-between gap-3 text-sm">
-            <div className="flex items-center gap-2 min-w-0">
+          <div key={`${slice.label}-legend`} className="pd-chart__legend-row">
+            <div className="pd-chart__legend-label">
               <span
                 aria-hidden="true"
-                className="w-3 h-3 rounded-full"
+                className="pd-chart__swatch"
                 style={{ backgroundColor: slice.color }}
               />
-              <span className="text-[#1F2937] font-semibold truncate">{slice.label}</span>
+              <span className="pd-chart__label">{slice.label}</span>
             </div>
-            <div className="flex items-center gap-2 shrink-0 text-[#6B7280]">
+            <div className="pd-chart__legend-value">
               <span>{formatValue({ nom: slice.label, valeur: slice.value, type: 'eur' })}</span>
-              <span className="text-xs">({formatPercent(slice.percent)})</span>
+              <span className="pd-chart__percent">({formatPercent(slice.percent)})</span>
             </div>
           </div>
         ))}
-        <p className="text-xs text-[#6B7280]">
-          Camembert calcule automatiquement a partir des couts saisis dans le tableau.
-        </p>
+        <p className="pd-chart__note">Camembert calcule automatiquement a partir des couts saisis.</p>
       </div>
     </div>
   );
 };
 
 const lotStatusBadge = (lot: ProductionLot) => {
-  if (lot.statut === 'en_cours') return { label: 'En cours', className: 'bg-emerald-50 text-emerald-700' };
-  if (lot.statut === 'a_venir') return { label: 'A venir', className: 'bg-amber-50 text-amber-700' };
-  return { label: 'Epuise', className: 'bg-gray-100 text-gray-600' };
+  if (lot.statut === 'en_cours') return { label: 'En cours', className: 'pd-lot-badge pd-lot-badge--active' };
+  if (lot.statut === 'a_venir') return { label: 'A venir', className: 'pd-lot-badge pd-lot-badge--upcoming' };
+  return { label: 'Epuise', className: 'pd-lot-badge pd-lot-badge--closed' };
 };
 
 export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
@@ -207,6 +266,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   ordersWithProduct,
   isOwner,
   isSaved,
+  catalog,
+  onHeaderActionsChange,
+  onOpenProducer,
+  onOpenRelatedProduct,
   onShare,
   onCreateOrder,
   onParticipate,
@@ -221,6 +284,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     detail.productions?.find((lot) => lot.statut !== 'epuise')?.id ?? null
   );
   const [localPosts, setLocalPosts] = React.useState<RepartitionPoste[]>(detail.repartitionValeur?.postes ?? []);
+  const [activeTab, setActiveTab] = React.useState<DetailTabKey>('circuit');
+  const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
+
+  const pickupLabel = React.useMemo(
+    () => getPrimaryPickupLabel(ordersWithProduct, detail.producer.city),
+    [ordersWithProduct, detail.producer.city]
+  );
+  const fallbackTimeline = React.useMemo(() => buildFallbackTimeline(detail, pickupLabel), [detail, pickupLabel]);
+  const [localTimeline, setLocalTimeline] = React.useState<TimelineStep[]>(fallbackTimeline);
 
   React.useEffect(() => {
     const posts = detail.repartitionValeur?.postes ?? [];
@@ -231,28 +303,84 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setDraft(detail);
   }, [detail]);
 
-  const display = editMode ? draft : detail;
+  React.useEffect(() => {
+    onToggleSaveRef.current = onToggleSave;
+  }, [onToggleSave]);
 
+  React.useEffect(() => {
+    setLocalTimeline(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline);
+  }, [detail, fallbackTimeline]);
+
+  const display = editMode ? draft : detail;
   const hasOrders = ordersWithProduct.length > 0;
   const summaryOrdersLabel = hasOrders
     ? `${ordersWithProduct.length} commande${ordersWithProduct.length > 1 ? 's' : ''} disponible`
     : 'Aucune commande active';
 
-  const toggleFollow = () => {
+  const timelineDisplay = editMode
+    ? localTimeline
+    : detail.tracabilite?.timeline?.length
+    ? detail.tracabilite.timeline
+    : fallbackTimeline;
+
+  const allBadges = React.useMemo(() => {
+    const badges = [...(display.officialBadges ?? []), ...(display.platformBadges ?? [])]
+      .map((badge) => badge.trim())
+      .filter(Boolean);
+    return Array.from(new Set(badges));
+  }, [display.officialBadges, display.platformBadges]);
+
+  const locationStats = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    ordersWithProduct.forEach((order) => {
+      const label =
+        [order.pickupCity, order.pickupPostcode].filter(Boolean).join(' ').trim() ||
+        order.mapLocation?.areaLabel ||
+        order.pickupAddress;
+      if (!label) return;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([label, count]) => ({ label, count }));
+  }, [ordersWithProduct]);
+
+  const totalParticipants = React.useMemo(
+    () => ordersWithProduct.reduce((acc, order) => acc + (order.participants ?? 0), 0),
+    [ordersWithProduct]
+  );
+  const totalOrderedWeight = React.useMemo(
+    () => ordersWithProduct.reduce((acc, order) => acc + (order.orderedWeight ?? 0), 0),
+    [ordersWithProduct]
+  );
+
+  const tabCounts: Record<DetailTabKey, number> = {
+    circuit: timelineDisplay.length + (display.productions?.length ?? 0),
+    quality: allBadges.length,
+    repartition: localPosts.length,
+    consumption: ordersWithProduct.length,
+    transparency:
+      (display.compositionEtiquette?.ingredients?.length ?? 0) + (display.compositionEtiquette?.allergenes?.length ?? 0),
+  };
+
+  const tabStats = TAB_OPTIONS.map((tab) => ({
+    ...tab,
+    value: tabCounts[tab.id] ?? 0,
+  }));
+
+  const toggleFollow = React.useCallback(() => {
     setIsFollowing((prev) => !prev);
     toast.success(!isFollowing ? 'Vous suivez ce produit.' : 'Vous ne suivez plus ce produit.');
-  };
+  }, [isFollowing]);
 
-  const handleSaveToggle = () => {
-    if (!onToggleSave) return;
-    onToggleSave(!isSaved);
-  };
+  const handleSaveToggle = React.useCallback(() => {
+    if (!onToggleSaveRef.current) return;
+    onToggleSaveRef.current(!isSaved);
+  }, [isSaved]);
 
   const handleAddPost = () => {
-    setLocalPosts((prev) => [
-      ...prev,
-      { nom: 'Nouveau poste', valeur: 0, type: 'eur' },
-    ]);
+    setLocalPosts((prev) => [...prev, { nom: 'Nouveau poste', valeur: 0, type: 'eur' }]);
   };
 
   const handlePostChange = (index: number, key: keyof RepartitionPoste, value: string) => {
@@ -268,12 +396,27 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     );
   };
 
-  const totalPosts = localPosts.reduce((acc, post) => acc + (Number.isFinite(post.valeur) ? post.valeur : 0), 0);
-  const expectedTotal = detail.repartitionValeur?.totalReference;
-  const hasGap =
-    typeof expectedTotal === 'number' && expectedTotal > 0
-      ? Math.abs(totalPosts - expectedTotal) > 0.5
-      : false;
+  const updateTimelineStep = (index: number, patch: Partial<TimelineStep>) => {
+    setLocalTimeline((prev) => prev.map((step, idx) => (idx === index ? { ...step, ...patch } : step)));
+  };
+
+  const updateTimelineProof = (index: number, patch: { label?: string; url?: string }) => {
+    setLocalTimeline((prev) =>
+      prev.map((step, idx) => {
+        if (idx !== index) return step;
+        const nextProof = { ...(step.preuve ?? { type: 'lien', label: '', url: '' }), ...patch };
+        return { ...step, preuve: nextProof };
+      })
+    );
+  };
+
+  const handleAddTimelineStep = () => {
+    setLocalTimeline((prev) => [...prev, { etape: 'Nouvelle etape', lieu: '', date: '' }]);
+  };
+
+  const handleRemoveTimelineStep = (index: number) => {
+    setLocalTimeline((prev) => prev.filter((_, idx) => idx !== index));
+  };
 
   React.useEffect(() => {
     if (!editMode) return;
@@ -286,16 +429,32 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }));
   }, [editMode, localPosts]);
 
+  React.useEffect(() => {
+    if (!editMode) return;
+    setDraft((prev) => ({
+      ...prev,
+      tracabilite: {
+        ...(prev.tracabilite ?? {}),
+        timeline: localTimeline,
+      },
+    }));
+  }, [editMode, localTimeline]);
+
+  const totalPosts = localPosts.reduce((acc, post) => acc + (Number.isFinite(post.valeur) ? post.valeur : 0), 0);
+  const expectedTotal = detail.repartitionValeur?.totalReference;
+  const hasGap =
+    typeof expectedTotal === 'number' && expectedTotal > 0 ? Math.abs(totalPosts - expectedTotal) > 0.5 : false;
+
   const editCTA = (
-    <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+    <div className="pd-inline-note">
       <Info size={16} />
-      <span>Mode propriétaire : editez inline, sauvegarde fictive pour le prototype.</span>
+      <span>Mode proprietaire : editez inline, sauvegarde fictive pour le prototype.</span>
     </div>
   );
 
   const handleSaveEdit = () => {
     setEditMode(false);
-    toast.success('Modifications enregistrées (demo).');
+    toast.success('Modifications enregistrees (demo).');
     if (notifyFollowers && !notificationMessage.trim()) {
       toast.error('Ajoutez un message de notification pour prevenir les abonnes.');
     }
@@ -303,563 +462,319 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const selectedLot = detail.productions?.find((lot) => lot.id === selectedLotId);
 
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-4 sm:gap-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-[#F1E8D7] p-4 sm:p-6 space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="space-y-2">
-              <div className="flex items-center flex-wrap gap-2">
-                <span className="px-3 py-1 rounded-full bg-[#FFF1E6] text-[#B45309] text-xs font-semibold">
-                  {display.category || product.category}
-                </span>
-                {display.officialBadges?.map((badge) => (
-                  <span key={badge} className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
-                    {badge}
-                  </span>
-                ))}
-                {display.platformBadges?.map((badge) => (
-                  <span key={badge} className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold">
-                    {badge}
-                  </span>
-                ))}
-              </div>
-              {editMode ? (
-                <div className="space-y-2">
-                  <input
-                    className="w-full border border-[#F1E8D7] rounded-lg p-2 text-lg font-semibold text-[#1F2937]"
-                    value={draft.name}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
-                  />
-                  <input
-                    className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm text-[#374151]"
-                    value={draft.category || ''}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
-                    placeholder="Categorie"
-                  />
-                  <input
-                    className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm text-[#374151]"
-                    value={draft.shortDescription || ''}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, shortDescription: e.target.value }))}
-                    placeholder="Description courte"
-                  />
-                </div>
-              ) : (
-                <>
-                  <h1 className="text-2xl sm:text-3xl font-semibold text-[#1F2937] leading-tight">{display.name}</h1>
-                  <p className="text-sm text-[#374151]">{display.shortDescription || product.description}</p>
-                </>
-              )}
+  const handleOpenProducer = React.useCallback(() => {
+    onOpenProducer?.(product);
+  }, [onOpenProducer, product]);
+
+  const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unite';
+  const displayCategory = display.category || product.category;
+  const displayImage = display.productImage?.url || product.imageUrl;
+  const displayProducer = display.producer ?? detail.producer;
+  const relatedCatalog = React.useMemo(() => {
+    const map = new Map<string, Product>();
+    (catalog ?? []).forEach((entry) => {
+      map.set(entry.id, entry);
+      map.set(entry.name, entry);
+    });
+    return map;
+  }, [catalog]);
+
+  const buildLinkedProductCard = (item: LinkedProduct) => {
+    const match = relatedCatalog.get(item.id) ?? relatedCatalog.get(item.name);
+    if (match) return { product: match, isCatalog: true };
+    const fallbackPrice = detail.priceReference?.prixIndicatifUnitaire ?? product.price;
+    const fallbackProduct: Product = {
+      id: item.id,
+      name: item.name,
+      description: item.category ?? product.description,
+      price: fallbackPrice,
+      unit: product.unit,
+      quantity: product.quantity,
+      category: item.category ?? product.category,
+      imageUrl: displayImage || product.imageUrl,
+      producerId: displayProducer.id ?? product.producerId,
+      producerName: item.producerName ?? displayProducer.name ?? product.producerName,
+      producerLocation: item.city ?? displayProducer.city ?? product.producerLocation,
+      inStock: true,
+      measurement: product.measurement,
+    };
+    return { product: fallbackProduct, isCatalog: false };
+  };
+
+  const circuitTab = (
+    <div className="pd-tab pd-stack pd-stack--lg">
+      <div className="pd-grid pd-grid--split pd-gap-lg">
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+            <div>
+              <p className="pd-section-title">Parcours du produit</p>
+              <p className="pd-text-xs pd-text-muted">
+                Production &gt; Transformation &gt; (Abattage) &gt; Conditionnement &gt; Retrait
+              </p>
             </div>
-            <div className="hidden md:flex flex-col gap-2">
+            {editMode ? (
               <button
                 type="button"
-                onClick={toggleFollow}
-                className={`inline-flex items-center gap-2 px-3 py-2 rounded-full text-sm ${
-                  isFollowing
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-white border border-gray-200 text-[#374151]'
-                }`}
+                onClick={handleAddTimelineStep}
+                className="pd-btn pd-btn--ghost pd-btn--dashed"
               >
-                <Bell size={16} />
-                {isFollowing ? 'Deja suivi' : 'Suivre'}
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-            <div className="flex items-center gap-3">
-              <ImageWithFallback
-                src={detail.producer.photo || detail.productImage?.url || product.imageUrl}
-                alt={detail.producer.name}
-                className="w-12 h-12 rounded-full object-cover bg-[#F1E8D7]"
-              />
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold text-[#1F2937]">{detail.producer.name}</p>
-                  {detail.producer.badgesProducteur?.includes('Producteur verifie') ? (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Verifie</span>
-                  ) : null}
-                </div>
-                <p className="text-xs text-[#6B7280] flex items-center gap-1">
-                  <MapPin size={14} className="text-[#FF6B4A]" />
-                  {detail.producer.city || 'Ville proche'}
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {detail.producer.liens?.map((link) => (
-                <a
-                  key={link.label}
-                  className="inline-flex items-center gap-1 text-xs text-[#FF6B4A] hover:underline"
-                  href={link.url}
-                >
-                  {link.label}
-                  <ExternalLink size={14} />
-                </a>
-              ))}
-            </div>
-          </div>
-
-          {detail.producer.shortStory ? (
-            <p className="text-sm text-[#374151] bg-[#FFF6EB] border border-[#F1E8D7] rounded-lg p-3">
-              {detail.producer.shortStory}
-            </p>
-          ) : null}
-
-          <div className="flex flex-col lg:flex-row gap-2 items-start">
-            <button
-              type="button"
-              onClick={onCreateOrder}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-sm font-semibold shadow-sm hover:bg-[#FF5A39] transition-colors"
-            >
-              Créer une commande avec ce produit
-            </button>
-            <button
-              type="button"
-              onClick={onParticipate}
-              disabled={!hasOrders}
-              className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full text-sm font-semibold shadow-sm transition-colors ${
-                hasOrders
-                  ? 'bg-white text-[#FF6B4A] border border-[#FF6B4A]'
-                  : 'bg-white text-gray-400 border border-gray-200 cursor-not-allowed'
-              }`}
-            >
-              Trouver des commandes de ce produit{' '}
-              <span className="text-[11px] text-[#6B7280]">({summaryOrdersLabel})</span>
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleFollow}
-              className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
-                isFollowing
-                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-white border border-gray-200 text-[#374151]'
-              }`}
-            >
-              <Bell size={16} />
-              {isFollowing ? 'Deja suivi' : 'Suivre'}
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveToggle}
-              className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm border ${
-                isSaved ? 'bg-[#FFF1E6] border-[#FF6B4A] text-[#B45309]' : 'bg-white border-gray-200 text-[#374151]'
-              }`}
-            >
-              <Heart size={16} />
-              {isSaved ? 'Dans ma sélection' : 'Ajouter à ma selection'}
-            </button>
-            {isOwner ? (
-              <button
-                type="button"
-                onClick={() => setEditMode((prev) => !prev)}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-[#1F2937]/10 text-[#1F2937]"
-              >
-                <PenLine size={16} />
-                {editMode ? 'Quitter le mode edition' : 'Modifier'}
+                <Plus size={16} />
+                Ajouter une etape
               </button>
             ) : null}
           </div>
 
-          {isOwner && editMode ? (
-            <div className="border border-dashed border-[#FF6B4A]/50 rounded-xl bg-[#FFF6EB] p-4 space-y-3">
-              {editCTA}
-              <label className="flex items-start gap-3 text-sm text-[#1F2937]">
-                <input
-                  type="checkbox"
-                  checked={notifyFollowers}
-                  onChange={(e) => setNotifyFollowers(e.target.checked)}
-                  className="mt-1"
-                />
-                <div className="space-y-1">
-                  <span className="font-semibold">Notifier les personnes qui suivent ce produit</span>
-                  <p className="text-[#6B7280] text-sm">
-                    Decochez pour les micro-changements. Suggestion automatique si un lot passe en vente.
-                  </p>
-                </div>
-              </label>
-              {notifyFollowers ? (
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-[#1F2937]" htmlFor="notification-message">
-                    Message de notification
-                  </label>
-                  <textarea
-                    id="notification-message"
-                    className="w-full border border-[#F1E8D7] rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6B4A]/40"
-                    placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
-                    value={notificationMessage}
-                    onChange={(e) => setNotificationMessage(e.target.value)}
-                  />
-                  <div className="text-xs text-[#6B7280] bg-white border border-[#F1E8D7] rounded-lg p-3">
-                    <p className="font-semibold text-[#1F2937] mb-1">Apercu de la notification que recevront vos abonnés</p>
-                    <p className="text-[#1F2937]">{detail.name}</p>
-                    <p>{notificationMessage || 'Message à ajouter pour notifier vos abonnés.'}</p>
-                    <p className="text-[#FF6B4A]">Lien vers le produit</p>
-                  </div>
-                </div>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleSaveEdit}
-                  className="px-4 py-2 rounded-lg bg-[#FF6B4A] text-white font-semibold shadow-sm hover:bg-[#FF5A39]"
-                >
-                  Sauvegarder
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditMode(false)}
-                  className="px-4 py-2 rounded-lg border border-gray-200 text-[#374151] font-semibold"
-                >
-                  Annuler
-                </button>
+          {timelineDisplay.length ? (
+            <div className="pd-timeline">
+              <div className="pd-timeline__line" />
+              <div className="pd-stack pd-stack--lg pd-timeline__list">
+                {timelineDisplay.map((step, index) => {
+                  const hasPhoto = Boolean(step.preuve?.url);
+                  return (
+                    <div key={`${step.etape}-${index}`} className="pd-timeline__item">
+                      <span className="pd-timeline__marker" />
+                      <div className="pd-timeline__row">
+                        <div className="pd-timeline__body pd-stack pd-stack--sm">
+                          {editMode ? (
+                            <div className="pd-grid pd-grid--three pd-gap-sm">
+                              <input
+                                className="pd-input"
+                                value={step.etape}
+                                onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
+                                placeholder="Etape"
+                              />
+                              <input
+                                className="pd-input"
+                                value={step.lieu || ''}
+                                onChange={(e) => updateTimelineStep(index, { lieu: e.target.value })}
+                                placeholder="Lieu"
+                              />
+                              <input
+                                className="pd-input"
+                                value={step.date || ''}
+                                onChange={(e) => updateTimelineStep(index, { date: e.target.value })}
+                                placeholder="Date"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="pd-text-strong">{step.etape}</p>
+                              <p className="pd-text-xs pd-text-muted">{step.lieu || 'Lieu a preciser'}</p>
+                              <p className="pd-text-xs pd-text-muted">{step.date || 'Date a preciser'}</p>
+                            </div>
+                          )}
+                          {editMode ? (
+                            <input
+                              className="pd-input"
+                              value={step.preuve?.label || ''}
+                              onChange={(e) => updateTimelineProof(index, { label: e.target.value })}
+                              placeholder="Phrase d'explication (fenetre de disponibilite, savoir-faire...)"
+                            />
+                          ) : (
+                            <p className="pd-text-body">{getStepExplanation(step)}</p>
+                          )}
+                          {editMode ? (
+                            <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
+                              <input
+                                className="pd-input"
+                                value={step.preuve?.url || ''}
+                                onChange={(e) => updateTimelineProof(index, { url: e.target.value })}
+                                placeholder="Lien photo ou document"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveTimelineStep(index)}
+                                className="pd-btn pd-btn--ghost pd-btn--warning"
+                              >
+                                Retirer
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="pd-timeline__media">
+                          {hasPhoto ? (
+                            <ImageWithFallback
+                              src={step.preuve?.url}
+                              alt={step.etape}
+                              className="pd-media pd-media--image"
+                            />
+                          ) : (
+                            <div className="pd-media pd-media--empty">
+                              <Package size={16} />
+                              <span>Photo optionnelle</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          ) : null}
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Aucune etape de tracabilite renseignee.</p>
+          )}
         </div>
 
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl shadow-sm border border-[#F1E8D7] overflow-hidden">
-            <div className="relative">
-              <ImageWithFallback
-                src={detail.productImage?.url || product.imageUrl}
-                alt={detail.productImage?.alt || product.name}
-                className="w-full h-64 sm:h-80 object-cover"
-              />
-              {detail.productImage?.etiquetteUrl ? (
-                <a
-                  href={detail.productImage.etiquetteUrl}
-                  className="absolute bottom-4 right-4 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/90 text-sm text-[#1F2937] shadow-sm"
-                >
-                  <Package size={16} />
-                  Voir l'étiquette
-                </a>
-              ) : null}
-            </div>
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-gap-sm">
+            <Package className="pd-icon pd-icon--accent" />
+            <p className="pd-section-title">Lots (donnees factuelles)</p>
           </div>
-
-          <div className="bg-white rounded-2xl shadow-sm border border-[#F1E8D7] p-4 sm:p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <Info size={16} className="text-[#FF6B4A]" />
-              <p className="text-sm text-[#1F2937] font-semibold">En un coup d'oeil</p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg bg-[#F9F2E4]">
-                <p className="text-xs text-[#6B7280] uppercase">Origine</p>
-                {editMode ? (
-                  <div className="space-y-2">
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.origineZone || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, resumePictos: { ...prev.resumePictos, origineZone: e.target.value } }))
-                      }
-                      placeholder="Zone ou region"
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.paysOrigine || draft.originCountry || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: { ...prev.resumePictos, paysOrigine: e.target.value },
-                          originCountry: e.target.value,
-                        }))
-                      }
-                      placeholder="Pays d'origine"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#1F2937]">
-                      {display.resumePictos?.origineZone || display.zones?.[0] || 'Origine locale'}
-                    </p>
-                    <p className="text-xs text-[#6B7280]">{display.resumePictos?.paysOrigine || display.originCountry}</p>
-                  </>
-                )}
-              </div>
-              <div className="p-3 rounded-lg bg-[#F9F2E4]">
-                <p className="text-xs text-[#6B7280] uppercase">Conservation</p>
-                {editMode ? (
-                  <div className="space-y-2">
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.modeConservation || draft.conservationMode || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: { ...prev.resumePictos, modeConservation: e.target.value as any },
-                          conservationMode: e.target.value as any,
-                        }))
-                      }
-                      placeholder="Conservation (frais/ambiant/congele)"
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.dlcAReceptionEstimee || draft.dlcEstimee || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: { ...prev.resumePictos, dlcAReceptionEstimee: e.target.value },
-                          dlcEstimee: e.target.value,
-                        }))
-                      }
-                      placeholder="DLC estimée"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#1F2937] capitalize">
-                      {display.resumePictos?.modeConservation || display.conservationMode || 'A preciser'}
-                    </p>
-                    <p className="text-xs text-[#6B7280]">
-                      DLC estimée : {display.resumePictos?.dlcAReceptionEstimee || display.dlcEstimee || '-'}
-                    </p>
-                  </>
-                )}
-              </div>
-              <div className="p-3 rounded-lg bg-[#F9F2E4]">
-                <p className="text-xs text-[#6B7280] uppercase">Format / Conditionnement</p>
-                {editMode ? (
-                  <div className="space-y-2">
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.formatConditionnement || draft.conditionnementPrincipal || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: { ...prev.resumePictos, formatConditionnement: e.target.value },
-                          conditionnementPrincipal: e.target.value,
-                        }))
-                      }
-                      placeholder="Format / conditionnement"
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.portions || draft.portions || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: { ...prev.resumePictos, portions: e.target.value },
-                          portions: e.target.value,
-                        }))
-                      }
-                      placeholder="Portions / usages"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#1F2937]">
-                      {display.resumePictos?.formatConditionnement || display.conditionnementPrincipal || product.unit}
-                    </p>
-                    <p className="text-xs text-[#6B7280]">Portions : {display.resumePictos?.portions || display.portions || 'A preciser'}</p>
-                  </>
-                )}
-              </div>
-              <div className="p-3 rounded-lg bg-[#F9F2E4]">
-                <p className="text-xs text-[#6B7280] uppercase">Chaine</p>
-                {editMode ? (
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 text-sm text-[#1F2937]">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(draft.resumePictos?.chaineDuFroid)}
-                        onChange={(e) =>
-                          setDraft((prev) => ({
-                            ...prev,
-                            resumePictos: { ...prev.resumePictos, chaineDuFroid: e.target.checked },
-                          }))
-                        }
-                      />
-                      Chaine du froid
-                    </label>
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.chaineAnimal?.naissance || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: {
-                            ...prev.resumePictos,
-                            chaineAnimal: { ...(prev.resumePictos?.chaineAnimal || {}), naissance: e.target.value },
-                          },
-                        }))
-                      }
-                      placeholder="Naissance"
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                      value={draft.resumePictos?.chaineAnimal?.elevage || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          resumePictos: {
-                            ...prev.resumePictos,
-                            chaineAnimal: { ...(prev.resumePictos?.chaineAnimal || {}), elevage: e.target.value },
-                          },
-                        }))
-                      }
-                      placeholder="Elevage"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#1F2937]">
-                      {display.resumePictos?.chaineDuFroid ? 'Chaine du froid' : 'Ambiant / stabilise'}
-                    </p>
-                    {display.resumePictos?.chaineAnimal ? (
-                      <p className="text-xs text-[#6B7280]">
-                        Naissance {display.resumePictos.chaineAnimal.naissance} - Elevage {display.resumePictos.chaineAnimal.elevage} -{' '}
-                        {display.resumePictos.chaineAnimal.abattage || 'Abattage N/A'} - Transformation{' '}
-                        {display.resumePictos.chaineAnimal.transformation}
+          {display.productions?.length ? (
+            <div className="pd-stack pd-stack--sm">
+              {display.productions.map((lot) => {
+                const badge = lotStatusBadge(lot);
+                return (
+                  <div key={lot.id} className="pd-lot-card pd-stack pd-stack--sm">
+                    <div className="pd-row pd-row--between pd-gap-sm">
+                      <div className="pd-row pd-gap-sm">
+                        <span className={badge.className}>{badge.label}</span>
+                        <p className="pd-text-strong">{lot.nomLot}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLotId(lot.id)}
+                        className={`pd-btn pd-btn--xs ${
+                          selectedLotId === lot.id ? 'pd-btn--outline-active' : 'pd-btn--outline'
+                        }`}
+                      >
+                        {selectedLotId === lot.id ? 'Selectionne pour creer' : 'Selectionner ce lot'}
+                      </button>
+                    </div>
+                    <div className="pd-grid pd-grid--two pd-gap-sm pd-text-xs pd-text-muted">
+                      <p>
+                        Disponibilite : {lot.periodeDisponibilite?.debut} {'->'} {lot.periodeDisponibilite?.fin}
                       </p>
+                      <p>
+                        Quantites : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
+                      </p>
+                      <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
+                      <p>Lot #{lot.numeroLot || 'A preciser'}</p>
+                    </div>
+                    {lot.commentaire ? <p className="pd-text-body">{lot.commentaire}</p> : null}
+                    {lot.piecesJointes?.length ? (
+                      <div className="pd-row pd-row--wrap pd-gap-xs pd-text-xs">
+                        {lot.piecesJointes.map((piece) => (
+                          <a
+                            key={piece.label}
+                            href={piece.url}
+                            className="pd-link-pill"
+                          >
+                            <ExternalLink size={12} />
+                            {piece.label}
+                          </a>
+                        ))}
+                      </div>
                     ) : null}
-                  </>
-                )}
-              </div>
+                  </div>
+                );
+              })}
+              <p className="pd-text-xs pd-text-muted">Selectionnez un lot pour le pre-remplissage des commandes.</p>
             </div>
-          </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Pas encore de lots publies.</p>
+          )}
         </div>
       </div>
+    </div>
+  );
 
-      <SectionCard
-        title="Description & usages"
-        summary={detail.shortDescription || 'Description longue, conseils degustation, idées recettes'}
-        defaultOpen
-      >
-        <div className="space-y-3 text-sm text-[#374151] leading-relaxed">
-          {editMode ? (
-            <textarea
-              className="w-full border border-[#F1E8D7] rounded-lg p-3 text-sm"
-              rows={4}
-              value={draft.longDescription || ''}
-              onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
-            />
-          ) : (
-            <p>{display.longDescription || product.description}</p>
-          )}
-          {detail.compositionEtiquette?.conseilsUtilisation ? (
-            <div className="p-3 rounded-lg bg-[#F9F2E4] border border-[#F1E8D7]">
-              <p className="text-xs uppercase text-[#6B7280]">Conseils degustation</p>
-              {editMode ? (
-                <textarea
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                  value={draft.compositionEtiquette?.conseilsUtilisation || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: { ...prev.compositionEtiquette, conseilsUtilisation: e.target.value },
-                    }))
-                  }
-                />
-              ) : (
-                <p className="text-sm text-[#1F2937]">{display.compositionEtiquette?.conseilsUtilisation}</p>
-              )}
+  const qualityTab = (
+    <div className="pd-tab pd-stack pd-stack--lg">
+      <div className="pd-grid pd-grid--wide pd-gap-lg">
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-gap-sm">
+            <ShieldCheck className="pd-icon pd-icon--accent" />
+            <p className="pd-section-title">Labels & caractéristiques du produit</p>
+          </div>
+          {allBadges.length ? (
+            <div className="pd-grid pd-grid--two pd-gap-sm">
+              {allBadges.map((badge) => (
+                <div key={badge} className="pd-card pd-card--subtle pd-stack pd-stack--xs">
+                  <p className="pd-text-strong">{badge}</p>
+                  <p className="pd-text-xs pd-text-muted">{getLabelDescription(badge)}</p>
+                </div>
+              ))}
             </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Aucun label renseigné pour le moment.</p>
+          )}
+        </div>
+
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-gap-sm">
+            <Package className="pd-icon pd-icon--accent" />
+            <p className="pd-section-title">Exploitation</p>
+          </div>
+          {display.productionConditions ? (
+            <div className="pd-grid pd-grid--two pd-gap-sm">
+              {display.productionConditions.modeProduction ? (
+                <div className="pd-info-card pd-stack pd-stack--xs">
+                  <p className="pd-label">Mode de production</p>
+                  <p>{display.productionConditions.modeProduction}</p>
+                </div>
+              ) : null}
+              {display.productionConditions.intrantsPesticides ? (
+                <div className="pd-info-card pd-stack pd-stack--xs">
+                  <p className="pd-label">Intrants / pesticides</p>
+                  <p>
+                    {display.productionConditions.intrantsPesticides.utilise ? 'Utilisation declaree' : 'Non utilise'}
+                  </p>
+                  <p className="pd-text-xs pd-text-muted">{display.productionConditions.intrantsPesticides.details}</p>
+                </div>
+              ) : null}
+              {display.productionConditions.bienEtreAnimal ? (
+                <div className="pd-info-card pd-stack pd-stack--xs">
+                  <p className="pd-label">Bien-être animal</p>
+                  <p>{display.productionConditions.bienEtreAnimal}</p>
+                </div>
+              ) : null}
+              {display.productionConditions.environnement ? (
+                <div className="pd-info-card pd-stack pd-stack--xs">
+                  <p className="pd-label">Environnement</p>
+                  <p>{display.productionConditions.environnement}</p>
+                </div>
+              ) : null}
+              {display.productionConditions.social ? (
+                <div className="pd-info-card pd-stack pd-stack--xs">
+                  <p className="pd-label">Social</p>
+                  <p>{display.productionConditions.social}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigné son cahier des charges.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const repartitionTab = (
+    <div className="pd-tab pd-stack pd-stack--md">
+      <div className="pd-card pd-stack pd-stack--md">
+        <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+          <div>
+            <p className="pd-section-title">Repartition de la valeur</p>
+            <p className="pd-text-xs pd-text-muted">
+              {detail.repartitionValeur?.postes?.length
+                ? `Lecture en ${detail.repartitionValeur.uniteReference} - ${
+                    detail.repartitionValeur.mode === 'detaille' ? 'Detaille' : 'Estimatif'
+                  }`
+                : "Le producteur n'a pas encore renseigne la repartition"}
+            </p>
+          </div>
+          {detail.repartitionValeur?.totalReference ? (
+            <span className="pd-chip pd-chip--highlight">
+              Total reference {detail.repartitionValeur.totalReference} {detail.repartitionValeur.uniteReference}
+            </span>
           ) : null}
         </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Formats & infos pratiques"
-        summary={`Formats disponibles : ${display.formats?.length || 1} - Achat via commande (participer / creer)`}
-        defaultOpen
-      >
-        <div className="space-y-3">
-          {display.formats?.map((format, idx) => (
-            <div
-              key={format.id}
-              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border border-[#F1E8D7] rounded-lg p-3"
-            >
-              <div>
-                {editMode ? (
-                  <div className="space-y-2">
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm font-semibold text-[#1F2937]"
-                      value={format.label}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          formats: (prev.formats || []).map((f, fIdx) => (fIdx === idx ? { ...f, label: e.target.value } : f)),
-                        }))
-                      }
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-xs text-[#374151]"
-                      value={format.poidsNet}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          formats: (prev.formats || []).map((f, fIdx) => (fIdx === idx ? { ...f, poidsNet: e.target.value } : f)),
-                        }))
-                      }
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-xs text-[#374151]"
-                      value={format.conditionnement}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          formats: (prev.formats || []).map((f, fIdx) =>
-                            fIdx === idx ? { ...f, conditionnement: e.target.value } : f
-                          ),
-                        }))
-                      }
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-xs text-[#374151]"
-                      value={format.uniteVente}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          formats: (prev.formats || []).map((f, fIdx) => (fIdx === idx ? { ...f, uniteVente: e.target.value as any } : f)),
-                        }))
-                      }
-                    />
-                    <input
-                      className="w-full border border-[#F1E8D7] rounded-lg p-2 text-xs text-[#374151]"
-                      value={format.codeEAN || ''}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          formats: (prev.formats || []).map((f, fIdx) => (fIdx === idx ? { ...f, codeEAN: e.target.value } : f)),
-                        }))
-                      }
-                      placeholder="Code EAN"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-[#1F2937]">{format.label}</p>
-                    <p className="text-xs text-[#6B7280]">
-                      {format.poidsNet} - {format.conditionnement} - Unite : {format.uniteVente}
-                    </p>
-                    {format.codeEAN ? <p className="text-xs text-[#6B7280]">EAN : {format.codeEAN}</p> : null}
-                  </>
-                )}
-              </div>
-              <span className="text-xs text-[#6B7280]">Info uniquement - commande via Participer / Creer</span>
-            </div>
-          )) || <p className="text-sm text-[#6B7280]">Formats a preciser.</p>}
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Repartition de la valeur"
-        summary={
-          detail.repartitionValeur?.postes?.length
-            ? `Lecture en ${detail.repartitionValeur.uniteReference} - ${detail.repartitionValeur.mode === 'detaille' ? 'Detaille' : 'Estimatif'}`
-            : "Le producteur n'a pas encore renseigne la repartition"
-        }
-      >
         {localPosts.length === 0 ? (
-          <p className="text-sm text-[#6B7280]">Le producteur n'a pas encore renseigné la repartition.</p>
+          <p className="pd-text-sm pd-text-muted">Le producteur n'a pas encore renseigne la repartition.</p>
         ) : (
-          <div className="space-y-4">
+          <div className="pd-stack pd-stack--md">
             <ValuePieChart
               slices={localPosts.map((post, idx) => ({
                 label: post.nom || `Poste ${idx + 1}`,
@@ -867,50 +782,50 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 color: PIE_COLORS[idx % PIE_COLORS.length],
               }))}
             />
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm text-left">
-                <thead className="text-xs uppercase text-[#6B7280]">
+            <div className="pd-table-wrap">
+              <table className="pd-table">
+                <thead className="pd-table__head">
                   <tr>
-                    <th className="py-2 pr-3">Poste</th>
-                    <th className="py-2 pr-3">Cout (EUR)</th>
-                    <th className="py-2 pr-3">Details</th>
-                    {editMode ? <th className="py-2">Actions</th> : null}
+                    <th className="pd-table__cell">Poste</th>
+                    <th className="pd-table__cell">Cout (EUR)</th>
+                    <th className="pd-table__cell">Details</th>
+                    {editMode ? <th className="pd-table__cell">Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {localPosts.map((post, idx) => (
-                    <tr key={post.nom} className="border-t border-[#F1E8D7]">
-                      <td className="py-2 pr-3">
+                    <tr key={`${post.nom}-${idx}`} className="pd-table__row">
+                      <td className="pd-table__cell">
                         {editMode ? (
                           <input
-                            className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
+                            className="pd-input"
                             value={post.nom}
                             onChange={(e) => handlePostChange(idx, 'nom', e.target.value)}
                           />
                         ) : (
-                          <span className="font-semibold text-[#1F2937]">{post.nom}</span>
+                          <span className="pd-text-strong">{post.nom}</span>
                         )}
                       </td>
-                      <td className="py-2 pr-3">
+                      <td className="pd-table__cell">
                         {editMode ? (
-                          <div className="flex items-center gap-2">
+                          <div className="pd-row pd-gap-sm">
                             <input
                               type="number"
                               min={0}
-                              className="w-28 border border-[#F1E8D7] rounded-lg p-2 text-sm"
+                              className="pd-input pd-input--small"
                               value={post.valeur}
                               onChange={(e) => handlePostChange(idx, 'valeur', e.target.value)}
                             />
-                            <span className="text-xs text-[#6B7280]">EUR</span>
+                            <span className="pd-text-xs pd-text-muted">EUR</span>
                           </div>
                         ) : (
-                          <span className="text-[#1F2937]">{formatValue(post)}</span>
+                          <span className="pd-text-body">{formatValue(post)}</span>
                         )}
                       </td>
-                      <td className="py-2 pr-3 text-[#6B7280]">
+                      <td className="pd-table__cell pd-text-muted">
                         {editMode ? (
                           <input
-                            className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm text-[#374151]"
+                            className="pd-input"
                             value={post.details || ''}
                             onChange={(e) => handlePostChange(idx, 'details', e.target.value)}
                             placeholder="Ex : main d'oeuvre, matiere premiere, logistique..."
@@ -920,11 +835,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         )}
                       </td>
                       {editMode ? (
-                        <td className="py-2">
+                        <td className="pd-table__cell">
                           <button
                             type="button"
                             onClick={() => setLocalPosts((prev) => prev.filter((_, idy) => idy !== idx))}
-                            className="text-xs text-[#FF6B4A] hover:underline"
+                            className="pd-link-btn"
                           >
                             Supprimer
                           </button>
@@ -936,21 +851,21 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </table>
             </div>
             {hasGap ? (
-              <div className="flex items-center gap-2 text-xs text-[#B45309] bg-[#FFF1E6] border border-[#FF6B4A]/40 rounded-lg p-3">
+              <div className="pd-alert pd-alert--warn">
                 <Info size={14} />
                 <span>
-                  Écart détecté : total {totalPosts.toFixed(2)} vs attendu {expectedTotal}. Ajustez vos postes.
+                  Ecart detecte : total {totalPosts.toFixed(2)} vs attendu {expectedTotal}. Ajustez vos postes.
                 </span>
               </div>
             ) : null}
             {detail.repartitionValeur?.notePedagogique ? (
-              <p className="text-xs text-[#6B7280]">{detail.repartitionValeur.notePedagogique}</p>
+              <p className="pd-text-xs pd-text-muted">{detail.repartitionValeur.notePedagogique}</p>
             ) : null}
             {editMode ? (
               <button
                 type="button"
                 onClick={handleAddPost}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-gray-300 text-sm text-[#374151]"
+                className="pd-btn pd-btn--ghost pd-btn--dashed"
               >
                 <Plus size={16} />
                 Ajouter un poste
@@ -958,479 +873,658 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             ) : null}
           </div>
         )}
-      </SectionCard>
+      </div>
+    </div>
+  );
 
-      <SectionCard
-        title="Composition & etiquette"
-        summary={`Denomination : ${detail.compositionEtiquette?.denominationVente || 'A preciser'}`}
-      >
-        <div className="space-y-3 text-sm text-[#374151]">
-          <p>
-            <span className="font-semibold">Denomination de vente : </span>
-            {editMode ? (
-              <input
-                className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                value={draft.compositionEtiquette?.denominationVente || ''}
-                onChange={(e) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    compositionEtiquette: { ...prev.compositionEtiquette, denominationVente: e.target.value },
-                  }))
-                }
-              />
-            ) : (
-              detail.compositionEtiquette?.denominationVente || 'A preciser'
-            )}
-          </p>
-          {detail.compositionEtiquette?.ingredients ? (
-            <p>
-              <span className="font-semibold">Ingrédients : </span>
+  const consumptionTab = (
+    <div className="pd-tab pd-stack pd-stack--lg">
+      <div className="pd-grid pd-grid--wide pd-gap-lg">
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-gap-sm">
+            <MapPin className="pd-icon pd-icon--accent" />
+            <p className="pd-section-title">Repartition des lieux d'achats</p>
+          </div>
+          <div className="pd-map">
+            <div className="pd-map__label">
+              <MapPin size={16} />
+              <span>Carte des achats (prototype)</span>
+            </div>
+          </div>
+          <div className="pd-row pd-row--wrap pd-gap-sm">
+            <div className="pd-stat-card">
+              <p className="pd-text-xs pd-text-muted">Commandes actives</p>
+              <p className="pd-text-strong">{ordersWithProduct.length}</p>
+            </div>
+            <div className="pd-stat-card">
+              <p className="pd-text-xs pd-text-muted">Participants</p>
+              <p className="pd-text-strong">{totalParticipants}</p>
+            </div>
+            <div className="pd-stat-card">
+              <p className="pd-text-xs pd-text-muted">Kg mutualises</p>
+              <p className="pd-text-strong">{totalOrderedWeight ? totalOrderedWeight.toFixed(1) : '-'}</p>
+            </div>
+          </div>
+          {locationStats.length ? (
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Villes principales</p>
+              <div className="pd-row pd-row--wrap pd-gap-xs">
+                {locationStats.map((item) => (
+                  <span key={item.label} className="pd-chip">
+                    {item.label} ({item.count})
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Pas encore de commandes localisees.</p>
+          )}
+        </div>
+
+        <div className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-gap-sm">
+            <Users className="pd-icon pd-icon--accent" />
+            <p className="pd-section-title">Indicateurs par lot</p>
+          </div>
+          {display.productions?.length ? (
+            <div className="pd-stack pd-stack--sm">
+              {display.productions.map((lot) => {
+                const total = lot.qteTotale ?? 0;
+                const remaining = lot.qteRestante ?? 0;
+                const mutualised = total ? Math.max(total - remaining, 0) : 0;
+                return (
+                  <div key={`cons-${lot.id}`} className="pd-lot-metrics pd-stack pd-stack--sm">
+                    <div className="pd-row pd-row--between pd-text-sm">
+                      <span className="pd-text-strong">{lot.nomLot}</span>
+                      <span className="pd-text-xs pd-text-muted">{lot.statut.replace('_', ' ')}</span>
+                    </div>
+                    <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs pd-text-muted">
+                      <div>
+                        <p className="pd-label pd-label--tiny">Kg mutualises</p>
+                        <p className="pd-text-body">{mutualised || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="pd-label pd-label--tiny">Participants</p>
+                        <p className="pd-text-body">{totalParticipants || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="pd-label pd-label--tiny">Commandes</p>
+                        <p className="pd-text-body">{ordersWithProduct.length || '-'}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Pas encore de lots pour afficher les indicateurs.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="pd-grid pd-grid--two pd-gap-lg">
+        <div className="pd-card pd-stack pd-stack--md">
+          <p className="pd-section-title">Avis & commentaires</p>
+          {detail.avis?.listeAvis?.length ? (
+            <div className="pd-stack pd-stack--sm">
+              <div className="pd-row pd-gap-sm pd-text-sm">
+                <Star size={16} className="pd-icon pd-icon--star" />
+                <span className="pd-text-strong">{detail.avis.noteMoyenne.toFixed(1)}</span>
+                <span className="pd-text-muted">({detail.avis.nbAvis} avis)</span>
+              </div>
+              {detail.avis.listeAvis.map((avis) => (
+                <div key={avis.commentaire} className="pd-review-card pd-stack pd-stack--xs">
+                  <div className="pd-row pd-gap-sm pd-text-sm">
+                    <CheckCircle2 size={14} className="pd-icon pd-icon--success" />
+                    <span className="pd-text-strong">{avis.auteur}</span>
+                    <span className="pd-text-xs pd-text-muted">{avis.date}</span>
+                    <span className="pd-text-xs pd-text-muted">Note {avis.note}/5</span>
+                  </div>
+                  <p className="pd-text-body">{avis.commentaire}</p>
+                  <button className="pd-link-btn">Marquer utile</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="pd-text-sm pd-text-muted">Pas encore d'avis.</p>
+          )}
+        </div>
+
+        <div className="pd-card pd-stack pd-stack--md">
+          <p className="pd-section-title">Questions / FAQ</p>
+          <div className="pd-stack pd-stack--xs">
+            <label className="pd-text-sm" htmlFor="question-input">
+              Poser une question
+            </label>
+            <textarea
+              id="question-input"
+              className="pd-textarea"
+              placeholder="Comment ca marche, conditions de retrait..."
+            />
+            <button className="pd-btn pd-btn--primary">
+              Publier la question
+            </button>
+          </div>
+          {detail.questions?.listeQnA?.length ? (
+            <div className="pd-stack pd-stack--sm">
+              {detail.questions.listeQnA.map((qa, idx) => (
+                <div key={`${qa.question}-${idx}`} className="pd-faq-card pd-stack pd-stack--xs">
+                  <p className="pd-text-strong">{qa.question}</p>
+                  <p className="pd-text-xs pd-text-muted">{qa.date}</p>
+                  {qa.reponse ? <p className="pd-text-body">Reponse : {qa.reponse}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+
+  const transparencyTab = (
+    <div className="pd-tab pd-stack pd-stack--lg">
+      <div className="pd-grid pd-grid--two pd-gap-lg">
+      
+        <div className="pd-card pd-stack pd-stack--md">
+          <p className="pd-section-title">Conservation & dates</p>
+          <div className="pd-stack pd-stack--sm">
+            <div className="pd-info-card pd-stack pd-stack--xs">
+              <p className="pd-label">DLC / DDM</p>
+              {editMode ? (
+                <input
+                  className="pd-input"
+                  value={draft.dlcEstimee || ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, dlcEstimee: e.target.value }))}
+                  placeholder="DLC estimee"
+                />
+              ) : (
+                <p className="pd-text-body">DLC estimée : {display.dlcEstimee || '-'}</p>
+              )}
+              {selectedLot?.DLC_DDM ? (
+                <p className="pd-text-xs pd-text-muted">Lot selectionné : {selectedLot.DLC_DDM}</p>
+              ) : null}
+            </div>
+            <div className="pd-info-card pd-stack pd-stack--xs">
+              <p className="pd-label">Conservation</p>
+              <div className="pd-row pd-gap-sm pd-text-sm">
+                <Thermometer size={16} />
+                {editMode ? (
+                  <select
+                    className="pd-select"
+                    value={draft.conservationMode || ''}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, conservationMode: e.target.value as any }))}
+                  >
+                    <option value="">A preciser</option>
+                    <option value="frais">Frais</option>
+                    <option value="ambiant">Ambiant</option>
+                    <option value="congele">Congele</option>
+                  </select>
+                ) : (
+                  <span>{display.conservationMode ? `${display.conservationMode} (0-4C si frais)` : 'A preciser'}</span>
+                )}
+              </div>
+              {display.compositionEtiquette?.conservationDetaillee ? (
+                <p className="pd-text-xs pd-text-muted">{display.compositionEtiquette.conservationDetaillee}</p>
+              ) : null}
+            </div>
+            <div className="pd-info-card pd-stack pd-stack--xs">
+              <p className="pd-label">Apres ouverture</p>
               {editMode ? (
                 <textarea
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                  value={(draft.compositionEtiquette?.ingredients || []).map((i) => i.nom).join(', ')}
+                  className="pd-textarea"
+                  value={draft.compositionEtiquette?.conseilsUtilisation || ''}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      compositionEtiquette: { ...(prev.compositionEtiquette ?? {}), conseilsUtilisation: e.target.value },
+                    }))
+                  }
+                  placeholder="Ex : consommer sous 48h apres ouverture."
+                />
+              ) : (
+                <p className="pd-text-body">
+                  {display.compositionEtiquette?.conseilsUtilisation || 'Consommer sous 48h apres ouverture.'}
+                </p>
+              )}
+              <p className="pd-text-xs pd-text-muted">
+                Congelation :{' '}
+                {display.conservationMode === 'congele' ||
+                (display.compositionEtiquette?.conservationDetaillee || '').toLowerCase().includes('congel')
+                  ? 'oui'
+                  : 'non'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="pd-grid pd-grid--two pd-gap-lg">
+        <div className="pd-card pd-stack pd-stack--md">
+          <p className="pd-section-title">Ingrédients & allérgenes</p>
+          <div className="pd-stack pd-stack--sm">
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Dénomination de vente</p>
+              {editMode ? (
+                <input
+                  className="pd-input"
+                  value={draft.compositionEtiquette?.denominationVente || ''}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      compositionEtiquette: { ...(prev.compositionEtiquette ?? {}), denominationVente: e.target.value },
+                    }))
+                  }
+                />
+              ) : (
+                <p>{display.compositionEtiquette?.denominationVente || 'A preciser'}</p>
+              )}
+            </div>
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Ingredients</p>
+              {editMode ? (
+                <textarea
+                  className="pd-textarea"
+                  value={(draft.compositionEtiquette?.ingredients || []).map((item) => item.nom).join(', ')}
                   onChange={(e) =>
                     setDraft((prev) => ({
                       ...prev,
                       compositionEtiquette: {
-                        ...prev.compositionEtiquette,
+                        ...(prev.compositionEtiquette ?? {}),
                         ingredients: e.target.value
                           .split(',')
-                          .map((v) => v.trim())
+                          .map((value) => value.trim())
                           .filter(Boolean)
-                          .map((nom) => ({ nom })),
+                          .map((value) => ({ nom: value })),
                       },
                     }))
                   }
-                  placeholder="Ingrédients separes par des virgules"
+                  placeholder="Ex : lait cru, ferments, sel..."
                 />
+              ) : display.compositionEtiquette?.ingredients?.length ? (
+                <div className="pd-row pd-row--wrap pd-gap-xs">
+                  {display.compositionEtiquette.ingredients.map((ingredient) => (
+                    <span key={ingredient.nom} className="pd-chip">
+                      {ingredient.nom}
+                    </span>
+                  ))}
+                </div>
               ) : (
-                detail.compositionEtiquette.ingredients.map((item, idx) => (
-                  <span key={item.nom}>
-                    {item.nom}
-                    {idx < (detail.compositionEtiquette?.ingredients?.length ?? 0) - 1 ? ', ' : ''}
-                  </span>
-                ))
+                <p className="pd-text-sm pd-text-muted">Ingredients a preciser.</p>
               )}
-            </p>
-          ) : null}
-          {detail.compositionEtiquette?.allergenes?.length ? (
-            <p>
-              <span className="font-semibold">Allergènes : </span>
+            </div>
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Allergenes</p>
               {editMode ? (
                 <input
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm text-[#B45309]"
+                  className="pd-input pd-input--warn"
                   value={(draft.compositionEtiquette?.allergenes || []).join(', ')}
                   onChange={(e) =>
                     setDraft((prev) => ({
                       ...prev,
                       compositionEtiquette: {
-                        ...prev.compositionEtiquette,
+                        ...(prev.compositionEtiquette ?? {}),
                         allergenes: e.target.value
                           .split(',')
-                          .map((v) => v.trim())
+                          .map((value) => value.trim())
                           .filter(Boolean),
                       },
                     }))
                   }
                 />
+              ) : display.compositionEtiquette?.allergenes?.length ? (
+                <div className="pd-row pd-row--wrap pd-gap-xs">
+                  {display.compositionEtiquette.allergenes.map((allergene) => (
+                    <span key={allergene} className="pd-chip pd-chip--warn">
+                      {allergene}
+                    </span>
+                  ))}
+                </div>
               ) : (
-                <span className="text-[#B45309]">{detail.compositionEtiquette.allergenes.join(', ')}</span>
+                <p className="pd-text-sm pd-text-muted">Aucun allergene mentionne.</p>
               )}
-            </p>
-          ) : null}
-          {detail.compositionEtiquette?.additifs?.length ? (
-            <p>
-              <span className="font-semibold">Additifs / aromes : </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="pd-card pd-stack pd-stack--md">
+          <p className="pd-section-title">Nutrition & composition</p>
+          <div className="pd-stack pd-stack--sm">
+            <div className="pd-stack pd-stack--xs">
+              <p className="pd-label">Additifs / aromes</p>
               {editMode ? (
                 <input
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
+                  className="pd-input"
                   value={(draft.compositionEtiquette?.additifs || []).join(', ')}
                   onChange={(e) =>
                     setDraft((prev) => ({
                       ...prev,
                       compositionEtiquette: {
-                        ...prev.compositionEtiquette,
+                        ...(prev.compositionEtiquette ?? {}),
                         additifs: e.target.value
                           .split(',')
-                          .map((v) => v.trim())
+                          .map((value) => value.trim())
                           .filter(Boolean),
                       },
                     }))
                   }
                 />
+              ) : display.compositionEtiquette?.additifs?.length ? (
+                <p>{display.compositionEtiquette.additifs.join(', ')}</p>
               ) : (
-                detail.compositionEtiquette.additifs.join(', ')
-              )}
-            </p>
-          ) : null}
-          {detail.compositionEtiquette?.nutrition ? (
-            <div className="border border-[#F1E8D7] rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-[#F9F2E4] text-xs font-semibold text-[#1F2937]">Nutrition pour 100g</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 text-xs text-[#1F2937]">
-                {Object.entries(detail.compositionEtiquette.nutrition).map(([key, value]) => (
-                  <div key={key} className="flex justify-between">
-                    <span className="capitalize text-[#6B7280]">{key.replace(/_/g, ' ')}</span>
-                    <span>{value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {detail.compositionEtiquette?.conservationDetaillee ? (
-            <p>
-              <span className="font-semibold">Conservation detaillée : </span>
-              {editMode ? (
-                <textarea
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                  value={draft.compositionEtiquette?.conservationDetaillee || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      compositionEtiquette: { ...prev.compositionEtiquette, conservationDetaillee: e.target.value },
-                    }))
-                  }
-                />
-              ) : (
-                detail.compositionEtiquette.conservationDetaillee
-              )}
-            </p>
-          ) : null}
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Conservation & dates"
-        summary={`DLC/DDM : ${detail.dlcEstimee || 'A préciser'} - Conservation ${detail.conservationMode || 'A préciser'}`}
-      >
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className="border border-[#F1E8D7] rounded-lg p-3">
-            <p className="text-xs text-[#6B7280] uppercase">DLC / DDM</p>
-            {editMode ? (
-              <input
-                className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm text-[#1F2937]"
-                value={draft.dlcEstimee || ''}
-                onChange={(e) => setDraft((prev) => ({ ...prev, dlcEstimee: e.target.value }))}
-                placeholder="DLC estimée"
-              />
-            ) : (
-              <p className="text-sm text-[#1F2937]">DLC estimée : {detail.dlcEstimee || '-'}</p>
-            )}
-            {selectedLot?.DLC_DDM ? (
-              <p className="text-xs text-[#6B7280]">Lot selectionné : {selectedLot.DLC_DDM}</p>
-            ) : null}
-          </div>
-          <div className="border border-[#F1E8D7] rounded-lg p-3">
-            <p className="text-xs text-[#6B7280] uppercase">Conservation</p>
-            <div className="flex items-center gap-2 text-sm text-[#1F2937]">
-              <Thermometer size={16} />
-              {editMode ? (
-                <input
-                  className="w-full border border-[#F1E8D7] rounded-lg p-2 text-sm"
-                  value={draft.conservationMode || ''}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, conservationMode: e.target.value as any }))}
-                  placeholder="Conservation"
-                />
-              ) : (
-                <span>{detail.conservationMode ? `${detail.conservationMode} (0-4C si frais)` : 'A preciser'}</span>
+                <p className="pd-text-sm pd-text-muted">Aucun additif renseigne.</p>
               )}
             </div>
-            {detail.compositionEtiquette?.conservationDetaillee ? (
-              <p className="text-xs text-[#6B7280] mt-1">{detail.compositionEtiquette.conservationDetaillee}</p>
-            ) : null}
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard
-        title="Origine & tracabilite"
-        summary={`Production : ${detail.tracabilite?.lieuProduction || 'A preciser'} - Transformation : ${
-          detail.tracabilite?.lieuTransformation || 'A preciser'
-        }`}
-      >
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-2 text-sm text-[#374151]">
-            <span className="px-3 py-1 rounded-full bg-[#F9F2E4] text-[#1F2937]">
-              Pays d'origine :{' '}
-              {editMode ? (
-                <input
-                  className="ml-1 border border-[#F1E8D7] rounded-lg p-1 text-sm"
-                  value={draft.tracabilite?.paysOrigine || draft.originCountry || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      tracabilite: { ...prev.tracabilite, paysOrigine: e.target.value },
-                      originCountry: e.target.value,
-                    }))
-                  }
-                />
-              ) : (
-                detail.tracabilite?.paysOrigine || detail.originCountry || 'A preciser'
-              )}
-            </span>
-            {detail.tracabilite?.lieuProduction ? (
-              <span className="px-3 py-1 rounded-full bg-[#F9F2E4] text-[#1F2937]">
-                Production :{' '}
-                {editMode ? (
-                  <input
-                    className="ml-1 border border-[#F1E8D7] rounded-lg p-1 text-sm"
-                    value={draft.tracabilite?.lieuProduction || ''}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        tracabilite: { ...prev.tracabilite, lieuProduction: e.target.value },
-                      }))
-                    }
-                  />
-                ) : (
-                  detail.tracabilite.lieuProduction
-                )}
-              </span>
-            ) : null}
-            {detail.tracabilite?.lieuTransformation ? (
-              <span className="px-3 py-1 rounded-full bg-[#F9F2E4] text-[#1F2937]">
-                Transformation :{' '}
-                {editMode ? (
-                  <input
-                    className="ml-1 border border-[#F1E8D7] rounded-lg p-1 text-sm"
-                    value={draft.tracabilite?.lieuTransformation || ''}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        tracabilite: { ...prev.tracabilite, lieuTransformation: e.target.value },
-                      }))
-                    }
-                  />
-                ) : (
-                  detail.tracabilite.lieuTransformation
-                )}
-              </span>
-            ) : null}
-          </div>
-          {detail.tracabilite?.timeline ? (
-            <div className="space-y-2">
-              {detail.tracabilite.timeline.map((step) => (
-                <div key={step.etape} className="flex items-start gap-3">
-                  <div className="pt-1">
-                    <Circle size={10} className="text-[#FF6B4A]" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-[#1F2937]">{step.etape}</p>
-                    <p className="text-xs text-[#6B7280]">{step.lieu}</p>
-                    <p className="text-xs text-[#6B7280]">{step.date}</p>
-                  </div>
+            {display.compositionEtiquette?.nutrition ? (
+              <div className="pd-nutrition">
+                <div className="pd-nutrition__header">Nutrition pour 100g</div>
+                <div className="pd-grid pd-grid--three pd-gap-sm pd-text-xs">
+                  {Object.entries(display.compositionEtiquette.nutrition).map(([key, value]) => (
+                    <div key={key} className="pd-row pd-row--between">
+                      <span className="pd-text-muted">{key.replace(/_/g, ' ')}</span>
+                      <span>{value}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : null}
-          {detail.tracabilite?.preuves?.length ? (
-            <div className="flex flex-wrap gap-2">
-              {detail.tracabilite.preuves.map((preuve) => (
-                <a
-                  key={preuve.label}
-                  className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-[#F1E8D7] text-sm text-[#374151]"
-                  href={preuve.url}
-                >
-                  <ExternalLink size={14} />
-                  {preuve.label}
-                </a>
-              ))}
-            </div>
-          ) : null}
+              </div>
+            ) : (
+              <p className="pd-text-sm pd-text-muted">Valeurs nutritionnelles a renseigner.</p>
+            )}
+          </div>
         </div>
-      </SectionCard>
+      </div>
+    </div>
+  );
 
-      <SectionCard
-        title="Conditions de production"
-        summary={detail.productionConditions?.modeProduction || 'Mode de production à preciser'}
-      >
-        <div className="grid sm:grid-cols-2 gap-3 text-sm text-[#374151]">
-          <div className="border border-[#F1E8D7] rounded-lg p-3">
-            <p className="text-xs text-[#6B7280] uppercase">Mode de production</p>
-            <p className="text-sm text-[#1F2937]">{detail.productionConditions?.modeProduction || 'A preciser'}</p>
-          </div>
-          <div className="border border-[#F1E8D7] rounded-lg p-3">
-            <p className="text-xs text-[#6B7280] uppercase">Intrants / pesticides</p>
-            <p className="text-sm text-[#1F2937]">
-              {detail.productionConditions?.intrantsPesticides?.utilise ? 'Utilisation declarée' : 'Non utilise'}
-            </p>
-            <p className="text-xs text-[#6B7280]">{detail.productionConditions?.intrantsPesticides?.details}</p>
-          </div>
-          {detail.productionConditions?.bienEtreAnimal ? (
-            <div className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-xs text-[#6B7280] uppercase">Bien-être animal</p>
-              <p className="text-sm text-[#1F2937]">{detail.productionConditions.bienEtreAnimal}</p>
-            </div>
-          ) : null}
-          {detail.productionConditions?.social ? (
-            <div className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-xs text-[#6B7280] uppercase">Social</p>
-              <p className="text-sm text-[#1F2937]">{detail.productionConditions.social}</p>
-            </div>
-          ) : null}
-          {detail.productionConditions?.environnement ? (
-            <div className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-xs text-[#6B7280] uppercase">Environnement</p>
-              <p className="text-sm text-[#1F2937]">{detail.productionConditions.environnement}</p>
-            </div>
-          ) : null}
-        </div>
-        {detail.productionConditions?.preuves?.length ? (
-          <div className="flex flex-wrap gap-2 mt-3">
-            {detail.productionConditions.preuves.map((preuve) => (
-              <a
-                key={preuve.label}
-                href={preuve.url}
-                className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-[#F1E8D7] text-sm text-[#374151]"
-              >
-                <ExternalLink size={14} />
-                {preuve.label}
-              </a>
-            ))}
-          </div>
+  const renderTabContent = () => {
+    if (activeTab === 'circuit') return circuitTab;
+    if (activeTab === 'quality') return qualityTab;
+    if (activeTab === 'repartition') return repartitionTab;
+    if (activeTab === 'consumption') return consumptionTab;
+    if (activeTab === 'transparency') return transparencyTab;
+    return null;
+  };
+
+  const relatedSections = [
+    { id: 'producer', title: 'Du meme producteur', items: detail.produitsLies?.autresDuProducteur ?? [] },
+    { id: 'formats', title: 'Autres formats', items: detail.produitsLies?.autresFormats ?? [] },
+    { id: 'similar', title: 'Similaires', items: detail.produitsLies?.similaires ?? [] },
+  ].filter((section) => section.items.length);
+  const relatedItems = relatedSections.flatMap((section) =>
+    section.items.map((item) => ({ item, sectionId: section.id }))
+  );
+
+  const handleOpenLinkedProduct = (productId: string, isCatalog: boolean) => {
+    if (!onOpenRelatedProduct) return;
+    if (!isCatalog) {
+      toast.info('Produit indisponible dans le catalogue.');
+      return;
+    }
+    onOpenRelatedProduct(productId);
+  };
+
+  const canToggleSave = Boolean(onToggleSave);
+  const headerActions = React.useMemo(() => {
+    if (!onHeaderActionsChange) return null;
+    return (
+      <>
+        <button
+          type="button"
+          onClick={handleSaveToggle}
+          className={`header-action-button header-action-button--ghost ${isSaved ? 'pd-btn--save-active' : ''}`}
+          disabled={!canToggleSave}
+        >
+          <Heart className="header-action-icon" />
+          <span className="header-action-label">
+            {isSaved ? 'Dans ma selection' : 'Ajouter a ma selection'}
+          </span>
+        </button>
+        {isOwner ? (
+          <button
+            type="button"
+            onClick={() => setEditMode((prev) => !prev)}
+            className="header-action-button header-action-button--ghost"
+          >
+            <PenLine className="header-action-icon" />
+            <span className="header-action-label">
+              {editMode ? 'Quitter le mode edition' : 'Modifier'}
+            </span>
+          </button>
         ) : null}
-      </SectionCard>
+      </>
+    );
+  }, [canToggleSave, editMode, handleSaveToggle, isOwner, isSaved, onHeaderActionsChange]);
 
-      <SectionCard
-        title="Productions / lots"
-        summary={
-          detail.productions?.length
-            ? `${detail.productions.filter((lot) => lot.statut === 'en_cours').length} lot(s) en cours`
-            : 'Aucun lot renseigne'
-        }
-      >
-        {detail.productions?.length ? (
-          <div className="space-y-3">
-            {detail.productions.map((lot) => {
-              const badge = lotStatusBadge(lot);
-              return (
-                <div key={lot.id} className="border border-[#F1E8D7] rounded-lg p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${badge.className}`}>{badge.label}</span>
-                      <p className="text-sm font-semibold text-[#1F2937]">{lot.nomLot}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedLotId(lot.id)}
-                      className={`text-xs px-3 py-1 rounded-lg border ${
-                        selectedLotId === lot.id ? 'border-[#FF6B4A] text-[#FF6B4A]' : 'border-gray-200 text-[#374151]'
-                      }`}
-                    >
-                      {selectedLotId === lot.id ? 'Selectionne pour créer' : 'Selectionner ce lot'}
-                    </button>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-2 text-xs text-[#6B7280]">
-                    <p>
-                      Disponibilité : {lot.periodeDisponibilite?.debut} {'->'} {lot.periodeDisponibilite?.fin}
-                    </p>
-                    <p>
-                      Quantites : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
-                    </p>
-                    <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
-                    <p>Lot #{lot.numeroLot || 'A preciser'}</p>
-                  </div>
-                  {lot.commentaire ? <p className="text-sm text-[#374151]">{lot.commentaire}</p> : null}
-                  {lot.piecesJointes?.length ? (
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {lot.piecesJointes.map((piece) => (
-                        <a
-                          key={piece.label}
-                          href={piece.url}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-[#F1E8D7] text-[#374151]"
-                        >
-                          <ExternalLink size={12} />
-                          {piece.label}
-                        </a>
-                      ))}
-                    </div>
+  React.useEffect(() => {
+    if (!onHeaderActionsChange) return;
+    onHeaderActionsChange(headerActions);
+  }, [headerActions, onHeaderActionsChange]);
+
+  React.useEffect(() => {
+    if (!onHeaderActionsChange) return;
+    return () => onHeaderActionsChange(null);
+  }, [onHeaderActionsChange]);
+
+  return (
+    <div className="pd-view">
+      <div className="pd-stack pd-stack--lg">
+        <div className="pd-card pd-card--hero pd-card--tabs pd-stack pd-stack--lg">
+          <div className="pd-grid pd-grid--hero pd-gap-lg">
+          <div className="pd-stack pd-stack--md">
+            <div className="pd-row pd-row--wrap pd-gap-sm">
+              <span className="pd-badge pd-badge--category">
+                {displayCategory}
+              </span>
+              {display.officialBadges?.map((badge) => (
+                <span key={badge} className="pd-badge pd-badge--official">
+                  {badge}
+                </span>
+              ))}
+              {display.platformBadges?.map((badge) => (
+                <span key={badge} className="pd-badge pd-badge--platform">
+                  {badge}
+                </span>
+              ))}
+            </div>
+            {editMode ? (
+              <div className="pd-stack pd-stack--sm">
+                <input
+                  className="pd-input pd-input--title"
+                  value={draft.name}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+                />
+                <input
+                  className="pd-input"
+                  value={draft.category || ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
+                  placeholder="Categorie"
+                />
+                <input
+                  className="pd-input"
+                  value={draft.shortDescription || ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, shortDescription: e.target.value }))}
+                  placeholder="Description courte"
+                />
+                <textarea
+                  className="pd-textarea"
+                  value={draft.longDescription || ''}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
+                  placeholder="Description detaillee"
+                  rows={3}
+                />
+              </div>
+            ) : (
+              <div className="pd-stack pd-stack--xs">
+                <h1 className="pd-title">{display.name}</h1>
+                {display.longDescription ? <p className="pd-callout">{display.longDescription}</p> : null}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleOpenProducer}
+              className="pd-producer-button"
+              disabled={!onOpenProducer}
+            >
+              <ImageWithFallback
+                src={displayProducer.photo || display.productImage?.url || product.imageUrl}
+                alt={displayProducer.name}
+                className="pd-avatar"
+              />
+              <div>
+                <div className="pd-row pd-gap-sm">
+                  <p className="pd-text-strong pd-producer-name">{displayProducer.name}</p>
+                  {displayProducer.badgesProducteur?.includes('Producteur verifie') ? (
+                    <span className="pd-chip pd-chip--success">Verifié</span>
                   ) : null}
                 </div>
-              );
-            })}
-            <p className="text-xs text-[#6B7280]">Sélectionnez un lot pour le pré-remplissage de la création de commande.</p>
-          </div>
-        ) : (
-          <p className="text-sm text-[#6B7280]">Pas encore de lots publiés.</p>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Avis & commentaires" summary={`${detail.avis?.noteMoyenne || '-'} - ${detail.avis?.nbAvis || 0} avis`}>
-        {detail.avis?.listeAvis?.length ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm text-[#1F2937]">
-              <Star size={16} className="text-amber-500" />
-              <span className="font-semibold">{detail.avis.noteMoyenne.toFixed(1)}</span>
-              <span className="text-[#6B7280]">({detail.avis.nbAvis} avis)</span>
-            </div>
-            {detail.avis.listeAvis.map((avis) => (
-              <div key={avis.commentaire} className="border border-[#F1E8D7] rounded-lg p-3">
-                <div className="flex items-center gap-2 text-sm text-[#1F2937]">
-                  <CheckCircle2 size={14} className="text-emerald-500" />
-                  <span className="font-semibold">{avis.auteur}</span>
-                  <span className="text-xs text-[#6B7280]">{avis.date}</span>
-                  <span className="text-xs text-[#6B7280]">Note {avis.note}/5</span>
-                </div>
-                <p className="text-sm text-[#374151] mt-1">{avis.commentaire}</p>
-                <button className="text-xs text-[#FF6B4A] mt-2">Marquer utile</button>
+                <p className="pd-row pd-gap-xs pd-text-xs pd-text-muted">
+                  <MapPin size={14} className="pd-icon pd-icon--accent" />
+                  {displayProducer.city || 'Ville proche'}
+                </p>
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-[#6B7280]">Pas encore d'avis.</p>
-        )}
-      </SectionCard>
+            </button>
 
-      <SectionCard title="Questions / FAQ" summary={`Questions actives : ${detail.questions?.listeQnA?.length || 0}`}>
-        <div className="space-y-3">
-          <div className="space-y-2">
-            <label className="text-sm text-[#1F2937]" htmlFor="question-input">
-              Poser une question
-            </label>
-            <textarea
-              id="question-input"
-              className="w-full border border-[#F1E8D7] rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF6B4A]/40"
-              placeholder="Comment ca marche, conditions de retrait..."
+            {displayProducer.shortStory ? <p className="pd-callout">{displayProducer.shortStory}</p> : null}
+
+            <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
+              <span className="pd-price">{product.price.toFixed(2)} €</span>
+              <span className="pd-measurement-inline">
+                {measurementLabel} ({product.unit})
+              </span>
+            </div>
+
+            <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
+              <button
+                type="button"
+                onClick={onCreateOrder}
+                className="pd-btn pd-btn--primary pd-btn--pill"
+              >
+                Créer une commande avec ce produit
+              </button>
+              <button
+                type="button"
+                onClick={onParticipate}
+                disabled={!hasOrders}
+                className={`pd-btn pd-btn--pill ${hasOrders ? 'pd-btn--outline-primary' : 'pd-btn--disabled'}`}
+              >
+                Trouver des commandes de ce produit{' '}
+                <span className="pd-text-xs pd-text-muted">({summaryOrdersLabel})</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="pd-stack pd-stack--md">
+            <div className="pd-media-card">
+              <ImageWithFallback src={displayImage} alt={display.name} className="pd-media-image" />
+            </div>
+          </div>
+          </div>
+
+          <div className="pd-divider" />
+
+          <div className="profile-tabs-wrapper" aria-label="Sections du produit">
+            <div className="profile-tabs">
+              {tabStats.map((stat) => {
+                const isActive = activeTab === stat.id;
+                const Icon = stat.icon;
+                return (
+                  <button
+                    key={stat.id}
+                    type="button"
+                    onClick={() => setActiveTab(stat.id)}
+                    aria-pressed={isActive}
+                    aria-label={`${stat.label} (${stat.value})`}
+                    className={`profile-tab${isActive ? ' profile-tab--active' : ''}`}
+                  >
+                    <Icon className="profile-tab-icon" />
+                    <span className="profile-tab-label">{stat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="profile-tab-content">{renderTabContent()}</div>
+          </div>
+        </div>
+
+      {isOwner && editMode ? (
+        <div className="pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--sm">
+          {editCTA}
+          <label className="pd-row pd-row--start pd-gap-sm pd-text-sm">
+            <input
+              type="checkbox"
+              checked={notifyFollowers}
+              onChange={(e) => setNotifyFollowers(e.target.checked)}
+              className="pd-checkbox"
             />
-            <button className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm">
-              Publier la question
+            <div className="pd-stack pd-stack--xs">
+              <span className="pd-text-strong">Notifier les personnes qui suivent ce produit</span>
+              <p className="pd-text-sm pd-text-muted">Decochez pour les micro-changements.</p>
+            </div>
+          </label>
+          {notifyFollowers ? (
+            <div className="pd-stack pd-stack--xs">
+              <label className="pd-text-strong" htmlFor="notification-message">
+                Message de notification
+              </label>
+              <textarea
+                id="notification-message"
+                className="pd-textarea"
+                placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
+                value={notificationMessage}
+                onChange={(e) => setNotificationMessage(e.target.value)}
+              />
+              <div className="pd-preview pd-stack pd-stack--xs">
+                <p className="pd-text-strong">Apercu de la notification</p>
+                <p className="pd-text-body">{detail.name}</p>
+                <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
+                <p className="pd-link-accent">Lien vers le produit</p>
+              </div>
+            </div>
+          ) : null}
+          <div className="pd-row pd-row--wrap pd-gap-sm">
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              className="pd-btn pd-btn--primary pd-btn--pill"
+            >
+              Enregistrer
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditMode(false)}
+              className="pd-btn pd-btn--outline pd-btn--pill"
+            >
+              Annuler
             </button>
           </div>
-          {detail.questions?.listeQnA?.map((qa, idx) => (
-            <div key={`${qa.question}-${idx}`} className="border border-[#F1E8D7] rounded-lg p-3 space-y-1">
-              <p className="text-sm font-semibold text-[#1F2937]">{qa.question}</p>
-              <p className="text-xs text-[#6B7280]">{qa.date}</p>
-              {qa.reponse ? <p className="text-sm text-[#374151]">Réponse : {qa.reponse}</p> : null}
-            </div>
-          ))}
         </div>
-      </SectionCard>
+      ) : null}
 
-      <SectionCard title="Produits liés" summary="Produits du même producteur ou similaires">
-        <div className="grid sm:grid-cols-3 gap-3">
-          {detail.produitsLies?.autresFormats?.map((item) => (
-            <div key={`fmt-${item.id}`} className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-sm font-semibold text-[#1F2937]">{item.name}</p>
-              <p className="text-xs text-[#6B7280]">{item.category}</p>
-              <p className="text-xs text-[#6B7280]">{item.city}</p>
-            </div>
-          ))}
-          {detail.produitsLies?.autresDuProducteur?.map((item) => (
-            <div key={`prod-${item.id}`} className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-sm font-semibold text-[#1F2937]">{item.name}</p>
-              <p className="text-xs text-[#6B7280]">{item.category}</p>
-              <p className="text-xs text-[#6B7280]">{item.city}</p>
-            </div>
-          ))}
-          {detail.produitsLies?.similaires?.map((item) => (
-            <div key={`sim-${item.id}`} className="border border-[#F1E8D7] rounded-lg p-3">
-              <p className="text-sm font-semibold text-[#1F2937]">{item.name}</p>
-              <p className="text-xs text-[#6B7280]">{item.category}</p>
-              <p className="text-xs text-[#6B7280]">{item.city}</p>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
+      </div>
+
+      {relatedItems.length ? (
+        <section className="pd-card pd-stack pd-stack--md">
+          <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
+            <h2 className="pd-section-title">Produits liés proches</h2>
+          </div>
+          <div className="pd-related-row">
+            {relatedItems.map(({ item, sectionId }) => {
+              const { product: relatedProduct, isCatalog } = buildLinkedProductCard(item);
+              return (
+                <ProductResultCard
+                  key={`${sectionId}-${item.id}`}
+                  product={relatedProduct}
+                  related={[]}
+                  canSave={false}
+                  inDeck={false}
+                  onOpen={(productId) => handleOpenLinkedProduct(productId, isCatalog)}
+                  showSelectionControl={false}
+                />
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 };

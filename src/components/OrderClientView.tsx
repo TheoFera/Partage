@@ -17,12 +17,14 @@ import { GroupOrder } from '../types';
 import { ProductResultCard } from './ProductsLanding';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { toast } from 'sonner';
+import './OrderClientView.css';
 
 interface OrderClientViewProps {
   order: GroupOrder;
   onClose: () => void;
   onVisibilityChange?: (visibility: GroupOrder['visibility']) => void;
   onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
+  initialQuantities?: Record<string, number>;
   isOwner?: boolean;
 }
 
@@ -64,6 +66,7 @@ export function OrderClientView({
   onClose,
   onVisibilityChange,
   onPurchase,
+  initialQuantities,
   isOwner = true,
 }: OrderClientViewProps) {
   const [quantities, setQuantities] = React.useState<Record<string, number>>({});
@@ -71,10 +74,11 @@ export function OrderClientView({
   React.useEffect(() => {
     const next: Record<string, number> = {};
     order.products.forEach((product) => {
-      next[product.id] = 0;
+      const initial = initialQuantities?.[product.id] ?? 0;
+      next[product.id] = Math.max(0, Number(initial) || 0);
     });
     setQuantities(next);
-  }, [order.id, order.products]);
+  }, [order.id, order.products, initialQuantities]);
 
   const totalCards = React.useMemo(
     () => Object.values(quantities).reduce((sum, qty) => sum + qty, 0),
@@ -138,7 +142,7 @@ export function OrderClientView({
     if (!isOwner) return;
     const next = order.visibility === 'public' ? 'private' : 'public';
     onVisibilityChange?.(next);
-    toast.success(`Commande rendue ${next === 'public' ? 'publique' : 'privee'}`);
+    toast.success(`Commande rendue ${next === 'public' ? 'publique' : 'privée'}`);
   };
 
   const handlePurchase = () => {
@@ -146,13 +150,8 @@ export function OrderClientView({
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
-    onPurchase?.({ quantities, total: totalPrice, weight: selectedWeight });
-    const resetQuantities: Record<string, number> = {};
-    order.products.forEach((product) => {
-      resetQuantities[product.id] = 0;
-    });
-    setQuantities(resetQuantities);
-    toast.success('Quantites enregistrees pour cette commande.');
+    const snapshot = { ...quantities };
+    onPurchase?.({ quantities: snapshot, total: totalPrice, weight: selectedWeight });
   };
 
   const pickupAddress =
@@ -190,7 +189,7 @@ export function OrderClientView({
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <button
           onClick={onClose}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-full border border-gray-200 text-[#1F2937] bg-white shadow-sm hover:border-[#FF6B4A] hover:bg-gray-50 transition-colors"
+          className="order-client-view__back-button"
           type="button"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -201,10 +200,10 @@ export function OrderClientView({
             <button
               type="button"
               onClick={handleVisibilityToggle}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border bg-white text-sm shadow-sm transition-colors ${
+              className={`order-client-view__visibility-button ${
                 order.visibility === 'public'
-                  ? 'border-[#28C1A5] text-[#0F5132] hover:bg-[#F4FFFB]'
-                  : 'border-[#FF6B4A] text-[#B45309] hover:bg-[#FFF1E6]'
+                  ? 'order-client-view__visibility-button--public'
+                  : 'order-client-view__visibility-button--private'
               }`}
             >
               {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
@@ -225,10 +224,6 @@ export function OrderClientView({
                     Par {order.sharerName}
                   </p>
                 </div>
-                <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${statusColor}`}>
-                  <Leaf className="w-4 h-4" />
-                  {statusLabel}
-                </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -274,7 +269,7 @@ export function OrderClientView({
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="order-client-view__products-section space-y-4 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
             <div className="h-px bg-gray-100" />
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -367,10 +362,10 @@ export function OrderClientView({
                 type="button"
                 onClick={handlePurchase}
                 disabled={totalCards === 0}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#FF6B4A] text-white font-semibold shadow-md hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed"
+                className="order-client-view__purchase-button"
               >
                 <ShoppingCart className="w-4 h-4" />
-                Acheter
+                Participer
               </button>
             </div>
           </div>
@@ -488,7 +483,7 @@ function OrderProductsCarousel({
                   <button
                     type="button"
                     onClick={() => onDeltaQuantity(product.id, -1)}
-                    className="w-9 h-9 rounded-full border border-gray-200 text-[#1F2937] hover:border-[#FF6B4A] transition-colors"
+                    className="order-client-view__quantity-button order-client-view__quantity-button--decrement"
                     aria-label={`Retirer une carte de ${product.name}`}
                   >
                     -
@@ -507,7 +502,7 @@ function OrderProductsCarousel({
                   <button
                     type="button"
                     onClick={() => onDeltaQuantity(product.id, 1)}
-                    className="w-9 h-9 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] border border-[#FF6B4A]/30 hover:bg-[#FF6B4A]/20 transition-colors"
+                    className="order-client-view__quantity-button order-client-view__quantity-button--increment"
                     aria-label={`Ajouter une carte de ${product.name}`}
                   >
                     +
@@ -524,7 +519,7 @@ function OrderProductsCarousel({
           type="button"
           onClick={goLeft}
           aria-label="Défiler vers la gauche"
-          className="absolute left-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full border border-gray-200 bg-white shadow hover:border-[#FF6B4A] transition"
+          className="order-client-view__carousel-button order-client-view__carousel-button--left"
         >
           <ChevronLeft className="w-4 h-4 text-[#FF6B4A] mx-auto" />
         </button>
@@ -535,7 +530,7 @@ function OrderProductsCarousel({
           type="button"
           onClick={goRight}
           aria-label="Défiler vers la droite"
-          className="absolute right-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full border border-gray-200 bg-white shadow hover:border-[#FF6B4A] transition"
+          className="order-client-view__carousel-button order-client-view__carousel-button--right"
         >
           <ChevronRight className="w-4 h-4 text-[#FF6B4A] mx-auto" />
         </button>

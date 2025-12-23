@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { LogOut, Pencil, Share2 } from 'lucide-react';
@@ -9,29 +9,75 @@ import { ProfileView } from './components/ProfileView';
 import { MessagesView } from './components/MessagesView';
 import { AddProductForm } from './components/AddProductForm';
 import { ClientSwipeView } from './components/ClientSwipeView';
+import { FiltersPopover } from './components/FiltersPopover';
 import { ProductsLanding } from './components/ProductsLanding';
 import { MapView } from './components/MapView';
 import { OrderClientView } from './components/OrderClientView';
+import { OrderParticipationSummaryView } from './components/OrderParticipationSummaryView';
+import { OrderPaymentView } from './components/OrderPaymentView';
+import { OrderShareGainView } from './components/OrderShareGainView';
 import { AuthPage } from './components/AuthPage';
 import { ShareOverlay } from './components/ShareOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/mockData';
 import { ProductDetailView } from './components/ProductDetailView';
 import { buildDefaultProductDetail, mockProductDetails } from './data/mockProductDetails';
-import { Product, DeckCard, User, GroupOrder, UserRole, LegalEntity } from './types';
+import { Product, DeckCard, User, GroupOrder, UserRole, LegalEntity, OrderPurchaseDraft } from './types';
 import { getSupabaseClient } from './lib/supabaseClient';
 import { toast, Toaster } from 'sonner';
 
 const tabRoutes = {
   home: '/',
   deck: '/carte',
-  create: '/creer',
+  create: '/decouvrir',
   messages: '/messages',
   profile: '/profil',
 } as const;
 
+type SearchScope = 'products' | 'producers' | 'combined';
+
+const productFilterOptions = [
+  { id: 'fruits-legumes', label: 'Fruits & Legumes' },
+  { id: 'poissons-fruits-de-mer', label: 'Poissons & Fruits de mer' },
+  { id: 'viandes', label: 'Viandes' },
+  { id: 'charcuteries', label: 'Charcuteries' },
+  { id: 'traiteurs', label: 'Traiteurs' },
+  { id: 'fromages-cremerie', label: 'Fromages & Cremerie' },
+  { id: 'epicerie-sucree', label: 'Epicerie Sucree' },
+  { id: 'epicerie-salee', label: 'Epicerie Salee' },
+  { id: 'boissons', label: 'Boissons' },
+  { id: 'beaute-bien-etre', label: 'Beaute & Bien-etre' },
+];
+
+const attributeFilterOptions = [
+  { id: 'bio', label: 'Bio' },
+  { id: 'sans-nitrite', label: 'Sans nitrite' },
+  { id: 'aop', label: 'AOP' },
+  { id: 'label-rouge', label: 'Label Rouge' },
+];
+
+const producerFilterOptions = [
+  { id: 'eleveur', label: 'Eleveur' },
+  { id: 'maraicher', label: 'Maraicher' },
+  { id: 'arboriculteur', label: 'Arboriculteur' },
+  { id: 'cerealier', label: 'Cerealier' },
+  { id: 'producteur-laitier-fromager', label: 'Producteur laitier / fromager' },
+  { id: 'apiculteur', label: 'Apiculteur' },
+  { id: 'viticulteur-cidriculteur-brasseur', label: 'Viticulteur / Cidriculteur / Brasseur' },
+  { id: 'pisciculteur-conchyliculteur', label: 'Pisciculteur / Conchyliculteur' },
+  { id: 'autre', label: 'Autre' },
+];
+
+const producerTagsMap: Record<string, string[]> = {
+  'current-user': ['maraicher'],
+  p2: ['apiculteur'],
+  p3: ['viticulteur-cidriculteur-brasseur'],
+  p4: ['eleveur'],
+  p5: ['autre'],
+};
+
 const getTabFromPath = (pathname: string) => {
   if (pathname.startsWith('/carte')) return 'deck';
-  if (pathname.startsWith('/creer')) return 'create';
+  if (pathname.startsWith('/decouvrir')) return 'create';
   if (pathname.startsWith('/messages')) return 'messages';
   if (pathname === '/produit/nouveau') return 'profile';
   if (pathname.startsWith('/profil')) return 'profile';
@@ -79,6 +125,14 @@ const AuthWall = ({
     </div>
   </div>
 );
+
+type AuthRedirectExtras = {
+  signupPrefill?: {
+    address?: string;
+    city?: string;
+    postcode?: string;
+  };
+};
 
 const normalizeUserRole = (role?: string | null): UserRole => {
   if (role === 'client') return 'participant';
@@ -135,6 +189,49 @@ const toNumberOrUndefined = (value: unknown): number | undefined => {
   return undefined;
 };
 
+const parseDistanceKm = (value?: string) => {
+  if (!value) return null;
+  const match = value.match(/([\d,.]+)/);
+  if (!match) return null;
+  const parsed = Number(match[1].replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizeText = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+const slugify = (value: string) => normalizeText(value).replace(/[^a-z0-9]+/g, '-');
+
+const getProductAttributes = (product: Product) => {
+  const normalized = normalizeText(`${product.name} ${product.description}`);
+  const distance = parseDistanceKm(product.producerLocation);
+  const attributes = new Set<string>();
+
+  if (normalized.includes('bio')) attributes.add('bio');
+  if (normalized.includes('sans nitrite')) attributes.add('sans-nitrite');
+  if (distance !== null && distance <= 25) attributes.add('circuit-court');
+  if (product.measurement === 'kg') attributes.add('vrac');
+
+  return attributes;
+};
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+
+const distanceMeters = (from: GeoPoint, to: GeoPoint) => {
+  const earthRadius = 6371000;
+  const dLat = toRadians(to.lat - from.lat);
+  const dLng = toRadians(to.lng - from.lng);
+  const lat1 = toRadians(from.lat);
+  const lat2 = toRadians(to.lat);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const a = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  return 2 * earthRadius * Math.asin(Math.min(1, Math.sqrt(a)));
+};
+
 type ProfileRow = {
   id: string;
   handle: string;
@@ -170,6 +267,11 @@ type LegalEntityRow = {
   siret: string;
   vat_number: string | null;
   entity_type: string;
+};
+
+type GeoPoint = {
+  lat: number;
+  lng: number;
 };
 
 const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
@@ -433,6 +535,97 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   );
 };
 
+type ProductRouteViewProps = {
+  products: Product[];
+  deck: DeckCard[];
+  groupOrders: GroupOrder[];
+  user: User | null;
+  canSaveProduct: boolean;
+  onHeaderActionsChange: React.Dispatch<React.SetStateAction<React.ReactNode | null>>;
+  onOpenProducer: (product: Product) => void;
+  onOpenRelatedProduct: (productId: string) => void;
+  onStartOrderFromProduct: (product: Product) => void;
+  onAddToDeck: (product: Product) => void;
+  onRemoveFromDeck: (productId: string) => void;
+  onShareProduct: (product: Product) => void;
+};
+
+const ProductRouteView: React.FC<ProductRouteViewProps> = ({
+  products,
+  deck,
+  groupOrders,
+  user,
+  canSaveProduct,
+  onHeaderActionsChange,
+  onOpenProducer,
+  onOpenRelatedProduct,
+  onStartOrderFromProduct,
+  onAddToDeck,
+  onRemoveFromDeck,
+  onShareProduct,
+}) => {
+  const params = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const product = React.useMemo(() => products.find((item) => item.id === params.id), [products, params.id]);
+  const detail = React.useMemo(
+    () => (product ? mockProductDetails[product.id] ?? buildDefaultProductDetail(product) : null),
+    [product]
+  );
+
+  if (!product || !detail) {
+    return <NotFound message="Produit introuvable." />;
+  }
+
+  const inDeck = deck.some((card) => card.id === product.id);
+  const ordersForProduct = React.useMemo(
+    () =>
+      groupOrders.filter((order) =>
+        order.products.some((item) => item.id === product.id || item.name === product.name)
+      ),
+    [groupOrders, product.id, product.name]
+  );
+  const isOwner = Boolean(user && (user.producerId === product.producerId || user.id === product.producerId));
+
+  const handleParticipate = React.useCallback(() => {
+    if (!ordersForProduct.length) {
+      toast.info('Aucune commande active pour ce produit.');
+    }
+    const search = new URLSearchParams();
+    search.set('search', product.name);
+    search.set('filter', 'contientProduit');
+    navigate(`/commandes?${search.toString()}`);
+  }, [navigate, ordersForProduct.length, product.name]);
+
+  const handleToggleSave = React.useCallback(
+    (next: boolean) => {
+      if (next) {
+        onAddToDeck(product);
+      } else {
+        onRemoveFromDeck(product.id);
+      }
+    },
+    [onAddToDeck, onRemoveFromDeck, product]
+  );
+
+  return (
+    <ProductDetailView
+      product={product}
+      detail={detail}
+      ordersWithProduct={ordersForProduct}
+      isOwner={isOwner}
+      isSaved={inDeck}
+      catalog={products}
+      onHeaderActionsChange={onHeaderActionsChange}
+      onOpenProducer={onOpenProducer}
+      onOpenRelatedProduct={onOpenRelatedProduct}
+      onShare={() => onShareProduct(product)}
+      onCreateOrder={() => onStartOrderFromProduct(product)}
+      onParticipate={handleParticipate}
+      onToggleSave={canSaveProduct ? handleToggleSave : undefined}
+    />
+  );
+};
+
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -450,6 +643,9 @@ export default function App() {
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
   const [orderBuilderSelection, setOrderBuilderSelection] = React.useState<string[] | null>(null);
+  const [purchaseDraft, setPurchaseDraft] = React.useState<OrderPurchaseDraft | null>(null);
+  const [recentPurchase, setRecentPurchase] = React.useState<OrderPurchaseDraft | null>(null);
+  const [productHeaderActions, setProductHeaderActions] = React.useState<React.ReactNode | null>(null);
   const [shareOverlay, setShareOverlay] = React.useState<{
     open: boolean;
     link: string;
@@ -459,6 +655,35 @@ export default function App() {
     details?: { label: string; value: string }[];
   }>({ open: false, link: '', title: '' });
   const [profileForShare, setProfileForShare] = React.useState<User | null>(null);
+  const [guestLocation, setGuestLocation] = React.useState<GeoPoint | null>(null);
+  const [guestLocationStatus, setGuestLocationStatus] = React.useState<
+    'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported' | 'error'
+  >('idle');
+  const requestGuestLocation = React.useCallback(() => {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
+    if (!navigator.geolocation) {
+      setGuestLocationStatus('unsupported');
+      return;
+    }
+    setGuestLocationStatus('requesting');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setGuestLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        setGuestLocationStatus('granted');
+      },
+      (error) => {
+        if (error.code === 1) {
+          setGuestLocationStatus('denied');
+          return;
+        }
+        setGuestLocationStatus('error');
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+    );
+  }, []);
   const updateScrollbarCompensation = React.useCallback(() => {
     if (typeof window === 'undefined') return;
     const root = document.documentElement;
@@ -581,7 +806,17 @@ export default function App() {
     },
     []
   );
+  const openProductShare = React.useCallback(
+    (product: Product) => {
+      openShareOverlay(buildProductSharePayload(product));
+    },
+    [buildProductSharePayload, openShareOverlay]
+  );
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [filterScope, setFilterScope] = React.useState<SearchScope>('combined');
+  const [filterCategories, setFilterCategories] = React.useState<string[]>([]);
+  const [filterProducerTags, setFilterProducerTags] = React.useState<string[]>([]);
+  const [filterAttributes, setFilterAttributes] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
   const [followingProfiles, setFollowingProfiles] = React.useState<Record<string, boolean>>({});
@@ -748,6 +983,26 @@ export default function App() {
   const isAuthenticated = Boolean(user);
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
+  const applyProductFilters = filterScope !== 'producers';
+  const applyProducerFilters = filterScope !== 'products';
+  const toggleFilterValue = React.useCallback(
+    (setter: React.Dispatch<React.SetStateAction<string[]>>, id: string) => {
+      setter((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
+    },
+    []
+  );
+  const handleToggleCategory = React.useCallback(
+    (id: string) => toggleFilterValue(setFilterCategories, id),
+    [toggleFilterValue]
+  );
+  const handleToggleProducerTag = React.useCallback(
+    (id: string) => toggleFilterValue(setFilterProducerTags, id),
+    [toggleFilterValue]
+  );
+  const handleToggleAttribute = React.useCallback(
+    (id: string) => toggleFilterValue(setFilterAttributes, id),
+    [toggleFilterValue]
+  );
   const matchesSearch = React.useCallback(
     (product: Product) => {
       if (!normalizedSearch) return true;
@@ -760,9 +1015,41 @@ export default function App() {
     [normalizedSearch]
   );
 
+  const matchesProductFilters = React.useCallback(
+    (product: Product) => {
+      if (applyProductFilters) {
+        const categorySlug = slugify(product.category);
+        if (
+          filterCategories.length &&
+          !filterCategories.some((category) => categorySlug.includes(category))
+        ) {
+          return false;
+        }
+
+        const productAttrs = getProductAttributes(product);
+        if (filterAttributes.length && !filterAttributes.every((attr) => productAttrs.has(attr))) {
+          return false;
+        }
+      }
+
+      if (applyProducerFilters && filterProducerTags.length) {
+        const tags = producerTagsMap[product.producerId] ?? ['local'];
+        if (!filterProducerTags.every((tag) => tags.includes(tag))) return false;
+      }
+
+      return true;
+    },
+    [applyProductFilters, applyProducerFilters, filterAttributes, filterCategories, filterProducerTags]
+  );
+
   const filteredProducts = React.useMemo(
     () => (normalizedSearch ? products.filter(matchesSearch) : products),
     [matchesSearch, normalizedSearch, products]
+  );
+
+  const filteredProductsWithFilters = React.useMemo(
+    () => filteredProducts.filter(matchesProductFilters),
+    [filteredProducts, matchesProductFilters]
   );
 
   const filteredMapOrders = React.useMemo(() => {
@@ -776,6 +1063,11 @@ export default function App() {
       })
       .filter((order): order is GroupOrder => Boolean(order));
   }, [groupOrders, matchesSearch, normalizedSearch]);
+
+  const filteredMapOrdersWithFilters = React.useMemo(
+    () => filteredMapOrders.filter((order) => order.products.some(matchesProductFilters)),
+    [filteredMapOrders, matchesProductFilters]
+  );
 
   const currentProducerId =
     viewer.role === 'producer' ? viewer.producerId ?? 'current-user' : viewer.producerId ?? '';
@@ -792,14 +1084,37 @@ export default function App() {
     () => groupOrders.filter((order) => order.visibility === 'public' && order.status === 'open'),
     [groupOrders]
   );
+  const publicOrdersBySearch = React.useMemo(
+    () => filteredMapOrders.filter((order) => order.visibility === 'public' && order.status === 'open'),
+    [filteredMapOrders]
+  );
+  const publicOrdersWithFilters = React.useMemo(
+    () => publicOrdersBySearch.filter((order) => order.products.some(matchesProductFilters)),
+    [publicOrdersBySearch, matchesProductFilters]
+  );
 
   const activeTab = React.useMemo(() => getTabFromPath(location.pathname), [location.pathname]);
   const isAuthPage = location.pathname.startsWith('/connexion');
+  const authRedirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo;
+  const hideAuthTitle = isAuthPage && Boolean(authRedirectTo?.startsWith(tabRoutes.messages));
+  const isDiscoverRoute = location.pathname.startsWith('/decouvrir');
+  const isGuestDiscover = !isAuthenticated && isDiscoverRoute;
+
+  React.useEffect(() => {
+    if (!isGuestDiscover) return;
+    if (guestLocationStatus !== 'idle') return;
+    requestGuestLocation();
+  }, [guestLocationStatus, isGuestDiscover, requestGuestLocation]);
 
 
-  const redirectToAuth = (path?: string, mode: 'login' | 'signup' = 'login') => {
-    const target = path ?? location.pathname;
-    navigate('/connexion', { state: { redirectTo: target, mode } });
+  const redirectToAuth = (path?: string, mode: 'login' | 'signup' = 'login', extras?: AuthRedirectExtras) => {
+    const target = path ?? `${location.pathname}${location.search}${location.hash}`;
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem('authRedirectTo', target);
+      } catch {}
+    }
+    navigate('/connexion', { state: { redirectTo: target, mode, ...extras } });
   };
 
   const changeTab = (tab: string) => {
@@ -808,7 +1123,7 @@ export default function App() {
       tab === 'profile' && isAuthenticated && user?.handle
         ? `/profil/${user.handle}`
         : tabRoutes[tab as keyof typeof tabRoutes] ?? tabRoutes.home;
-    const needsAuth = tab === 'create' || tab === 'messages';
+    const needsAuth = tab === 'messages';
     if (needsAuth && !isAuthenticated) {
       redirectToAuth(target);
       return;
@@ -820,10 +1135,6 @@ export default function App() {
   };
 
   const openOrderView = (orderId: string) => {
-    if (!isAuthenticated) {
-      redirectToAuth(`/commande/${orderId}`);
-      return;
-    }
     if (!lastTabRef.current) {
       lastTabRef.current = location.pathname;
     }
@@ -897,10 +1208,6 @@ export default function App() {
   };
 
   const handleStartOrderFromProduct = (product: Product) => {
-    if (!isAuthenticated) {
-      redirectToAuth(location.pathname);
-      return;
-    }
     orderBuilderSourceRef.current = location.pathname;
     const relatedProducts = products
       .filter((item) => item.producerId === product.producerId)
@@ -925,6 +1232,28 @@ export default function App() {
     );
   };
 
+  const handleStartPurchase = (
+    order: GroupOrder,
+    payload: { quantities: Record<string, number>; total: number; weight: number }
+  ) => {
+    const total = Number(payload.total) || 0;
+    const weight = Number(payload.weight) || 0;
+    const draft: OrderPurchaseDraft = {
+      orderId: order.id,
+      quantities: payload.quantities,
+      total,
+      weight,
+      baseOrderedWeight: order.orderedWeight ?? 0,
+    };
+    setPurchaseDraft(draft);
+    setRecentPurchase(null);
+    if (!isAuthenticated) {
+      redirectToAuth(`/commande/${order.id}/recap`);
+      return;
+    }
+    navigate(`/commande/${order.id}/recap`);
+  };
+
   const handlePurchaseOrder = (orderId: string, total?: number, weight?: number) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
@@ -945,10 +1274,27 @@ export default function App() {
     );
   };
 
+  const handleConfirmPayment = (draft: OrderPurchaseDraft) => {
+    if (!isAuthenticated) {
+      redirectToAuth(location.pathname);
+      return;
+    }
+    handlePurchaseOrder(draft.orderId, draft.total, draft.weight);
+    setRecentPurchase(draft);
+    setPurchaseDraft(null);
+    navigate(`/commande/${draft.orderId}/partage`);
+    toast.success('Paiement confirme (simulation).');
+  };
+
   const handleCreateOrder = (orderData: any) => {
     if (!user) {
-      toast.info('Connectez-vous pour publier une commande.');
-      redirectToAuth('/commande/nouvelle');
+      toast.info('Connectez-vous ou creez un compte pour publier une commande.');
+      const signupPrefill = {
+        address: orderData?.pickupStreet || orderData?.pickupAddress || '',
+        city: orderData?.pickupCity || '',
+        postcode: orderData?.pickupPostcode || '',
+      };
+      redirectToAuth('/commande/nouvelle', 'signup', { signupPrefill });
       return;
     }
     const now = new Date();
@@ -1226,6 +1572,29 @@ export default function App() {
     const cityQuery = [viewer.postcode, viewer.city].filter(Boolean).join(' ');
     return cityQuery || undefined;
   }, [viewer.address, viewer.city, viewer.postcode]);
+  const discoverLocationLabel = isGuestDiscover
+    ? guestLocation
+      ? 'Autour de vous'
+      : 'Localisation requise'
+    : locationLabel;
+  const discoverOrders = React.useMemo(() => {
+    if (!isGuestDiscover || !guestLocation) return publicOrdersWithFilters;
+    return publicOrdersWithFilters.filter((order) => {
+      if (!order.mapLocation) return false;
+      const radiusMeters = order.mapLocation.radiusMeters;
+      const distance = distanceMeters(guestLocation, order.mapLocation);
+      return distance <= radiusMeters;
+    });
+  }, [guestLocation, isGuestDiscover, publicOrdersWithFilters]);
+  const discoverProducts = React.useMemo(() => {
+    if (!isGuestDiscover || !guestLocation) return filteredProductsWithFilters;
+    const maxDistanceKm = 25;
+    return filteredProductsWithFilters.filter((product) => {
+      const distance = parseDistanceKm(product.producerLocation);
+      return distance !== null && distance <= maxDistanceKm;
+    });
+  }, [filteredProductsWithFilters, guestLocation, isGuestDiscover]);
+  const isDiscoverSwipeLocked = isGuestDiscover && guestLocationStatus !== 'granted';
   const canSaveProduct = isAuthenticated && viewer.role !== 'producer';
   const deckSelectionIds = React.useMemo(() => new Set(deck.map((card) => card.id)), [deck]);
   const renderProductGrid = () => {
@@ -1253,7 +1622,7 @@ export default function App() {
   const renderDeckContent = () => {
     return (
       <MapView
-        orders={filteredMapOrders}
+        orders={filteredMapOrdersWithFilters}
         deck={deck}
         onAddToDeck={handleAddToDeck}
         onRemoveFromDeck={handleRemoveFromDeck}
@@ -1271,10 +1640,18 @@ export default function App() {
   const renderCreateContent = () => {
     return (
       <ClientSwipeView
-        products={products}
-        orders={publicOrders}
+        products={discoverProducts}
+        orders={discoverOrders}
         onSave={handleAddToDeck}
-        locationLabel={locationLabel}
+        onOpenProduct={openProductView}
+        onOpenProducer={openProducerProfile}
+        onOpenSharer={openSharerProfile}
+        onRequestAuth={!isAuthenticated ? () => redirectToAuth(tabRoutes.create, 'login') : undefined}
+        locationLabel={discoverLocationLabel}
+        swipeLocked={isDiscoverSwipeLocked}
+        locationStatus={isGuestDiscover ? guestLocationStatus : undefined}
+        onRequestLocation={isGuestDiscover ? requestGuestLocation : undefined}
+        onParticipateOrder={openOrderView}
       />
     );
   };
@@ -1287,9 +1664,9 @@ export default function App() {
       if (viewer.role === 'producer') return 'Commandes en cours';
       return '';
     }
-    if (activeTab === 'create') return 'Découvrir';
+    if (activeTab === 'create') return 'Découvrez les produits proches de vous';
     if (activeTab === 'messages') return 'Messages';
-    if (activeTab === 'profile') return 'Mon Profil';
+    if (activeTab === 'profile') return '';
     if (location.pathname.startsWith('/produit/')) return selectedProduct?.name ?? 'Produit';
     if (location.pathname.startsWith('/commande/')) return 'Commande';
     return '';
@@ -1299,6 +1676,7 @@ export default function App() {
   const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
   const isAddProductView = location.pathname === '/produit/nouveau';
   const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/commande/'));
+  const isOrderFlowStep = /\/commande\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
   const isProductView = Boolean(selectedProduct && location.pathname.startsWith('/produit/'));
   const isProfileView = location.pathname.startsWith('/profil');
   const profileShareSource = profileForShare || (isProfileView && user ? user : null);
@@ -1327,8 +1705,10 @@ export default function App() {
       (!!user?.handle && location.pathname === `/profil/${user.handle}`));
   const isHome = activeTab === 'home';
   const mainPadding = activeTab === 'deck' ? 'pb-0' : 'pb-24';
-  const mainPaddingTop = activeTab === 'deck' ? 0 : isOrderView ? 96 : isHome ? 64 : 80; // px values
-  const mainPaddingBottom = activeTab === 'deck' ? '0rem' : isOrderView ? '12rem' : '10rem';
+  const shouldUseProfilePadding = hideAuthTitle;
+  const mainPaddingTop =
+    activeTab === 'deck' ? 0 : isOrderView ? 96 : isHome && !shouldUseProfilePadding ? 64 : 80; // px values
+  const mainPaddingBottom = activeTab === 'deck' ? '0rem' : activeTab === 'create' ? '0rem' : isOrderView ? '12rem' : '10rem';
   const profileHeaderActions =
     activeTab === 'profile' && !isOrderView && isOwnProfileView ? (
       <div className="flex items-center gap-2">
@@ -1380,6 +1760,7 @@ export default function App() {
   const headerActions = (
     <>
       {shareButton}
+      {isProductView ? productHeaderActions : null}
       {profileHeaderActions}
       {authButton}
     </>
@@ -1392,50 +1773,6 @@ export default function App() {
         onLogin={() => redirectToAuth(redirectPath, 'login')}
         onSignup={() => redirectToAuth(redirectPath, 'signup')}
         description="Connectez-vous ou creez un compte pour acceder a cette page."
-      />
-    );
-  };
-
-  const ProductRoute = () => {
-    const params = useParams<{ id: string }>();
-    const product = products.find((p) => p.id === params.id);
-    if (!product) return <NotFound message="Produit introuvable." />;
-    const inDeck = deck.some((card) => card.id === product.id);
-    const detail = mockProductDetails[product.id] ?? buildDefaultProductDetail(product);
-    const ordersForProduct = groupOrders.filter((order) =>
-      order.products.some((p) => p.id === product.id || p.name === product.name)
-    );
-    const isOwner = Boolean(user && (user.producerId === product.producerId || user.id === product.producerId));
-
-    const handleParticipate = () => {
-      if (!ordersForProduct.length) {
-        toast.info('Aucune commande active pour ce produit.');
-      }
-      const search = new URLSearchParams();
-      search.set('search', product.name);
-      search.set('filter', 'contientProduit');
-      navigate(`/commandes?${search.toString()}`);
-    };
-
-    const handleShare = () => {
-      setShareOverlay({ open: true, ...buildProductSharePayload(product) });
-    };
-
-    return (
-      <ProductDetailView
-        product={product}
-        detail={detail}
-        ordersWithProduct={ordersForProduct}
-        isOwner={isOwner}
-        isSaved={inDeck}
-        onShare={handleShare}
-        onCreateOrder={() => handleStartOrderFromProduct(product)}
-        onParticipate={handleParticipate}
-        onToggleSave={
-          canSaveProduct
-            ? (next) => (next ? handleAddToDeck(product) : handleRemoveFromDeck(product.id))
-            : undefined
-        }
       />
     );
   };
@@ -1467,7 +1804,7 @@ export default function App() {
                 <div>
                   <p className="text-sm font-semibold text-[#1F2937]">{order.title}</p>
                   <p className="text-xs text-[#6B7280]">
-                    Par {order.sharerName} · Producteur {order.producerName} ·{' '}
+                    Par {order.sharerName} à Producteur {order.producerName} �{' '}
                     {order.pickupCity || order.pickupPostcode || 'Ville a preciser'}
                   </p>
                 </div>
@@ -1496,20 +1833,100 @@ export default function App() {
     const params = useParams<{ id: string }>();
     const order = groupOrders.find((o) => o.id === params.id);
     if (!order) return <NotFound message="Commande introuvable." />;
+    const draftQuantities = purchaseDraft?.orderId === order.id ? purchaseDraft.quantities : undefined;
 
     return (
       <OrderClientView
         order={order}
         onClose={closeOrderView}
         onVisibilityChange={(visibility) => handleUpdateOrderVisibility(order.id, visibility)}
-        onPurchase={(payload) => handlePurchaseOrder(order.id, payload?.total, payload?.weight)}
+        onPurchase={(payload) => handleStartPurchase(order, payload)}
+        initialQuantities={draftQuantities}
         isOwner={Boolean(user && order.sharerId === user.id)}
       />
     );
   };
 
+  const OrderSummaryRoute = () => {
+    const params = useParams<{ id: string }>();
+    const order = groupOrders.find((o) => o.id === params.id);
+    if (!order) return <NotFound message="Commande introuvable." />;
+    if (!isAuthenticated) {
+      return (
+        <AuthWall
+          onLogin={() => redirectToAuth(location.pathname, 'login')}
+          onSignup={() => redirectToAuth(location.pathname, 'signup')}
+          description="Connectez-vous pour continuer votre participation."
+        />
+      );
+    }
+    const draft = purchaseDraft?.orderId === order.id ? purchaseDraft : null;
+    if (!draft) return <NotFound message="Selection introuvable. Retournez a la commande." />;
+
+    return (
+      <OrderParticipationSummaryView
+        order={order}
+        draft={draft}
+        onBack={() => navigate(`/commande/${order.id}`)}
+        onProceedToPayment={() => navigate(`/commande/${order.id}/paiement`)}
+      />
+    );
+  };
+
+  const OrderPaymentRoute = () => {
+    const params = useParams<{ id: string }>();
+    const order = groupOrders.find((o) => o.id === params.id);
+    if (!order) return <NotFound message="Commande introuvable." />;
+    if (!isAuthenticated) {
+      return (
+        <AuthWall
+          onLogin={() => redirectToAuth(location.pathname, 'login')}
+          onSignup={() => redirectToAuth(location.pathname, 'signup')}
+          description="Connectez-vous pour regler cette commande."
+        />
+      );
+    }
+    const draft = purchaseDraft?.orderId === order.id ? purchaseDraft : null;
+    if (!draft) return <NotFound message="Aucun paiement en cours pour cette commande." />;
+
+    return (
+      <OrderPaymentView
+        order={order}
+        draft={draft}
+        onBack={() => navigate(`/commande/${order.id}/recap`)}
+        onConfirmPayment={() => handleConfirmPayment(draft)}
+      />
+    );
+  };
+
+  const OrderShareRoute = () => {
+    const params = useParams<{ id: string }>();
+    const order = groupOrders.find((o) => o.id === params.id);
+    if (!order) return <NotFound message="Commande introuvable." />;
+    if (!isAuthenticated) {
+      return (
+        <AuthWall
+          onLogin={() => redirectToAuth(location.pathname, 'login')}
+          onSignup={() => redirectToAuth(location.pathname, 'signup')}
+          description="Connectez-vous pour partager votre participation."
+        />
+      );
+    }
+    const purchase = recentPurchase?.orderId === order.id ? recentPurchase : null;
+    if (!purchase) return <NotFound message="Aucune participation recente pour cette commande." />;
+
+    return (
+      <OrderShareGainView
+        order={order}
+        purchase={purchase}
+        onShare={() => openShareOverlay(buildOrderSharePayload(order))}
+        onClose={closeOrderView}
+      />
+    );
+  };
+
   const showSearch =
-    (activeTab === 'home' || activeTab === 'deck') &&
+    (activeTab === 'home' || activeTab === 'deck' || activeTab === 'create') &&
     !isOrderView &&
     !isAuthPage &&
     !isOrderCreation &&
@@ -1541,10 +1958,25 @@ export default function App() {
         className={`max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-10 ${mainPadding}`}
         style={{ paddingTop: `${mainPaddingTop}px`, paddingBottom: mainPaddingBottom }}
       >
-        {isOrderView ? (
+        <FiltersPopover
+          open={filtersOpen && showSearch && activeTab !== 'home'}
+          onClose={() => setFiltersOpen(false)}
+          scope={filterScope}
+          onScopeChange={setFilterScope}
+          categories={filterCategories}
+          onToggleCategory={handleToggleCategory}
+          producerFilters={filterProducerTags}
+          onToggleProducer={handleToggleProducerTag}
+          attributes={filterAttributes}
+          onToggleAttribute={handleToggleAttribute}
+          productOptions={productFilterOptions}
+          producerOptions={producerFilterOptions}
+          attributeOptions={attributeFilterOptions}
+        />
+        {isOrderView && !isOrderFlowStep ? (
           <div className="mb-6">
-            <h1 className="text-[#1F2937]">Vue participant</h1>
-            <p className="text-[#6B7280]">Ajustez les quantités, partagez et changez la visibilité.</p>
+            <h1 className="text-[#1F2937]">Participez à la commande</h1>
+            <p className="text-[#6B7280]"></p>
           </div>
         ) : isProductView && selectedProduct ? (
           <div className="mb-6">
@@ -1552,21 +1984,22 @@ export default function App() {
             <p className="text-[#6B7280]">{selectedProduct.producerName}</p>
           </div>
         ) : isAuthPage ? (
-          <div className="mb-6">
-            <h1 className="text-[#1F2937]">{pageTitle || 'Connexion'}</h1>
-            <p className="text-[#6B7280]">Accédez à votre compte ou créez-en un pour continuer.</p>
-          </div>
+          hideAuthTitle ? null : (
+            <div className="mb-6">
+              <h1 className="text-[#1F2937]">{pageTitle}</h1>
+            </div>
+          )
         ) : isOrderCreation || isAddProductView ? (
           <div className="mb-6">
             <h1 className="text-[#1F2937]">{pageTitle}</h1>
             <p className="text-[#6B7280]">
               {isOrderCreation
-                ? 'Selectionnez vos produits puis configurez la commande.'
-                : 'Ajoutez une reference produit a votre vitrine.'}
+                ? 'Sélectionnez vos produits puis configurez la commande.'
+                : 'Ajoutez un nouveau produit à votre profil producteur.'}
             </p>
           </div>
-        ) : activeTab !== 'home' && activeTab !== 'deck' ? (
-          <div className="mb-6">
+        ) : activeTab !== 'home' && activeTab !== 'deck' && activeTab !== 'profile' ? (
+          <div className="mb-6" style={{ textAlign: activeTab === 'create' ? 'center' : undefined }}>
             <h1 className="text-[#1F2937]">{pageTitle}</h1>
           </div>
         ) : null}
@@ -1588,29 +2021,21 @@ export default function App() {
             }
           />
           <Route path="/carte" element={renderDeckContent()} />
-          <Route path="/creer" element={renderProtected(renderCreateContent, tabRoutes.create)} />
+          <Route path="/decouvrir" element={renderCreateContent()} />
           <Route path="/messages" element={renderProtected(() => <MessagesView />, tabRoutes.messages)} />
           <Route
             path="/commande/nouvelle"
             element={
-              isAuthenticated ? (
-                <CreateOrderForm
-                  products={orderBuilderProducts ?? deck}
-                  preselectedProductIds={orderBuilderSelection ?? undefined}
-                  onCreateOrder={handleCreateOrder}
-                  onCancel={() => {
-                    const target = orderBuilderSourceRef.current ?? tabRoutes.home;
-                    resetOrderBuilder();
-                    navigate(target);
-                  }}
-                />
-              ) : (
-                <AuthWall
-                  onLogin={() => redirectToAuth('/commande/nouvelle', 'login')}
-                  onSignup={() => redirectToAuth('/commande/nouvelle', 'signup')}
-                  description="Connectez-vous pour creer une commande groupee."
-                />
-              )
+              <CreateOrderForm
+                products={orderBuilderProducts ?? deck}
+                preselectedProductIds={orderBuilderSelection ?? undefined}
+                onCreateOrder={handleCreateOrder}
+                onCancel={() => {
+                  const target = orderBuilderSourceRef.current ?? tabRoutes.home;
+                  resetOrderBuilder();
+                  navigate(target);
+                }}
+              />
             }
           />
           <Route
@@ -1682,20 +2107,40 @@ export default function App() {
             path="/produit/nouveau"
             element={renderProtected(() => <AddProductForm onAddProduct={handleAddProduct} />, '/produit/nouveau')}
           />
-          <Route path="/produit/:id" element={<ProductRoute />} />
+          <Route
+            path="/produit/:id"
+            element={
+              <ProductRouteView
+                products={products}
+                deck={deck}
+                groupOrders={groupOrders}
+                user={user}
+                canSaveProduct={canSaveProduct}
+                onHeaderActionsChange={setProductHeaderActions}
+                onOpenProducer={openProducerProfile}
+                onOpenRelatedProduct={openProductView}
+                onStartOrderFromProduct={handleStartOrderFromProduct}
+                onAddToDeck={handleAddToDeck}
+                onRemoveFromDeck={handleRemoveFromDeck}
+                onShareProduct={openProductShare}
+              />
+            }
+          />
           <Route
             path="/commande/:id"
-            element={
-              isAuthenticated ? (
-                <OrderRoute />
-              ) : (
-                <AuthWall
-                  onLogin={() => redirectToAuth(location.pathname, 'login')}
-                  onSignup={() => redirectToAuth(location.pathname, 'signup')}
-                  description="Connectez-vous pour consulter les details de cette commande."
-                />
-              )
-            }
+            element={<OrderRoute />}
+          />
+          <Route
+            path="/commande/:id/recap"
+            element={<OrderSummaryRoute />}
+          />
+          <Route
+            path="/commande/:id/paiement"
+            element={<OrderPaymentRoute />}
+          />
+          <Route
+            path="/commande/:id/partage"
+            element={<OrderShareRoute />}
           />
           <Route path="/commandes" element={<OrdersSearchRoute />} />
           <Route path="*" element={<Navigate to={tabRoutes.home} replace />} />
@@ -1716,6 +2161,9 @@ export default function App() {
     </div>
   );
 }
+
+
+
 
 
 

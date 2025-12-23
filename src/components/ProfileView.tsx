@@ -2,9 +2,10 @@ import React from 'react';
 import {
   MapPin,
   Shield,
-  Grid,
-  Bookmark,
+  Apple,
+  Heart,
   ShoppingBag,
+  Plus,
   Check,
   Sparkles,
   Globe,
@@ -164,7 +165,7 @@ export function ProfileView({
   const tabOptions = React.useMemo(
     () =>
       [
-        { id: 'products' as TabKey, label: 'Produits', icon: Grid, visible: isOwnProfile || productCount > 0 },
+        { id: 'products' as TabKey, label: 'Produits', icon: Apple, visible: isOwnProfile || productCount > 0 },
         {
           id: 'orders' as TabKey,
           label: 'Commandes',
@@ -174,7 +175,7 @@ export function ProfileView({
         {
           id: 'selection' as TabKey,
           label: 'Sélection',
-          icon: Bookmark,
+          icon: Heart,
           visible: isOwnProfile || selectionCount > 0,
         },
       ].filter((tab) => tab.visible),
@@ -230,6 +231,14 @@ export function ProfileView({
   const selectionActionsEnabled = Boolean(onAddToDeck || onRemoveFromDeck);
   const canSaveProducts = selectionActionsEnabled;
   const canEditSelection = selectionActionsEnabled;
+  const addProductCard = showAddProductCta ? (
+    <button type="button" onClick={onAddProductClick} className="profile-add-product-card">
+      <span className="profile-add-product-card__icon">
+        <Plus className="profile-add-product-card__icon-svg" />
+      </span>
+      <span className="profile-add-product-card__title">Ajouter un produit</span>
+    </button>
+  ) : null;
 
   const renderTabContent = () => {
     const activeTabIsVisible = tabOptions.some((tab) => tab.id === activeTab);
@@ -242,47 +251,43 @@ export function ProfileView({
       );
     }
 
-    const addButton = showAddProductCta ? (
-      <div className="flex justify-end mb-3">
-        <button
-          type="button"
-          onClick={onAddProductClick}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#FF6B4A] text-white text-sm font-semibold hover:bg-[#FF5A39] transition-colors"
-        >
-          Ajouter un produit
-        </button>
-      </div>
-    ) : null;
-
     if (activeTab === 'products') {
-      return producerProducts.length ? (
-        <div className="space-y-4">
-          <div className="profile-product-grid">
-            {producerProducts.map((product) => (
-              <ProductResultCard
-                key={product.id}
-                product={product}
-                related={[]}
-                canSave={canSaveProducts}
-                inDeck={selectionSet.has(product.id)}
-                onSave={onAddToDeck}
-                onRemove={onRemoveFromDeck}
-                onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
-                onCreateOrder={onStartOrderFromProduct}
-                onOpen={handleOpenProduct}
-                showSelectionControl={selectionActionsEnabled}
+      if (producerProducts.length || addProductCard) {
+        return (
+          <div className="space-y-4">
+            <div className="profile-product-grid">
+              {producerProducts.map((product) => (
+                <ProductResultCard
+                  key={product.id}
+                  product={product}
+                  related={[]}
+                  canSave={canSaveProducts}
+                  inDeck={selectionSet.has(product.id)}
+                  onSave={onAddToDeck}
+                  onRemove={onRemoveFromDeck}
+                  onToggleSelection={selectionActionsEnabled ? handleToggleSelection : undefined}
+                  onCreateOrder={onStartOrderFromProduct}
+                  onOpen={handleOpenProduct}
+                  showSelectionControl={selectionActionsEnabled}
+                />
+              ))}
+              {addProductCard}
+            </div>
+            {producerProducts.length ? null : (
+              <EmptyState
+                title="Aucun produit"
+                subtitle="Ajoutez un produit pour afficher votre vitrine."
               />
-            ))}
+            )}
           </div>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {addButton}
-          <EmptyState
-            title="Aucun produit"
-            subtitle="Ajoutez un produit pour afficher votre vitrine."
-          />
-        </div>
+        );
+      }
+
+      return (
+        <EmptyState
+          title="Aucun produit"
+          subtitle="Ajoutez un produit pour afficher votre vitrine."
+        />
       );
     }
 
@@ -340,7 +345,6 @@ export function ProfileView({
         </div>
       ) : (
         <div className="space-y-3">
-          {addButton}
           <EmptyState
             title="Aucune sélection"
             subtitle="Sauvegardez un produit depuis les produits ou le swipe pour le retrouver ici."
@@ -368,8 +372,8 @@ export function ProfileView({
               <div className="flex items-center gap-2">
                 <h2 className="text-2xl font-semibold">{user.name}</h2>
                 {user.verified && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E6F6F0] border border-[#C8EBDD] text-xs text-[#0F5132]">
-                    <Check className="w-3 h-3" />
+                  <span className="profile-verified-badge">
+                    <Check className="profile-verified-badge__icon" />
                     Vérifié
                   </span>
                 )}
@@ -415,24 +419,6 @@ export function ProfileView({
                 </span>
                 <span className="px-3 py-1 rounded-full bg-[#E0F2FE] border border-[#BFDBFE] text-xs text-[#1D4ED8]">
                   {accountTypeLabel}
-                </span>
-                <span
-                  className={`px-3 py-1 rounded-full border text-xs ${
-                    isProfilePublic
-                      ? 'bg-[#F3F4F6] border-[#E5E7EB] text-[#374151]'
-                      : 'bg-[#FFF6F2] border-[#FFE0D1] text-[#B45309]'
-                  }`}
-                >
-                  {isProfilePublic ? 'Profil public' : 'Profil privé'}
-                </span>
-                <span
-                  className={`px-3 py-1 rounded-full border text-xs ${
-                    addressVisibility === 'public'
-                      ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
-                      : 'bg-[#F3F4F6] border-[#E5E7EB] text-[#374151]'
-                  }`}
-                >
-                  {addressVisibility === 'public' ? 'Adresse visible' : 'Adresse masquée'}
                 </span>
               </div>
             </div>
@@ -501,44 +487,31 @@ export function ProfileView({
           </div>
         )}
 
-        <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {tabStats.map((stat) => {
-            const showMeta = stat.meta && stat.meta !== stat.label;
-            return (
-            <button
-              key={stat.id}
-              type="button"
-              onClick={() => setActiveTab(stat.id)}
-              className={`text-left rounded-2xl border px-4 py-3 transition-colors flex flex-col gap-1 ${
-                activeTab === stat.id
-                  ? 'border-[#FF6B4A] bg-[#FFF6F2]'
-                  : 'border-gray-200 bg-white hover:border-[#FF6B4A]/60'
-              }`}
-            >
-              {(() => {
-                const Icon = stat.icon;
-                return (
-                  <div className="flex items-center justify-between text-xs text-[#6B7280] uppercase tracking-wide">
-                    <span className="flex items-center gap-1">
-                      <Icon className="w-4 h-4" />
-                      {stat.label}
-                    </span>
-                    {stat.id === activeTab && (
-                      <span className="text-[#FF6B4A] font-semibold">Actif</span>
-                    )}
-                  </div>
-                );
-              })()}
-              <p className="profile-stat-value text-3xl font-semibold text-[#1F2937]">{stat.value}</p>
-              {showMeta && <p className="text-xs text-[#6B7280]">{stat.meta}</p>}
-            </button>
-            );
-          })}
+        <div className="profile-tabs-wrapper" aria-label="Sections du profil">
+          <div className="profile-tabs">
+            {tabStats.map((stat) => {
+              const isActive = activeTab === stat.id;
+              const Icon = stat.icon;
+              return (
+                <button
+                  key={stat.id}
+                  type="button"
+                  onClick={() => setActiveTab(stat.id)}
+                  aria-pressed={isActive}
+                  aria-label={`${stat.label} (${stat.value})`}
+                  className={`profile-tab${isActive ? ' profile-tab--active' : ''}`}
+                >
+                  <Icon className="profile-tab-icon" />
+                  <span className="profile-tab-label">{stat.label}</span>
+                  <span className="profile-tab-count">{stat.value}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 mt-6 md:mt-8">
-        {renderTabContent()}
+        <div className="profile-tab-content">
+          {renderTabContent()}
+        </div>
       </div>
     </div>
   );
@@ -1187,4 +1160,3 @@ function VisibilityButton({
     </button>
   );
 }
-

@@ -266,6 +266,18 @@ export function MapView({
     return [selectedGroup, ...others];
   }, [mapOrders, orders, selectedGroup]);
 
+  const groupedOverlay = React.useMemo(() => {
+    if (!selectedGroup) {
+      return { selected: [] as ProductGroupDescriptor[], others: overlayGroups };
+    }
+    const selected = overlayGroups.find((group) => group.id === selectedGroup.id);
+    const others = overlayGroups.filter((group) => group.id !== selectedGroup.id);
+    return {
+      selected: selected ? [selected] : [],
+      others,
+    };
+  }, [overlayGroups, selectedGroup?.id]);
+
   const sidebarBaseWidth = React.useMemo(() => {
     if (!overlayGroups.length) {
       return getGroupContainerWidth(MIN_VISIBLE_CARDS);
@@ -278,6 +290,31 @@ export function MapView({
   const sidebarWidth = React.useMemo(
     () => sidebarBaseWidth + SIDEBAR_HORIZONTAL_PADDING * 2 + SIDEBAR_EXTRA_WIDTH,
     [sidebarBaseWidth]
+  );
+
+  const renderSectionHeader = (title: string, withTopMargin = false) => (
+    <div
+      style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: withTopMargin ? 8 : 0,
+        marginBottom: 4,
+        padding: '0 6px',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: '#6B7280',
+        }}
+      >
+        {title}
+      </span>
+      <span style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
+    </div>
   );
 
   React.useEffect(() => {
@@ -371,7 +408,7 @@ export function MapView({
     if (!isMobile) return;
     const frame = window.requestAnimationFrame(measureMobileHeight);
     return () => window.cancelAnimationFrame(frame);
-  }, [isMobile, measureMobileHeight, overlayGroups.length, sidebarOpen]);
+  }, [isMobile, measureMobileHeight, overlayGroups.length, sidebarOpen, selectedGroup?.id]);
 
   React.useEffect(() => {
     if (!isMobile) return;
@@ -484,33 +521,84 @@ export function MapView({
                       }
                     `}
                   </style>
-                  {overlayGroups.map((group, index) => (
-                    <div
-                      key={group.id}
-                      ref={index === 0 ? mobileItemRef : null}
-                      style={{
-                        width: '100%',
-                        display: 'flex',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <ProductGroupContainer
-                        group={group}
-                        canSave={canSave}
-                        deckIds={deckIds}
-                        onSave={onAddToDeck}
-                        onRemoveFromDeck={onRemoveFromDeck}
-                        onToggleSelection={toggleSelection}
-                        onCreateOrder={undefined}
-                        onOpenProduct={() => {}}
-                        onOpenOrder={onOpenOrder}
-                        onOpenProducer={onOpenProducer}
-                        onOpenSharer={onOpenSharer}
-                        onSelectProducerCategory={() => {}}
-                        selected={group.id === selectedGroup?.id}
-                      />
-                    </div>
-                  ))}
+                  {(() => {
+                    const hasSelected = groupedOverlay.selected.length > 0;
+                    const firstSectionTitle = hasSelected ? 'Votre sélection' : 'Autres produits disponibles';
+                    const firstSectionGroups = hasSelected ? groupedOverlay.selected : groupedOverlay.others;
+                    const secondSectionGroups = hasSelected ? groupedOverlay.others : [];
+
+                    const renderMobileGroup = (group: ProductGroupDescriptor, ref?: React.Ref<HTMLDivElement>) => (
+                      <div
+                        key={group.id}
+                        ref={ref ?? null}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <ProductGroupContainer
+                          group={group}
+                          canSave={canSave}
+                          deckIds={deckIds}
+                          onSave={onAddToDeck}
+                          onRemoveFromDeck={onRemoveFromDeck}
+                          onToggleSelection={toggleSelection}
+                          onCreateOrder={undefined}
+                          onOpenProduct={() => {}}
+                          onOpenOrder={onOpenOrder}
+                          onOpenProducer={onOpenProducer}
+                          onOpenSharer={onOpenSharer}
+                          onSelectProducerCategory={() => {}}
+                          selected={group.id === selectedGroup?.id}
+                        />
+                      </div>
+                    );
+
+                    const renderMobileSection = (
+                      title: string,
+                      groups: ProductGroupDescriptor[],
+                      attachRef: boolean,
+                      withTopMargin: boolean
+                    ) => {
+                      if (!groups.length) return null;
+                      const [first, ...rest] = groups;
+                      return (
+                        <div
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: 12,
+                          }}
+                        >
+                          <div
+                            ref={attachRef ? mobileItemRef : null}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              gap: 12,
+                            }}
+                          >
+                            {renderSectionHeader(title, withTopMargin)}
+                            {renderMobileGroup(first)}
+                          </div>
+                          {rest.map((group) => renderMobileGroup(group))}
+                        </div>
+                      );
+                    };
+
+                    return (
+                      <>
+                        {renderMobileSection(firstSectionTitle, firstSectionGroups, true, false)}
+                        {hasSelected &&
+                          renderMobileSection('Autres produits disponibles', secondSectionGroups, false, true)}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             ) : (
@@ -562,25 +650,57 @@ export function MapView({
                       }
                     `}
                   </style>
-                  {overlayGroups.map((group) => (
-                    <div key={group.id} style={{ marginBottom: 12 }}>
-                      <ProductGroupContainer
-                        group={group}
-                        canSave={canSave}
-                        deckIds={deckIds}
-                        onSave={onAddToDeck}
-                        onRemoveFromDeck={onRemoveFromDeck}
-                        onToggleSelection={toggleSelection}
-                        onCreateOrder={undefined}
-                        onOpenProduct={() => {}}
-                        onOpenOrder={onOpenOrder}
-                        onOpenProducer={onOpenProducer}
-                        onOpenSharer={onOpenSharer}
-                        onSelectProducerCategory={() => {}}
-                        selected={group.id === selectedGroup?.id}
-                      />
-                    </div>
-                  ))}
+                  {groupedOverlay.selected.length > 0 && (
+                    <>
+                      {renderSectionHeader('Votre sélection')}
+                      {groupedOverlay.selected.map((group) => (
+                        <div key={group.id} style={{ marginBottom: 12 }}>
+                          <ProductGroupContainer
+                            group={group}
+                            canSave={canSave}
+                            deckIds={deckIds}
+                            onSave={onAddToDeck}
+                            onRemoveFromDeck={onRemoveFromDeck}
+                            onToggleSelection={toggleSelection}
+                            onCreateOrder={undefined}
+                            onOpenProduct={() => {}}
+                            onOpenOrder={onOpenOrder}
+                            onOpenProducer={onOpenProducer}
+                            onOpenSharer={onOpenSharer}
+                            onSelectProducerCategory={() => {}}
+                            selected={group.id === selectedGroup?.id}
+                          />
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {groupedOverlay.others.length > 0 && (
+                    <>
+                      {renderSectionHeader(
+                        'Autres produits disponibles',
+                        groupedOverlay.selected.length > 0
+                      )}
+                      {groupedOverlay.others.map((group) => (
+                        <div key={group.id} style={{ marginBottom: 12 }}>
+                          <ProductGroupContainer
+                            group={group}
+                            canSave={canSave}
+                            deckIds={deckIds}
+                            onSave={onAddToDeck}
+                            onRemoveFromDeck={onRemoveFromDeck}
+                            onToggleSelection={toggleSelection}
+                            onCreateOrder={undefined}
+                            onOpenProduct={() => {}}
+                            onOpenOrder={onOpenOrder}
+                            onOpenProducer={onOpenProducer}
+                            onOpenSharer={onOpenSharer}
+                            onSelectProducerCategory={() => {}}
+                            selected={group.id === selectedGroup?.id}
+                          />
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </div>
               </div>
             )}
