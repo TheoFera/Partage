@@ -43,15 +43,91 @@ export function FiltersPopover({
   const filterAnchor =
     typeof document !== 'undefined' ? document.getElementById('filters-anchor') : null;
 
+  const popoverRef = React.useRef<HTMLDivElement | null>(null);
+
+  // ✅ Fermer avec Echap
+  React.useEffect(() => {
+    if (!open) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  // ✅ Fermer quand on clique en dehors (sans overlay)
+  React.useEffect(() => {
+    if (!open) return;
+    if (!filterAnchor) return;
+
+    const onPointerDown = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as Node | null;
+      const pop = popoverRef.current;
+
+      // si pas de target, on ne fait rien
+      if (!target) return;
+
+      // clic dans le popover => ne ferme pas
+      if (pop && pop.contains(target)) return;
+
+      // clic dans l'ancre (bouton, etc.) => ne ferme pas
+      if (filterAnchor.contains(target)) return;
+
+      // sinon => ferme
+      onClose();
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown, { passive: true });
+
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+    };
+  }, [open, onClose, filterAnchor]);
+
+  // Important : si l'ancre n'existe pas, ton ancien code ne peut pas afficher la fenêtre.
   if (!open || !filterAnchor) return null;
 
   return createPortal(
-    <div id="filters-popover" className="filters-popover">
+    <div
+      id="filters-popover"
+      ref={popoverRef}
+      style={{
+        position: 'absolute',
+        right: 0,
+        marginTop: 8,
+        width: 'min(68vw, 320px)',
+        borderRadius: 16,
+        border: '1px solid #E5E7EB',
+        background: '#FFFFFF',
+        opacity: 1,
+        backdropFilter: 'none',
+        WebkitBackdropFilter: 'none',
+        mixBlendMode: 'normal',
+        isolation: 'isolate',
+        boxShadow: '0 20px 40px rgba(15, 23, 42, 0.12)',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        maxHeight: '70vh',
+        overflowY: 'auto',
+        zIndex: 60,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <p style={{ fontSize: 14, fontWeight: 600, color: '#1F2937', margin: 0 }}>Filtres</p>
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <ScopeToggle active={scope === 'combined'} label="Tous" onClick={() => onScopeChange('combined')} />
         <ScopeToggle active={scope === 'products'} label="Produits" onClick={() => onScopeChange('products')} />
         <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => onScopeChange('producers')} />
       </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
         <FilterGroup
           label="Filtres produits"
@@ -75,6 +151,7 @@ export function FiltersPopover({
           onToggle={onToggleAttribute}
         />
       </div>
+
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button
           type="button"
@@ -144,7 +221,7 @@ function FilterGroup({
   const [open, setOpen] = React.useState(false);
   const selectedCount = activeValues.length;
   const summary = selectedCount
-    ? `${selectedCount} selectionne${selectedCount > 1 ? 's' : ''}`
+    ? `${selectedCount} sélectionné${selectedCount > 1 ? 's' : ''}`
     : 'Tous';
 
   return (
@@ -196,6 +273,7 @@ function FilterGroup({
           }}
         />
       </button>
+
       {open && (
         <div style={{ borderTop: '1px solid #E5E7EB', padding: '8px 12px' }}>
           <div style={{ maxHeight: 208, overflowY: 'auto', paddingRight: 4, display: 'grid', gap: 8 }}>
