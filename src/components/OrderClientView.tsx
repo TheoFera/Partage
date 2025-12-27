@@ -4,10 +4,10 @@ import {
   CalendarClock,
   Globe2,
   Info,
-  Leaf,
   Lock,
   MapPin,
   Scale,
+  SlidersHorizontal,
   ShoppingCart,
   Users,
   ChevronLeft,
@@ -17,6 +17,7 @@ import { GroupOrder } from '../types';
 import { ProductResultCard } from './ProductsLanding';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../constants/cards';
 import { toast } from 'sonner';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 import './OrderClientView.css';
 
 interface OrderClientViewProps {
@@ -26,6 +27,8 @@ interface OrderClientViewProps {
   onPurchase?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
   initialQuantities?: Record<string, number>;
   isOwner?: boolean;
+  onOpenParticipantProfile?: (participantName: string) => void;
+  isAuthenticated?: boolean;
 }
 
 function formatPrice(value: number) {
@@ -61,6 +64,99 @@ function getProductWeightKg(product: GroupOrder['products'][number]) {
 
 const ORDER_CARD_WIDTH = CARD_WIDTH;
 
+type ParticipantVisibility = {
+  profile: boolean;
+  content: boolean;
+  weight: boolean;
+  amount: boolean;
+};
+
+type OrderParticipant = {
+  id: string;
+  name: string;
+  handle?: string;
+  avatarUrl?: string;
+  quantities: Record<string, number>;
+};
+
+const defaultParticipantVisibility: ParticipantVisibility = {
+  profile: false,
+  content: false,
+  weight: false,
+  amount: false,
+};
+
+const participantVisibilityOptions: Array<{ key: keyof ParticipantVisibility; label: string }> = [
+  { key: 'profile', label: 'Profil des participants' },
+  { key: 'content', label: 'Contenu de la commande' },
+  { key: 'weight', label: 'Poids de la participation' },
+  { key: 'amount', label: 'Montant de la participation' },
+];
+
+const mockParticipantProfiles: Array<Pick<OrderParticipant, 'id' | 'name' | 'handle' | 'avatarUrl'>> = [
+  {
+    id: 'p-1',
+    name: 'Aline Morel',
+    handle: 'alinemorel',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=160&q=80',
+  },
+  {
+    id: 'p-2',
+    name: 'Theo Bernard',
+    handle: 'theobernard',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=160&q=80',
+  },
+  {
+    id: 'p-3',
+    name: 'Camille Leroy',
+    handle: 'camilleleroy',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?auto=format&fit=crop&w=160&q=80',
+  },
+  {
+    id: 'p-4',
+    name: 'Nina Martin',
+    handle: 'ninamartin',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1525134479668-1bee5c7c6845?auto=format&fit=crop&w=160&q=80',
+  },
+  {
+    id: 'p-5',
+    name: 'Lucas Petit',
+    handle: 'lucaspetit',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=160&q=80',
+  },
+  {
+    id: 'p-6',
+    name: 'Sarah Noel',
+    handle: 'sarahnoel',
+    avatarUrl:
+      'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?auto=format&fit=crop&w=160&q=80',
+  },
+];
+
+const buildMockParticipants = (order: GroupOrder): OrderParticipant[] => {
+  const targetCount = Math.min(Math.max(order.participants ?? 0, 0), mockParticipantProfiles.length);
+  if (!targetCount) return [];
+  return mockParticipantProfiles.slice(0, targetCount).map((participant, index) => {
+    const quantities: Record<string, number> = {};
+    order.products.forEach((product, productIndex) => {
+      const qty = ((index + 1) * (productIndex + 2)) % 3;
+      quantities[product.id] = qty;
+    });
+    if (order.products.length && Object.values(quantities).every((qty) => qty === 0)) {
+      quantities[order.products[0].id] = 1;
+    }
+    return {
+      ...participant,
+      quantities,
+    };
+  });
+};
+
 export function OrderClientView({
   order,
   onClose,
@@ -68,8 +164,16 @@ export function OrderClientView({
   onPurchase,
   initialQuantities,
   isOwner = true,
+  onOpenParticipantProfile,
+  isAuthenticated = false,
 }: OrderClientViewProps) {
   const [quantities, setQuantities] = React.useState<Record<string, number>>({});
+  const [participantsVisibility, setParticipantsVisibility] = React.useState<ParticipantVisibility>(
+    defaultParticipantVisibility
+  );
+  const [participantsPanelOpen, setParticipantsPanelOpen] = React.useState(false);
+  const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
     const next: Record<string, number> = {};
@@ -79,6 +183,37 @@ export function OrderClientView({
     });
     setQuantities(next);
   }, [order.id, order.products, initialQuantities]);
+
+  React.useEffect(() => {
+    setParticipantsVisibility(defaultParticipantVisibility);
+    setParticipantsPanelOpen(false);
+  }, [order.id]);
+
+  React.useEffect(() => {
+    if (!participantsPanelOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setParticipantsPanelOpen(false);
+    };
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (participantsPanelRef.current?.contains(target)) return;
+      if (participantsButtonRef.current?.contains(target)) return;
+      setParticipantsPanelOpen(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown, { passive: true });
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [participantsPanelOpen]);
 
   const totalCards = React.useMemo(
     () => Object.values(quantities).reduce((sum, qty) => sum + qty, 0),
@@ -183,6 +318,70 @@ export function OrderClientView({
       : order.status === 'closed' || hasPassedDeadline
         ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#FECACA]'
         : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
+  const participants = React.useMemo(
+    () => buildMockParticipants(order),
+    [order.id, order.participants, order.products]
+  );
+  const participantsWithTotals = React.useMemo(
+    () =>
+      participants.map((participant) => {
+        const totals = order.products.reduce(
+          (acc, product) => {
+            const qty = participant.quantities[product.id] ?? 0;
+            return {
+              amount: acc.amount + product.price * qty,
+              weight: acc.weight + getProductWeightKg(product) * qty,
+            };
+          },
+          { amount: 0, weight: 0 }
+        );
+        return {
+          ...participant,
+          totalAmount: totals.amount,
+          totalWeight: totals.weight,
+        };
+      }),
+    [order.products, participants]
+  );
+  const ownerVisibility: ParticipantVisibility = React.useMemo(
+    () => ({ profile: true, content: true, weight: true, amount: true }),
+    []
+  );
+  const viewerVisibility = isOwner ? ownerVisibility : participantsVisibility;
+  const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
+  const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
+  const participantsCountLabel = participantsWithTotals.length
+    ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''}`
+    : 'Aucun participant pour le moment';
+  const totalWeightAll = React.useMemo(
+    () => participantsWithTotals.reduce((sum, participant) => sum + participant.totalWeight, 0),
+    [participantsWithTotals]
+  );
+  const totalAmountAll = React.useMemo(
+    () => participantsWithTotals.reduce((sum, participant) => sum + participant.totalAmount, 0),
+    [participantsWithTotals]
+  );
+  const productTotals = React.useMemo(
+    () =>
+      order.products.map((product) => {
+        const totalUnits = participants.reduce(
+          (sum, participant) => sum + (participant.quantities[product.id] ?? 0),
+          0
+        );
+        const totalWeight = totalUnits * getProductWeightKg(product);
+        return { productId: product.id, totalUnits, totalWeight, measurement: product.measurement };
+      }),
+    [order.products, participants]
+  );
+  const shouldShowTotals = viewerVisibility.content || viewerVisibility.weight || viewerVisibility.amount;
+  const formatUnitsTotal = (value: number) =>
+    Number.isInteger(value) ? String(value) : value.toFixed(2);
+
+  const handleParticipantClick = (participant: OrderParticipant) => {
+    const target = participant.handle || participant.name;
+    if (!target) return;
+    onOpenParticipantProfile?.(target);
+  };
 
   return (
     <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-8">
@@ -213,8 +412,8 @@ export function OrderClientView({
         </div>
       </div>
 
-      <div className="grid gap-6 lg:gap-8 lg:grid-cols-[2fr,1fr]">
-        <div className="space-y-6">
+      <div className="order-client-view__layout">
+        <div className="order-client-view__main">
           <div className="relative overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
             <div className="relative p-6 md:p-8 space-y-6">
               <div className="flex items-start justify-between gap-4">
@@ -294,8 +493,9 @@ export function OrderClientView({
           </div>
         </div>
 
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-5">
+        <div className="order-client-view__aside">
+          <div className="order-client-view__summary">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] border border-[#FF6B4A]/20">
@@ -344,7 +544,7 @@ export function OrderClientView({
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
             <div className="text-sm text-[#6B7280] space-y-1">
               <p>
                 Total : <span className="text-[#1F2937] font-semibold">{totalCards}</span>
@@ -368,9 +568,186 @@ export function OrderClientView({
                 Participer
               </button>
             </div>
+            </div>
           </div>
         </div>
       </div>
+
+      <div className="order-client-view__participants">
+            <div className="order-client-view__participants-header">
+              <div>
+                <p className="order-client-view__participants-title">Participants a la commande</p>
+                <p className="order-client-view__participants-subtitle">{participantsCountLabel}</p>
+              </div>
+              {isOwner && (
+                <div className="order-client-view__participants-controls">
+                  <button
+                    type="button"
+                    ref={participantsButtonRef}
+                    onClick={() => setParticipantsPanelOpen((prev) => !prev)}
+                    className="order-client-view__participants-visibility-button"
+                    aria-expanded={participantsPanelOpen}
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                    Visibilité des differentes colonnes du tableau pour les participants
+                  </button>
+                  {participantsPanelOpen && (
+                    <div ref={participantsPanelRef} className="order-client-view__participants-panel">
+                      {participantVisibilityOptions.map((option) => {
+                        const isActive = participantsVisibility[option.key];
+                        return (
+                          <div key={option.key} className="order-client-view__participants-panel-row">
+                            <span className="order-client-view__participants-panel-label">{option.label}</span>
+                            <button
+                              type="button"
+                              className={`order-client-view__participants-panel-toggle ${
+                                isActive ? 'order-client-view__participants-panel-toggle--active' : ''
+                              }`}
+                              aria-pressed={isActive}
+                              onClick={() =>
+                                setParticipantsVisibility((prev) => ({
+                                  ...prev,
+                                  [option.key]: !prev[option.key],
+                                }))
+                              }
+                            >
+                              {isActive ? 'Visible' : 'Masquée'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {!canShowParticipants ? (
+              <div className="order-client-view__participants-masked">
+                {!isOwner && !isAuthenticated
+                  ? 'Connectez-vous pour voir la liste des participants'
+                  : 'Liste des participants masquee par le createur de la commande'}
+              </div>
+            ) : participantsWithTotals.length === 0 ? (
+              <div className="order-client-view__participants-empty">Aucun participant pour le moment</div>
+            ) : (
+              <div className="order-client-view__participants-table-wrapper">
+                <table className="order-client-view__participants-table">
+                  <thead>
+                    <tr>
+                      {viewerVisibility.profile && <th>Participant</th>}
+                      {viewerVisibility.content &&
+                        order.products.map((product) => (
+                          <th key={product.id} style={{ minWidth: 120 }}>
+                            <span className="order-client-view__participants-table-product">{product.name}</span>
+                            {product.unit && (
+                              <span className="order-client-view__participants-table-unit">{product.unit}</span>
+                            )}
+                          </th>
+                        ))}
+                      {viewerVisibility.weight && <th className="order-client-view__participants-table-number">Poids</th>}
+                      {viewerVisibility.amount && (
+                        <th className="order-client-view__participants-table-number">Montant</th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {participantsWithTotals.map((participant) => (
+                      <tr key={participant.id}>
+                        {viewerVisibility.profile && (
+                          <td>
+                            <div className="order-client-view__participant-cell">
+                              <button
+                                type="button"
+                                className="order-client-view__participant-avatar"
+                                onClick={() => handleParticipantClick(participant)}
+                                aria-label={`Voir le profil de ${participant.name}`}
+                              >
+                                {participant.avatarUrl ? (
+                                  <ImageWithFallback
+                                    src={participant.avatarUrl}
+                                    alt={participant.name}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                                  />
+                                ) : (
+                                  <span className="order-client-view__participant-initials">
+                                    {participant.name.slice(0, 1).toUpperCase()}
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="order-client-view__participant-name"
+                                onClick={() => handleParticipantClick(participant)}
+                              >
+                                {participant.name}
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                        {viewerVisibility.content &&
+                          order.products.map((product) => {
+                            const qty = participant.quantities[product.id] ?? 0;
+                            return (
+                              <td
+                                key={product.id}
+                                className={`order-client-view__participants-table-center ${
+                                  qty === 0 ? 'order-client-view__participants-table-muted' : ''
+                                }`}
+                              >
+                                {qty}
+                              </td>
+                            );
+                          })}
+                        {viewerVisibility.weight && (
+                          <td className="order-client-view__participants-table-number">
+                            {participant.totalWeight.toFixed(2)} kg
+                          </td>
+                        )}
+                        {viewerVisibility.amount && (
+                          <td className="order-client-view__participants-table-number">
+                            {formatPrice(participant.totalAmount)}
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                  {shouldShowTotals && (
+                    <tfoot>
+                      <tr className="order-client-view__participants-total-row">
+                        {viewerVisibility.profile && (
+                          <td className="order-client-view__participants-total-label">Total</td>
+                        )}
+                        {viewerVisibility.content &&
+                          order.products.map((product, index) => {
+                            const totals = productTotals[index];
+                            const content =
+                              totals.measurement === 'kg'
+                                ? `${totals.totalWeight.toFixed(2)} kg`
+                                : formatUnitsTotal(totals.totalUnits);
+                            return (
+                              <td key={product.id} className="order-client-view__participants-table-center">
+                                {content}
+                              </td>
+                            );
+                          })}
+                        {viewerVisibility.weight && (
+                          <td className="order-client-view__participants-table-number">
+                            {totalWeightAll.toFixed(2)} kg
+                          </td>
+                        )}
+                        {viewerVisibility.amount && (
+                          <td className="order-client-view__participants-table-number">
+                            {formatPrice(totalAmountAll)}
+                          </td>
+                        )}
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            )}
+          </div>
     </div>
   );
 }
@@ -448,7 +825,10 @@ function OrderProductsCarousel({
 
   return (
     <div className="relative" style={containerStyle} ref={containerRef}>
-      <div className="flex gap-3" style={{ alignItems: 'stretch', justifyContent: 'flex-start' }}>
+      <div
+        className="flex gap-3"
+        style={{ alignItems: 'stretch', justifyContent: useCarousel ? 'flex-start' : 'center' }}
+      >
         {productsToShow.map((product) => {
           const quantity = quantities[product.id] ?? 0;
           return (
@@ -477,7 +857,7 @@ function OrderProductsCarousel({
               />
               <div className="w-full space-y-2" style={{ maxWidth: ORDER_CARD_WIDTH }}>
                 <p className="text-[12px] text-[#6B7280] text-center">
-                  Environ {getProductWeightKg(product).toFixed(2)} kg par carte
+                  {getProductWeightKg(product).toFixed(2)} kg
                 </p>
                 <div className="flex items-center justify-center gap-2">
                   <button

@@ -3,6 +3,7 @@ import {
   Bell,
   CheckCircle2,
   ExternalLink,
+  GripVertical,
   Heart,
   Info,
   Leaf,
@@ -53,7 +54,7 @@ const TAB_OPTIONS: Array<{ id: DetailTabKey; label: string; icon: React.ElementT
   { id: 'quality', label: 'Qualité', icon: ShieldCheck },
   { id: 'repartition', label: 'Répartition du prix', icon: Percent },
   { id: 'consumption', label: 'Consommation', icon: Users },
-  { id: 'transparency', label: 'Transparence', icon: Info },
+  { id: 'transparency', label: 'Transparence et confiance', icon: Info },
 ];
 
 const LABEL_DESCRIPTIONS: Record<string, string> = {
@@ -285,6 +286,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   );
   const [localPosts, setLocalPosts] = React.useState<RepartitionPoste[]>(detail.repartitionValeur?.postes ?? []);
   const [activeTab, setActiveTab] = React.useState<DetailTabKey>('circuit');
+  const [localMeasurement, setLocalMeasurement] = React.useState<Product['measurement']>(product.measurement);
+  const [localUnit, setLocalUnit] = React.useState(product.unit);
+  const [draggedStepIndex, setDraggedStepIndex] = React.useState<number | null>(null);
+  const [dragOverStepIndex, setDragOverStepIndex] = React.useState<number | null>(null);
   const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
 
   const pickupLabel = React.useMemo(
@@ -310,6 +315,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   React.useEffect(() => {
     setLocalTimeline(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline);
   }, [detail, fallbackTimeline]);
+
+  React.useEffect(() => {
+    setLocalMeasurement(product.measurement);
+    setLocalUnit(product.unit);
+  }, [product.measurement, product.unit]);
 
   const display = editMode ? draft : detail;
   const hasOrders = ordersWithProduct.length > 0;
@@ -418,6 +428,55 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setLocalTimeline((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const reorderTimelineStep = (from: number, to: number) => {
+    setLocalTimeline((prev) => {
+      if (from === to || from < 0 || to < 0 || from >= prev.length || to >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  const handleTimelineDragStart =
+    (index: number) =>
+    (event: React.DragEvent<HTMLButtonElement>) => {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+      setDraggedStepIndex(index);
+    };
+
+  const handleTimelineDragOver =
+    (index: number) =>
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!editMode) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      setDragOverStepIndex(index);
+    };
+
+  const handleTimelineDrop =
+    (index: number) =>
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!editMode) return;
+      event.preventDefault();
+      const data = event.dataTransfer.getData('text/plain');
+      const from = draggedStepIndex ?? (data ? Number(data) : null);
+      if (from === null || Number.isNaN(from)) {
+        setDraggedStepIndex(null);
+        setDragOverStepIndex(null);
+        return;
+      }
+      reorderTimelineStep(from, index);
+      setDraggedStepIndex(null);
+      setDragOverStepIndex(null);
+    };
+
+  const handleTimelineDragEnd = () => {
+    setDraggedStepIndex(null);
+    setDragOverStepIndex(null);
+  };
+
   React.useEffect(() => {
     if (!editMode) return;
     setDraft((prev) => ({
@@ -448,7 +507,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const editCTA = (
     <div className="pd-inline-note">
       <Info size={16} />
-      <span>Mode proprietaire : editez inline, sauvegarde fictive pour le prototype.</span>
+      <span>Mode éditeur : éditez le produit (actuellement sauvegarde fictive pour le prototype).</span>
     </div>
   );
 
@@ -466,7 +525,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     onOpenProducer?.(product);
   }, [onOpenProducer, product]);
 
-  const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
+  const measurementValue = editMode ? localMeasurement : product.measurement;
+  const unitValue = editMode ? localUnit : product.unit;
+  const measurementLabel = measurementValue === 'kg' ? '/ Kg' : '/ unité';
   const displayCategory = display.category || product.category;
   const displayImage = display.productImage?.url || product.imageUrl;
   const displayProducer = display.producer ?? detail.producer;
@@ -527,37 +588,124 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               <div className="pd-stack pd-stack--lg pd-timeline__list">
                 {timelineDisplay.map((step, index) => {
                   const hasPhoto = Boolean(step.preuve?.url);
+                  const periodStart = (step.periodStart || '').trim();
+                  const periodEnd = (step.periodEnd || '').trim();
+                  const stepMode = step.dateType ?? (periodStart || periodEnd ? 'period' : 'date');
+                  const isDragging = draggedStepIndex === index;
+                  const isDragOver = dragOverStepIndex === index;
+                  const dateLabel =
+                    stepMode === 'period'
+                      ? periodStart && periodEnd
+                        ? `Du ${periodStart} au ${periodEnd}`
+                        : periodStart
+                        ? `Depuis ${periodStart}`
+                        : periodEnd
+                        ? `Jusqu'au ${periodEnd}`
+                        : 'Periode a preciser'
+                      : step.date || 'Date a preciser';
                   return (
-                    <div key={`${step.etape}-${index}`} className="pd-timeline__item">
+                    <div
+                      key={`${step.etape}-${index}`}
+                      className={`pd-timeline__item${isDragging ? ' pd-timeline__item--dragging' : ''}${
+                        isDragOver ? ' pd-timeline__item--over' : ''
+                      }`}
+                      onDragOver={handleTimelineDragOver(index)}
+                      onDrop={handleTimelineDrop(index)}
+                    >
                       <span className="pd-timeline__marker" />
                       <div className="pd-timeline__row">
                         <div className="pd-timeline__body pd-stack pd-stack--sm">
                           {editMode ? (
-                            <div className="pd-grid pd-grid--three pd-gap-sm">
-                              <input
-                                className="pd-input"
-                                value={step.etape}
-                                onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
-                                placeholder="Etape"
-                              />
-                              <input
-                                className="pd-input"
-                                value={step.lieu || ''}
-                                onChange={(e) => updateTimelineStep(index, { lieu: e.target.value })}
-                                placeholder="Lieu"
-                              />
-                              <input
-                                className="pd-input"
-                                value={step.date || ''}
-                                onChange={(e) => updateTimelineStep(index, { date: e.target.value })}
-                                placeholder="Date"
-                              />
+                            <button
+                              type="button"
+                              className="pd-timeline__handle"
+                              draggable
+                              onDragStart={handleTimelineDragStart(index)}
+                              onDragEnd={handleTimelineDragEnd}
+                              aria-label="Reordonner l'etape"
+                              title="Glisser pour reordonner"
+                            >
+                              <GripVertical size={16} />
+                              <span>Glisser pour reordonner</span>
+                            </button>
+                          ) : null}
+                          {editMode ? (
+                            <div className="pd-stack pd-stack--sm">
+                              <div className="pd-grid pd-grid--two pd-gap-sm">
+                                <input
+                                  className="pd-input"
+                                  value={step.etape}
+                                  onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
+                                  placeholder="Etape"
+                                />
+                                <input
+                                  className="pd-input"
+                                  value={step.lieu || ''}
+                                  onChange={(e) => updateTimelineStep(index, { lieu: e.target.value })}
+                                  placeholder="Lieu"
+                                />
+                              </div>
+                              <div className="pd-grid pd-grid--three pd-gap-sm">
+                                <select
+                                  className="pd-select"
+                                  value={stepMode}
+                                  onChange={(e) => {
+                                    const nextMode = e.target.value as 'date' | 'period';
+                                    updateTimelineStep(
+                                      index,
+                                      nextMode === 'period'
+                                        ? {
+                                            dateType: 'period',
+                                            date: '',
+                                            periodStart: step.periodStart || '',
+                                            periodEnd: step.periodEnd || '',
+                                          }
+                                        : {
+                                            dateType: 'date',
+                                            date: step.date || '',
+                                            periodStart: '',
+                                            periodEnd: '',
+                                          }
+                                    );
+                                  }}
+                                >
+                                  <option value="date">Date</option>
+                                  <option value="period">Periode</option>
+                                </select>
+                                {stepMode === 'period' ? (
+                                  <>
+                                    <input
+                                      className="pd-input"
+                                      value={step.periodStart || ''}
+                                      onChange={(e) =>
+                                        updateTimelineStep(index, { periodStart: e.target.value, dateType: 'period' })
+                                      }
+                                      placeholder="Debut"
+                                    />
+                                    <input
+                                      className="pd-input"
+                                      value={step.periodEnd || ''}
+                                      onChange={(e) =>
+                                        updateTimelineStep(index, { periodEnd: e.target.value, dateType: 'period' })
+                                      }
+                                      placeholder="Fin"
+                                    />
+                                  </>
+                                ) : (
+                                  <input
+                                    className="pd-input"
+                                    value={step.date || ''}
+                                    onChange={(e) => updateTimelineStep(index, { date: e.target.value, dateType: 'date' })}
+                                    placeholder="Date"
+                                  />
+                                )}
+                              </div>
                             </div>
                           ) : (
                             <div>
                               <p className="pd-text-strong">{step.etape}</p>
                               <p className="pd-text-xs pd-text-muted">{step.lieu || 'Lieu a preciser'}</p>
-                              <p className="pd-text-xs pd-text-muted">{step.date || 'Date a preciser'}</p>
+                              <p className="pd-text-xs pd-text-muted">{dateLabel}</p>
                             </div>
                           )}
                           {editMode ? (
@@ -1304,6 +1452,60 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   return (
     <div className="pd-view">
       <div className="pd-stack pd-stack--lg">
+        {isOwner && editMode ? (
+          <div className="pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--sm">
+            {editCTA}
+            <label className="pd-row pd-row--start pd-gap-sm pd-text-sm">
+              <input
+                type="checkbox"
+                checked={notifyFollowers}
+                onChange={(e) => setNotifyFollowers(e.target.checked)}
+                className="pd-checkbox"
+              />
+              <div className="pd-stack pd-stack--xs">
+                <span className="pd-text-strong">Notifier les personnes qui suivent ce produit</span>
+                <p className="pd-text-sm pd-text-muted">Décochez si vous ne souhaitez pas notifier les personnes qui suivent ce produit.</p>
+              </div>
+            </label>
+            {notifyFollowers ? (
+              <div className="pd-stack pd-stack--xs">
+                <label className="pd-text-strong" htmlFor="notification-message">
+                  Message de notification
+                </label>
+                <textarea
+                  id="notification-message"
+                  className="pd-textarea"
+                  placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
+                  value={notificationMessage}
+                  onChange={(e) => setNotificationMessage(e.target.value)}
+                />
+                <div className="pd-preview pd-stack pd-stack--xs">
+                  <p className="pd-text-strong">Apercu de la notification</p>
+                  <p className="pd-text-body">{detail.name}</p>
+                  <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
+                  <p className="pd-link-accent">Lien vers le produit</p>
+                </div>
+              </div>
+            ) : null}
+            <div className="pd-row pd-row--wrap pd-gap-sm">
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                className="pd-btn pd-btn--primary pd-btn--pill"
+              >
+                Enregistrer
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditMode(false)}
+                className="pd-btn pd-btn--outline pd-btn--pill"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="pd-card pd-card--hero pd-card--tabs pd-stack pd-stack--lg">
           <div className="pd-grid pd-grid--hero pd-gap-lg">
           <div className="pd-stack pd-stack--md">
@@ -1335,18 +1537,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   onChange={(e) => setDraft((prev) => ({ ...prev, category: e.target.value }))}
                   placeholder="Categorie"
                 />
-                <textarea
-                  className="pd-textarea"
-                  value={draft.longDescription || ''}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
-                  placeholder="Description detaillée"
-                  rows={3}
-                />
               </div>
             ) : (
               <div className="pd-stack pd-stack--xs">
                 <h1 className="pd-title">{display.name}</h1>
-                {display.longDescription ? <p className="pd-callout">{display.longDescription}</p> : null}
               </div>
             )}
 
@@ -1378,9 +1572,48 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
               <span className="pd-price">{product.price.toFixed(2)} €</span>
               <span className="pd-measurement-inline">
-                {measurementLabel} ({product.unit})
+                {measurementLabel} ({unitValue})
               </span>
             </div>
+
+            {editMode ? (
+              <div className="pd-row pd-row--wrap pd-gap-sm">
+                <label className="pd-stack pd-stack--xs" htmlFor="product-measurement">
+                  <span className="pd-label">Mesure</span>
+                  <select
+                    id="product-measurement"
+                    className="pd-select"
+                    value={localMeasurement}
+                    onChange={(e) => setLocalMeasurement(e.target.value as Product['measurement'])}
+                  >
+                    <option value="kg">Kg</option>
+                    <option value="unit">Unité</option>
+                  </select>
+                </label>
+                <label className="pd-stack pd-stack--xs" htmlFor="product-unit">
+                  <span className="pd-label">Unité</span>
+                  <input
+                    id="product-unit"
+                    className="pd-input"
+                    value={localUnit}
+                    onChange={(e) => setLocalUnit(e.target.value)}
+                    placeholder="Ex : colis, bouteille"
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            {editMode ? (
+              <textarea
+                className="pd-textarea"
+                value={draft.longDescription || ''}
+                onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
+                placeholder="Description detaillée"
+                rows={3}
+              />
+            ) : display.longDescription ? (
+              <p className="pd-callout">{display.longDescription}</p>
+            ) : null}
 
             <div className="pd-row pd-row--wrap pd-row--start pd-gap-sm">
               <button
@@ -1406,6 +1639,27 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <div className="pd-media-card">
               <ImageWithFallback src={displayImage} alt={display.name} className="pd-media-image" />
             </div>
+            {editMode ? (
+              <label className="pd-stack pd-stack--xs" htmlFor="product-image-url">
+                <span className="pd-label">Image du produit</span>
+                <input
+                  id="product-image-url"
+                  className="pd-input"
+                  value={draft.productImage?.url || ''}
+                  onChange={(e) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      productImage: {
+                        ...(prev.productImage ?? { url: '', alt: prev.name }),
+                        url: e.target.value,
+                        alt: prev.productImage?.alt ?? prev.name,
+                      },
+                    }))
+                  }
+                  placeholder="URL de l'image"
+                />
+              </label>
+            ) : null}
           </div>
           </div>
 
@@ -1434,61 +1688,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             <div className="profile-tab-content">{renderTabContent()}</div>
           </div>
         </div>
-
-      {isOwner && editMode ? (
-        <div className="pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--sm">
-          {editCTA}
-          <label className="pd-row pd-row--start pd-gap-sm pd-text-sm">
-            <input
-              type="checkbox"
-              checked={notifyFollowers}
-              onChange={(e) => setNotifyFollowers(e.target.checked)}
-              className="pd-checkbox"
-            />
-            <div className="pd-stack pd-stack--xs">
-              <span className="pd-text-strong">Notifier les personnes qui suivent ce produit</span>
-              <p className="pd-text-sm pd-text-muted">Decochez pour les micro-changements.</p>
-            </div>
-          </label>
-          {notifyFollowers ? (
-            <div className="pd-stack pd-stack--xs">
-              <label className="pd-text-strong" htmlFor="notification-message">
-                Message de notification
-              </label>
-              <textarea
-                id="notification-message"
-                className="pd-textarea"
-                placeholder="Ex : Nouveau lot disponible / Changement de DLC / Nouveau format..."
-                value={notificationMessage}
-                onChange={(e) => setNotificationMessage(e.target.value)}
-              />
-              <div className="pd-preview pd-stack pd-stack--xs">
-                <p className="pd-text-strong">Apercu de la notification</p>
-                <p className="pd-text-body">{detail.name}</p>
-                <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
-                <p className="pd-link-accent">Lien vers le produit</p>
-              </div>
-            </div>
-          ) : null}
-          <div className="pd-row pd-row--wrap pd-gap-sm">
-            <button
-              type="button"
-              onClick={handleSaveEdit}
-              className="pd-btn pd-btn--primary pd-btn--pill"
-            >
-              Enregistrer
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditMode(false)}
-              className="pd-btn pd-btn--outline pd-btn--pill"
-            >
-              Annuler
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       </div>
 
       {relatedItems.length ? (

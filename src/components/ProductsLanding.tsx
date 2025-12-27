@@ -1,12 +1,15 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { Product, GroupOrder, DeckCard } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { FiltersPopover } from './FiltersPopover';
+import './ProductsLanding.css';
 import {
   Sparkles,
   MapPin,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Heart,
 } from 'lucide-react';
 import {
@@ -365,6 +368,27 @@ export function ProductsLanding({
   const showCombined = scope === 'combined';
   const hasProducts = productResults.length > 0;
   const hasProducers = producerResults.length > 0;
+  const visibleContainerCount = showCombined
+    ? combinedGroups.length
+    : showProducts
+      ? productResults.length
+      : producerGroups.length;
+  const scrollToResults = React.useCallback(() => {
+    if (typeof document === 'undefined') return;
+    const target = document.getElementById('products-landing-results');
+    if (!target) return;
+    const header = document.querySelector('.app-header');
+    const headerHeight = header instanceof HTMLElement ? header.getBoundingClientRect().height : 0;
+    const prefersReducedMotion =
+      typeof window !== 'undefined' && window.matchMedia
+        ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        : false;
+    const targetTop = target.getBoundingClientRect().top + window.pageYOffset - headerHeight;
+    window.scrollTo({
+      top: Math.max(targetTop, 0),
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+    });
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -392,6 +416,7 @@ export function ProductsLanding({
         attributeOptions={attributeFilterOptions}
       />
       <div
+        className="products-landing__hero-wrap"
         style={{
           position: 'relative',
           left: '50%',
@@ -458,7 +483,8 @@ export function ProductsLanding({
               margin: 0,
             }}
           >
-            Moins d’intermédiaires, plus de qualité
+            Moins d’intermédiaires,{' '}
+            <span style={{ whiteSpace: 'nowrap' }}>plus de qualité</span>
           </h2>
           <p
             style={{
@@ -472,11 +498,36 @@ export function ProductsLanding({
           >
             Participez à des commandes groupées près de chez vous ou créez les vôtres et recevez une part en tant que « partageur »
           </p>
+
+          <div className="products-landing__quick-links">
+            <Link
+              to="/comment-ca-fonctionne"
+              className="products-landing__quick-link products-landing__quick-link--primary"
+            >
+              Comment ça fonctionne ?
+            </Link>
+            <Link to="/qui-sommes-nous" className="products-landing__quick-link">
+              Qui sommes-nous ?
+            </Link>
+          </div>
         </div>
       </section>
       </div>
 
-      <section className="space-y-4">
+      <section id="products-landing-results" className="space-y-4">
+        <button
+          type="button"
+          className="products-landing__section-intro modern-intro"
+          onClick={scrollToResults}
+          aria-controls="products-landing-results"
+          aria-label="Aller aux résultats"
+        >
+          <ChevronDown className="modern-intro__chevron" aria-hidden="true" />
+          <span className="modern-intro__count">{visibleContainerCount}</span>
+          <span className="modern-intro__text"> partageurs ou producteurs disponibles</span>
+          <ChevronDown className="modern-intro__chevron" aria-hidden="true" />
+        </button>
+
         {showCombined ? (
           combinedGroups.length ? (
             <div className="px-1 sm:px-3 w-full">

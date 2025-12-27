@@ -188,10 +188,10 @@
 }
 
 .pd-measurement-inline {
-  font-size: 0.625rem;
+  font-size: 0.85rem;
   color: #374151;
   background: transparent;
-  padding: 0.125rem 0;
+  padding: 0.135rem 0;
   border: none;
   border-radius: 0;
 }
@@ -779,6 +779,33 @@
   position: relative;
 }
 
+.pd-timeline__item--dragging {
+  opacity: 0.6;
+}
+
+.pd-timeline__item--over .pd-timeline__row {
+  outline: 1px dashed #FF6B4A;
+  outline-offset: 6px;
+}
+
+.pd-timeline__handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  border: 1px dashed #E5E7EB;
+  background: #FFF;
+  color: #6B7280;
+  font-size: 0.75rem;
+  cursor: grab;
+  user-select: none;
+}
+
+.pd-timeline__handle:active {
+  cursor: grabbing;
+}
+
 .pd-timeline__marker {
   position: absolute;
   left: -1rem;
@@ -936,5 +963,4 @@
 .pd-related-row > * {
   scroll-snap-align: start;
 }
-
 

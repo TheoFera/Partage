@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, Share2, Sparkles, Users } from 'lucide-react';
 import type { GroupOrder, OrderPurchaseDraft } from '../types';
+import './OrderShareGainView.css';
 
 interface OrderShareGainViewProps {
   order: GroupOrder;
@@ -39,90 +40,87 @@ export function OrderShareGainView({
   const progress = Math.min(100, (currentWeight / maxWeight) * 100);
 
   return (
-    <div className="max-w-4xl mx-auto w-full space-y-6">
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-md p-6 md:p-8 space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-2">
-            <span className="inline-flex items-center gap-2 text-xs uppercase tracking-wide text-[#B45309] bg-[#FFF1E6] px-3 py-1 rounded-full">
-              Etape 3/3
-            </span>
-            <h2 className="text-2xl md:text-3xl font-semibold text-[#1F2937]">
-              Paiement confirme, merci !
+    <div className="order-share-gain-view">
+      <div className="order-share-gain-view__card">
+        <div className="order-share-gain-view__header">
+          <div className="order-share-gain-view__heading">
+            <h2 className="order-share-gain-view__title">
+              Paiement confirmé, merci !
             </h2>
-            <p className="text-sm text-[#6B7280]">
+            <p className="order-share-gain-view__subtitle">
               Plus la commande se remplit, plus les couts logistiques se divisent entre tous.
             </p>
           </div>
-          <span className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-[#DCFCE7] text-[#166534] border border-[#BBF7D0]">
-            <CheckCircle2 className="w-6 h-6" />
+          <span className="order-share-gain-view__status-badge">
+            <CheckCircle2 className="order-share-gain-view__icon order-share-gain-view__icon--large" />
           </span>
         </div>
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs text-[#6B7280]">
+        <div className="order-share-gain-view__progress">
+          <div className="order-share-gain-view__progress-meta">
             <span>Poids actuel</span>
-            <span className="font-semibold text-[#1F2937]">
+            <span className="order-share-gain-view__progress-value">
               {currentWeight.toFixed(2)} kg / {order.maxWeight} kg
             </span>
           </div>
-          <div className="relative w-full h-3 rounded-full bg-[#F3F4F6] overflow-hidden">
+          <div className="order-share-gain-view__progress-track">
             <div
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-[#FF6B4A] to-[#F97316]"
+              className="order-share-gain-view__progress-bar"
               style={{ width: `${progress}%` }}
             />
           </div>
-          <p className="text-xs text-[#6B7280]">
+          <p className="order-share-gain-view__progress-note">
             Il reste {remainingCapacity.toFixed(2)} kg pour atteindre la capacite maximale.
           </p>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-gray-100 bg-white p-4 space-y-2 shadow-sm">
-            <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280]">
-              <Users className="w-4 h-4 text-[#FF6B4A]" />
+        <div className="order-share-gain-view__metrics">
+          <div className="order-share-gain-view__metric-card">
+            <div className="order-share-gain-view__metric-label">
+              <Users className="order-share-gain-view__icon order-share-gain-view__icon--accent" />
               Votre part
             </div>
-            <p className="text-xl font-semibold text-[#1F2937]">{participantWeight.toFixed(2)} kg</p>
-            <p className="text-xs text-[#9CA3AF]">Votre achat participe a la mutualisation.</p>
+            <p className="order-share-gain-view__metric-value">{participantWeight.toFixed(2)} kg</p>
+            <p className="order-share-gain-view__metric-note">Votre achat participe a la mutualisation.</p>
           </div>
-          <div className="rounded-2xl border border-[#FFE0D1] bg-[#FFF7ED] p-4 space-y-2 shadow-sm">
-            <div className="flex items-center gap-2 text-xs uppercase text-[#B45309]">
-              <Sparkles className="w-4 h-4" />
+          <div className="order-share-gain-view__metric-card order-share-gain-view__metric-card--accent">
+            <div className="order-share-gain-view__metric-label order-share-gain-view__metric-label--accent">
+              <Sparkles className="order-share-gain-view__icon" />
               Gain potentiel
             </div>
-            <p className="text-xl font-semibold text-[#1F2937]">{formatPrice(potentialGain)}</p>
-            <p className="text-xs text-[#B45309]">Estime si la commande atteint le poids max.</p>
+            <p className="order-share-gain-view__metric-value">{formatPrice(potentialGain)}</p>
+            <p className="order-share-gain-view__metric-note order-share-gain-view__metric-note--accent">Estime si la commande atteint le poids max.</p>
           </div>
-          <div className="rounded-2xl border border-gray-100 bg-white p-4 space-y-2 shadow-sm">
-            <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280]">
-              <Sparkles className="w-4 h-4 text-[#FF6B4A]" />
+          <div className="order-share-gain-view__metric-card">
+            <div className="order-share-gain-view__metric-label">
+              <Sparkles className="order-share-gain-view__icon order-share-gain-view__icon--accent" />
               Logistique estimee
             </div>
-            <p className="text-xl font-semibold text-[#1F2937]">{formatPrice(logisticsCost)}</p>
-            <p className="text-xs text-[#9CA3AF]">
+            <p className="order-share-gain-view__metric-value">{formatPrice(logisticsCost)}</p>
+            <p className="order-share-gain-view__metric-note">
               Cout partage par kg: {formatPrice(costPerKgNow)} maintenant.
             </p>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-gray-100 bg-[#F9FAFB] p-4 text-sm text-[#6B7280]">
+        <div className="order-share-gain-view__info">
           Votre gain de cooperation correspond a la baisse de cout logistique par kg entre le niveau actuel et le
           poids maximal, applique a votre part. Partagez la commande pour activer ce gain.
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3">
+        <div className="order-share-gain-view__actions">
           <button
             type="button"
             onClick={onShare}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-full bg-[#FF6B4A] text-white font-semibold px-4 py-3 shadow-sm hover:bg-[#FF5A39] transition-colors"
+            className="order-share-gain-view__share-button"
           >
-            <Share2 className="w-4 h-4" />
+            <Share2 className="order-share-gain-view__icon" />
             Partager la commande
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-full border border-gray-200 text-[#1F2937] px-4 py-3 bg-white hover:border-[#FF6B4A] transition-colors"
+            className="order-share-gain-view__close-button"
           >
             Retour aux commandes
           </button>

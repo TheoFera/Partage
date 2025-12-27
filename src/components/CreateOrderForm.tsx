@@ -49,6 +49,9 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
   const totalWeightProducts = selectedProductsData.reduce((sum, p) => sum + (p.weightKg ?? 1), 0);
   const safeMinWeight = Math.max(0, minWeight);
   const effectiveWeight = Math.max(totalWeightProducts, safeMinWeight);
+  const safeMaxWeight = Math.max(0, maxWeight);
+  const completeWeight =
+    safeMaxWeight > 0 ? Math.max(safeMaxWeight, totalWeightProducts, safeMinWeight) : effectiveWeight;
 
   const logisticCostByWeight = (weightKg: number) => {
     if (!weightKg || weightKg <= 0) return 0;
@@ -58,6 +61,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
 
   const logTotal = effectiveWeight > 0 ? logisticCostByWeight(effectiveWeight) : 0;
   const logPerKg = effectiveWeight > 0 ? logTotal / effectiveWeight : 0;
+  const logPerKgComplete = completeWeight > 0 ? logisticCostByWeight(completeWeight) / completeWeight : 0;
 
   const perProductRows = selectedProductsData.map((p) => {
     const weight = p.weightKg ?? 1;
@@ -65,6 +69,10 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
     const basePlusLog = p.price + logPerUnit;
     const participantPrice = basePlusLog * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
     const sharePerUnit = participantPrice - basePlusLog;
+    const logPerUnitComplete = logPerKgComplete * weight;
+    const basePlusLogComplete = p.price + logPerUnitComplete;
+    const participantPriceComplete =
+      basePlusLogComplete * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
     const priceType = p.measurement === 'kg' ? 'Au kilo' : 'À la pièce';
 
     return {
@@ -74,6 +82,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
       logPerUnit,
       sharePerUnit,
       participantPrice,
+      participantPriceComplete,
       priceType,
     };
   });
@@ -81,6 +90,65 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
   const totalShareBase = perProductRows.reduce((sum, r) => sum + r.sharePerUnit, 0);
   const weightScale = totalWeightProducts > 0 ? effectiveWeight / totalWeightProducts : 1;
   const totalShareEffective = totalShareBase * weightScale;
+  const shareMultiplier = shareFraction > 0 ? shareFraction / (1 - shareFraction) : 0;
+  const shareRangeWeight = safeMinWeight > 0 ? safeMinWeight : effectiveWeight;
+  const pricePerKgCandidates = selectedProductsData
+    .map((p) => {
+      if (p.measurement === 'kg') return p.price;
+      const unitWeight = p.weightKg ?? 1;
+      return unitWeight > 0 ? p.price / unitWeight : p.price;
+    })
+    .filter((price) => Number.isFinite(price) && price > 0);
+  const minPricePerKg = pricePerKgCandidates.length > 0 ? Math.min(...pricePerKgCandidates) : 0;
+  const maxPricePerKg = pricePerKgCandidates.length > 0 ? Math.max(...pricePerKgCandidates) : 0;
+  const logPerKgAtThreshold =
+    shareRangeWeight > 0 ? logisticCostByWeight(shareRangeWeight) / shareRangeWeight : 0;
+  const minShareAtThreshold =
+    shareRangeWeight > 0
+      ? (minPricePerKg + logPerKgAtThreshold) * shareMultiplier * shareRangeWeight
+      : 0;
+  const maxShareAtThreshold =
+    shareRangeWeight > 0
+      ? (maxPricePerKg + logPerKgAtThreshold) * shareMultiplier * shareRangeWeight
+      : 0;
+  const summaryRows = [
+    {
+      key: 'priceType',
+      label: 'Type prix',
+      className: 'is-center',
+      render: (row: (typeof perProductRows)[number]) => row.priceType,
+    },
+    {
+      key: 'basePrice',
+      label: 'Prix de base',
+      className: 'is-right',
+      render: (row: (typeof perProductRows)[number]) => `${row.basePrice.toFixed(2)} €`,
+    },
+    {
+      key: 'logPerUnit',
+      label: 'Livraison',
+      className: 'is-right',
+      render: (row: (typeof perProductRows)[number]) => `${row.logPerUnit.toFixed(2)} €`,
+    },
+    {
+      key: 'sharePerUnit',
+      label: 'Partageur',
+      className: 'is-right',
+      render: (row: (typeof perProductRows)[number]) => `${row.sharePerUnit.toFixed(2)} €`,
+    },
+    {
+      key: 'participantPrice',
+      label: 'Prix final au seuil minimum',
+      className: 'is-right',
+      render: (row: (typeof perProductRows)[number]) => `${row.participantPrice.toFixed(2)} €`,
+    },
+    {
+      key: 'participantPriceComplete',
+      label: 'Prix final si commande complète',
+      className: 'is-right',
+      render: (row: (typeof perProductRows)[number]) => `${row.participantPriceComplete.toFixed(2)} €`,
+    },
+  ];
 
   const groupedByProducer = products.reduce((acc, card) => {
     const producerId = card.producerId;
@@ -187,6 +255,32 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
     <form onSubmit={handleSubmit} className="pb-6">
       <div className="create-order-layout gap-6">
         <div className="space-y-6">
+          <div className="bg-white rounded-xl p-6 shadow-sm">
+            <h3 className="text-[#1F2937] mb-4">
+              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} a inclure dans la commande
+            </h3>
+
+            <div className="space-y-6">
+      {Object.entries(groupedByProducer).map(([producerId, group]) => (
+        <div key={producerId} className="space-y-2">
+          <p className="text-sm text-[#6B7280]" style={{ fontWeight: 500 }}>
+            
+          </p>
+                  <ProducerProductCarousel
+                    products={group.products}
+                    selectedProducts={selectedProducts}
+                    onToggleSelection={(productId, wasSelected) => {
+                      setSelectedProducts((prev) =>
+                        wasSelected ? prev.filter((id) => id !== productId) : [...prev, productId]
+                      );
+                    }}
+                    cardWidth={selectionCardWidth}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
             <h2 className="text-[#1F2937] mb-2">Paramètres de la commande</h2>
 
@@ -204,7 +298,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
               </div>
 
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Date limite</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Date de cloture de la commande</label>
                 <div className="relative">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
                   <input
@@ -266,7 +360,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
               </div>
 
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum (kg)</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande</label>
                 <input
                   type="number"
                   value={minWeight}
@@ -278,7 +372,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
               </div>
 
               <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum (kg)</label>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum de la commande</label>
                 <input
                   type="number"
                   value={maxWeight}
@@ -344,32 +438,6 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
             </div>
           </div>
 
-          <div className="bg-white rounded-xl p-6 shadow-sm">
-            <h3 className="text-[#1F2937] mb-4">
-              Sélectionnez les produits de {Object.entries(groupedByProducer)[0]?.[1]?.producerName ?? ''} a inclure dans la commande
-            </h3>
-
-            <div className="space-y-6">
-      {Object.entries(groupedByProducer).map(([producerId, group]) => (
-        <div key={producerId} className="space-y-2">
-          <p className="text-sm text-[#6B7280]" style={{ fontWeight: 500 }}>
-            
-          </p>
-                  <ProducerProductCarousel
-                    products={group.products}
-                    selectedProducts={selectedProducts}
-                    onToggleSelection={(productId, wasSelected) => {
-                      setSelectedProducts((prev) =>
-                        wasSelected ? prev.filter((id) => id !== productId) : [...prev, productId]
-                      );
-                    }}
-                    cardWidth={selectionCardWidth}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
@@ -430,7 +498,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
           </div>
         </div>
 
-        <div className="create-order-summary self-start">
+        <div className="create-order-summary">
           <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm w-full">
             <h3 className="text-[#1F2937] mb-4">Récapitulatif</h3>
             {selectedProducts.length === 0 ? (
@@ -439,7 +507,7 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
               <div className="space-y-4">
                 <div className="space-y-2 text-sm text-[#1F2937]">
                   <p>
-                    Poids pris pour la logistique :{' '}
+                    Poids minimum de la commande :{' '}
                     <span style={{ fontWeight: 600 }}>{effectiveWeight.toFixed(2)} kg</span>
                   </p>
                   <p>
@@ -447,41 +515,53 @@ export function CreateOrderForm({ products, onCreateOrder, preselectedProductIds
                   </p>
                   <p>
                     Part partageur : <span style={{ fontWeight: 600 }}>{sharerPercentage}%</span>
+                    {' '}(
+                    <span style={{ fontWeight: 600 }}>
+                      {minShareAtThreshold.toFixed(2)} € jusqu'&agrave; {maxShareAtThreshold.toFixed(2)} €
+                    </span>
+                    )
                   </p>
                   <p>
-                    Valeur estimée de la part (pour ce poids) :{' '}
-                    <span style={{ fontWeight: 600 }}>{totalShareEffective.toFixed(2)} €</span>
                   </p>
-                  <p className="text-[#6B7280]">
-                    Prix participant = produit + logistique + part du partageur. Créneaux : {renderPickupLine()}.
-                  </p>
+
                 </div>
-                <div className="w-full overflow-x-auto border border-gray-200 rounded-lg bg-white">
-                  <table className="w-full text-sm table-auto">
-                    <thead className="bg-[#F9FAFB] text-[#6B7280]">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Produit</th>
-                        <th className="px-3 py-2 text-center">Type prix</th>
-                        <th className="px-3 py-2 text-right">Prix producteur</th>
-                        <th className="px-3 py-2 text-right">Coût livraison</th>
-                        <th className="px-3 py-2 text-right">Part partageur</th>
-                        <th className="px-3 py-2 text-right">Prix participant</th>
+                <div className="create-order-summary-table-wrapper is-vertical">
+                  <table className="create-order-summary-table is-vertical">
+                    <thead className="create-order-summary-table-head">
+                      <tr className="create-order-summary-table-row">
+                        <th className="create-order-summary-table-cell" scope="col">
+                          Produit
+                        </th>
+                        {perProductRows.map((row) => (
+                          <th key={row.id} className="create-order-summary-table-cell is-center" scope="col">
+                            {row.name}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {perProductRows.map((row) => (
-                        <tr key={row.id} className="border-t border-gray-100">
-                          <td className="px-3 py-2">{row.name}</td>
-                          <td className="px-3 py-2 text-center">{row.priceType}</td>
-                          <td className="px-3 py-2 text-right">{row.basePrice.toFixed(2)} €</td>
-                          <td className="px-3 py-2 text-right">{row.logPerUnit.toFixed(2)} €</td>
-                          <td className="px-3 py-2 text-right">{row.sharePerUnit.toFixed(2)} €</td>
-                          <td className="px-3 py-2 text-right">{row.participantPrice.toFixed(2)} €</td>
+                      {summaryRows.map((summaryRow) => (
+                        <tr key={summaryRow.key} className="create-order-summary-table-row">
+                          <th className="create-order-summary-table-cell" scope="row">
+                            {summaryRow.label}
+                          </th>
+                          {perProductRows.map((row) => (
+                            <td
+                              key={row.id}
+                              className={`create-order-summary-table-cell ${summaryRow.className}`.trim()}
+                              data-label={row.name}
+                            >
+                              {summaryRow.render(row)}
+                            </td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                <p className="text-[#6B7280]">
+                    Créneaux : {renderPickupLine()}.
+                  </p>
               </div>
             )}
           </div>
@@ -686,3 +766,5 @@ function ProducerProductCarousel({
     </div>
   );
 }
+
+

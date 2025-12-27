@@ -176,6 +176,9 @@ export interface TimelineStep {
   etape: string;
   lieu?: string;
   date?: string;
+  dateType?: 'date' | 'period';
+  periodStart?: string;
+  periodEnd?: string;
   preuve?: TraceDocument;
 }
 

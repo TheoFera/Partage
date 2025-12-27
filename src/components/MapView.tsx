@@ -298,22 +298,40 @@ export function MapView({
         width: '100%',
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        marginTop: withTopMargin ? 8 : 0,
-        marginBottom: 4,
+        gap: 12,
+        marginTop: withTopMargin ? 12 : 4,
+        marginBottom: 8,
         padding: '0 6px',
       }}
     >
       <span
         style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: '#6B7280',
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '6px 12px',
+          borderRadius: 999,
+          border: '1px solid rgba(255,107,74,0.35)'
         }}
       >
-        {title}
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: '#111827',
+          }}
+        >
+          {title}
+        </span>
       </span>
-      <span style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
+      <span
+        style={{
+          flex: 1,
+          height: 2,
+          background: 'linear-gradient(90deg, rgba(255,107,74,0.35) 0%, rgba(15,23,42,0) 70%)',
+        }}
+      />
     </div>
   );
 

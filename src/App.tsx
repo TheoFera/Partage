@@ -2,7 +2,7 @@ import React from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { LogOut, Pencil, Share2 } from 'lucide-react';
-import { Header } from './components/Header';
+import { Header, type SearchSuggestion } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { CreateOrderForm } from './components/CreateOrderForm';
 import { ProfileView } from './components/ProfileView';
@@ -10,10 +10,12 @@ import { MessagesView } from './components/MessagesView';
 import { AddProductForm } from './components/AddProductForm';
 import { ClientSwipeView } from './components/ClientSwipeView';
 import { FiltersPopover } from './components/FiltersPopover';
+import { NotificationsPopover } from './components/NotificationsPopover';
 import { ProductsLanding } from './components/ProductsLanding';
+import { HowItWorksView } from './components/HowItWorksView';
+import { AboutUsView } from './components/AboutUsView';
 import { MapView } from './components/MapView';
 import { OrderClientView } from './components/OrderClientView';
-import { OrderParticipationSummaryView } from './components/OrderParticipationSummaryView';
 import { OrderPaymentView } from './components/OrderPaymentView';
 import { OrderShareGainView } from './components/OrderShareGainView';
 import { AuthPage } from './components/AuthPage';
@@ -74,6 +76,37 @@ const producerTagsMap: Record<string, string[]> = {
   p4: ['eleveur'],
   p5: ['autre'],
 };
+
+const mockNotifications = [
+  {
+    id: 'notif-1',
+    title: 'Paiement confirme',
+    message: 'Votre participation a la commande "Commande Ma Ferme" est validee.',
+    time: 'Il y a 2 min',
+    unread: true,
+  },
+  {
+    id: 'notif-2',
+    title: 'Nouvelle commande partagee',
+    message: 'Marie Dupont a publie "Panier gourmand du week-end".',
+    time: 'Il y a 1 h',
+    unread: true,
+  },
+  {
+    id: 'notif-3',
+    title: 'Rappel de retrait',
+    message: 'Retrait prevu vendredi 17:00 - 19:00.',
+    time: 'Hier',
+    unread: false,
+  },
+  {
+    id: 'notif-4',
+    title: 'Message recu',
+    message: 'Le producteur a ajoute une info sur la commande.',
+    time: 'Il y a 3 j',
+    unread: false,
+  },
+];
 
 const getTabFromPath = (pathname: string) => {
   if (pathname.startsWith('/carte')) return 'deck';
@@ -818,6 +851,7 @@ export default function App() {
   const [filterProducerTags, setFilterProducerTags] = React.useState<string[]>([]);
   const [filterAttributes, setFilterAttributes] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [notificationsOpen, setNotificationsOpen] = React.useState(false);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
   const [followingProfiles, setFollowingProfiles] = React.useState<Record<string, boolean>>({});
   const prevRoleRef = React.useRef<User['role'] | null>(null);
@@ -982,7 +1016,7 @@ export default function App() {
   const viewer = user ?? mockUser;
   const isAuthenticated = Boolean(user);
 
-  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const normalizedSearch = normalizeText(searchQuery.trim());
   const applyProductFilters = filterScope !== 'producers';
   const applyProducerFilters = filterScope !== 'products';
   const toggleFilterValue = React.useCallback(
@@ -1006,14 +1040,59 @@ export default function App() {
   const matchesSearch = React.useCallback(
     (product: Product) => {
       if (!normalizedSearch) return true;
-      return (
-        product.name.toLowerCase().includes(normalizedSearch) ||
-        product.description.toLowerCase().includes(normalizedSearch) ||
-        product.producerName.toLowerCase().includes(normalizedSearch)
-      );
+      const haystack = normalizeText(`${product.name} ${product.description} ${product.producerName}`);
+      return haystack.includes(normalizedSearch);
     },
     [normalizedSearch]
   );
+
+  const searchSuggestions = React.useMemo<SearchSuggestion[]>(() => {
+    if (!normalizedSearch) return [];
+
+    const producerMap = new Map<
+      string,
+      { id: string; name: string; location?: string; count: number }
+    >();
+
+    products.forEach((product) => {
+      const existing = producerMap.get(product.producerId);
+      if (existing) {
+        existing.count += 1;
+        return;
+      }
+      producerMap.set(product.producerId, {
+        id: product.producerId,
+        name: product.producerName,
+        location: product.producerLocation,
+        count: 1,
+      });
+    });
+
+    const producerMatches = Array.from(producerMap.values())
+      .filter((producer) => normalizeText(producer.name).includes(normalizedSearch))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 4)
+      .map((producer) => ({
+        id: producer.id,
+        type: 'producer' as const,
+        label: producer.name,
+        subtitle: producer.location
+          ? `${producer.location} - ${producer.count} produits`
+          : `${producer.count} produits`,
+      }));
+
+    const productMatches = products
+      .filter(matchesSearch)
+      .slice(0, 6)
+      .map((product) => ({
+        id: product.id,
+        type: 'product' as const,
+        label: product.name,
+        subtitle: product.producerName,
+      }));
+
+    return [...producerMatches, ...productMatches];
+  }, [matchesSearch, normalizedSearch, products]);
 
   const matchesProductFilters = React.useCallback(
     (product: Product) => {
@@ -1248,10 +1327,10 @@ export default function App() {
     setPurchaseDraft(draft);
     setRecentPurchase(null);
     if (!isAuthenticated) {
-      redirectToAuth(`/commande/${order.id}/recap`);
+      redirectToAuth(`/commande/${order.id}/paiement`);
       return;
     }
-    navigate(`/commande/${order.id}/recap`);
+    navigate(`/commande/${order.id}/paiement`);
   };
 
   const handlePurchaseOrder = (orderId: string, total?: number, weight?: number) => {
@@ -1560,6 +1639,20 @@ export default function App() {
     },
     [navigate]
   );
+  const handleSearchSuggestionSelect = React.useCallback(
+    (suggestion: SearchSuggestion) => {
+      setSearchQuery(suggestion.label);
+      if (suggestion.type === 'product') {
+        openProductView(suggestion.id);
+        return;
+      }
+      const producerProduct = products.find((product) => product.producerId === suggestion.id);
+      if (producerProduct) {
+        openProducerProfile(producerProduct);
+      }
+    },
+    [openProducerProfile, openProductView, products]
+  );
   const userLocation = React.useMemo(
     () =>
       viewer.addressLat !== undefined && viewer.addressLng !== undefined
@@ -1843,34 +1936,17 @@ export default function App() {
         onPurchase={(payload) => handleStartPurchase(order, payload)}
         initialQuantities={draftQuantities}
         isOwner={Boolean(user && order.sharerId === user.id)}
+        onOpenParticipantProfile={openSharerProfile}
+        isAuthenticated={isAuthenticated}
       />
     );
   };
 
-  const OrderSummaryRoute = () => {
+  const OrderRecapRedirect = () => {
     const params = useParams<{ id: string }>();
-    const order = groupOrders.find((o) => o.id === params.id);
-    if (!order) return <NotFound message="Commande introuvable." />;
-    if (!isAuthenticated) {
-      return (
-        <AuthWall
-          onLogin={() => redirectToAuth(location.pathname, 'login')}
-          onSignup={() => redirectToAuth(location.pathname, 'signup')}
-          description="Connectez-vous pour continuer votre participation."
-        />
-      );
-    }
-    const draft = purchaseDraft?.orderId === order.id ? purchaseDraft : null;
-    if (!draft) return <NotFound message="Selection introuvable. Retournez a la commande." />;
-
-    return (
-      <OrderParticipationSummaryView
-        order={order}
-        draft={draft}
-        onBack={() => navigate(`/commande/${order.id}`)}
-        onProceedToPayment={() => navigate(`/commande/${order.id}/paiement`)}
-      />
-    );
+    const orderId = params.id;
+    if (!orderId) return <Navigate to={tabRoutes.home} replace />;
+    return <Navigate to={`/commande/${orderId}/paiement`} replace />;
   };
 
   const OrderPaymentRoute = () => {
@@ -1893,7 +1969,7 @@ export default function App() {
       <OrderPaymentView
         order={order}
         draft={draft}
-        onBack={() => navigate(`/commande/${order.id}/recap`)}
+        onBack={() => navigate(`/commande/${order.id}`)}
         onConfirmPayment={() => handleConfirmPayment(draft)}
       />
     );
@@ -1939,19 +2015,20 @@ export default function App() {
   }, [showSearch]);
 
   return (
-    <div
-      className="app-shell min-h-screen bg-[#F9F2E4] overflow-x-hidden"
-      style={{ overflowX: 'hidden' }}
-    >
+    <div className="app-shell min-h-screen bg-[#F9F2E4]">
       <Toaster position="top-center" richColors offset={96} />
       <Header
         showSearch={showSearch}
         searchQuery={searchQuery}
         onSearch={setSearchQuery}
+        suggestions={searchSuggestions}
+        onSelectSuggestion={handleSearchSuggestionSelect}
         onLogoClick={() => changeTab('home')}
         actions={headerActions}
         filtersActive={filtersOpen}
         onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+        notificationsOpen={notificationsOpen}
+        onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
       />
 
       <main
@@ -1972,6 +2049,11 @@ export default function App() {
           productOptions={productFilterOptions}
           producerOptions={producerFilterOptions}
           attributeOptions={attributeFilterOptions}
+        />
+        <NotificationsPopover
+          open={notificationsOpen}
+          onClose={() => setNotificationsOpen(false)}
+          notifications={mockNotifications}
         />
         {isOrderView && !isOrderFlowStep ? (
           <div className="mb-6">
@@ -2020,6 +2102,8 @@ export default function App() {
           />
           <Route path="/carte" element={renderDeckContent()} />
           <Route path="/decouvrir" element={renderCreateContent()} />
+          <Route path="/comment-ca-fonctionne" element={<HowItWorksView />} />
+          <Route path="/qui-sommes-nous" element={<AboutUsView />} />
           <Route path="/messages" element={renderProtected(() => <MessagesView />, tabRoutes.messages)} />
           <Route
             path="/commande/nouvelle"
@@ -2130,7 +2214,7 @@ export default function App() {
           />
           <Route
             path="/commande/:id/recap"
-            element={<OrderSummaryRoute />}
+            element={<OrderRecapRedirect />}
           />
           <Route
             path="/commande/:id/paiement"
