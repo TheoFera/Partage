@@ -328,11 +328,57 @@ export function OrderClientView({
     [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') ||
     'Lieu précis communiqué après paiement';
 
-  const pickupLine = order.pickupSlots?.length
+  const estimatedDeliveryDate =
+    order.estimatedDeliveryDate instanceof Date
+      ? order.estimatedDeliveryDate
+      : order.estimatedDeliveryDate
+        ? new Date(order.estimatedDeliveryDate)
+        : null;
+  const deliveryDateLabel =
+    estimatedDeliveryDate && !Number.isNaN(estimatedDeliveryDate.getTime())
+      ? estimatedDeliveryDate.toLocaleDateString('fr-FR')
+      : null;
+  const pickupSlotsLabel = order.pickupSlots?.length
     ? order.pickupSlots
-        .map((slot) => `${formatPickupSlotLabel(slot)} ${slot.start ?? ''}-${slot.end ?? ''}`)
+        .map((slot) => {
+          const label = formatPickupSlotLabel(slot);
+          const start = slot.start?.trim();
+          const end = slot.end?.trim();
+          if (start || end) {
+            return `${label} ${start || '??'}-${end || '??'}`.trim();
+          }
+          return label;
+        })
         .join(' / ')
-    : order.message || 'Voir message de retrait';
+    : null;
+  const pickupWindowWeeks =
+    typeof order.pickupWindowWeeks === 'number' && order.pickupWindowWeeks > 0
+      ? order.pickupWindowWeeks
+      : null;
+  const pickupWindowEndDate =
+    estimatedDeliveryDate && pickupWindowWeeks
+      ? (() => {
+          const end = new Date(
+            estimatedDeliveryDate.getFullYear(),
+            estimatedDeliveryDate.getMonth(),
+            estimatedDeliveryDate.getDate()
+          );
+          end.setDate(end.getDate() + pickupWindowWeeks * 7);
+          return end;
+        })()
+      : null;
+  const pickupDurationLabel = pickupWindowWeeks
+    ? `${pickupWindowWeeks} semaine${pickupWindowWeeks > 1 ? 's' : ''}`
+    : null;
+  const pickupWindowLabel =
+    pickupDurationLabel && pickupWindowEndDate
+      ? `${pickupDurationLabel} (jusqu'au ${pickupWindowEndDate.toLocaleDateString('fr-FR')})`
+      : pickupDurationLabel;
+  const pickupLine = deliveryDateLabel
+    ? `Livraison estimee : ${deliveryDateLabel}`
+    : pickupSlotsLabel
+      ? 'Retrait planifie'
+      : order.message || 'Voir message de retrait';
   const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);
   const now = React.useMemo(() => new Date(), []);
   const daysLeft = Math.max(0, Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
@@ -484,6 +530,12 @@ export function OrderClientView({
                     Retrait
                   </div>
                   <p className="text-[#1F2937] font-semibold text-lg leading-tight">{pickupLine}</p>
+                  {pickupWindowLabel && (
+                    <p className="text-xs text-[#6B7280]">Duree de recuperation : {pickupWindowLabel}</p>
+                  )}
+                  {pickupSlotsLabel && (
+                    <p className="text-xs text-[#6B7280]">Jours possibles : {pickupSlotsLabel}</p>
+                  )}
                   <p className="text-xs text-[#6B7280]">{pickupAddress}</p>
                 </div>
               </div>

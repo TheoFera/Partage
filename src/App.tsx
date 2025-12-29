@@ -1458,6 +1458,20 @@ export default function App() {
           return sum + getProductWeightKg(product) * qty;
         }, 0)
       : 0;
+    const rawEstimatedDeliveryDate =
+      orderData.estimatedDeliveryDate instanceof Date
+        ? orderData.estimatedDeliveryDate
+        : orderData.estimatedDeliveryDate
+          ? new Date(orderData.estimatedDeliveryDate)
+          : undefined;
+    const estimatedDeliveryDate =
+      rawEstimatedDeliveryDate && !Number.isNaN(rawEstimatedDeliveryDate.getTime())
+        ? rawEstimatedDeliveryDate
+        : undefined;
+    const pickupWindowWeeks =
+      typeof orderData.pickupWindowWeeks === 'number' && orderData.pickupWindowWeeks > 0
+        ? orderData.pickupWindowWeeks
+        : undefined;
 
     const newOrder: GroupOrder = {
       id: `order-${Date.now()}`,
@@ -1472,6 +1486,8 @@ export default function App() {
       minWeight: orderData.minWeight,
       maxWeight: orderData.maxWeight,
       orderedWeight: sharerSelectionWeight,
+      estimatedDeliveryDate,
+      pickupWindowWeeks,
       deadline: orderData.deadline ?? now,
       pickupStreet: orderData.pickupStreet,
       pickupCity: orderData.pickupCity,

@@ -89,6 +89,8 @@ export interface GroupOrder {
   minWeight: number;
   maxWeight: number;
   orderedWeight?: number;
+  estimatedDeliveryDate?: Date;
+  pickupWindowWeeks?: number;
   deadline: Date;
   pickupStreet?: string;
   pickupCity?: string;

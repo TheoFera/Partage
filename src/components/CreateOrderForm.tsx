@@ -556,6 +556,7 @@ export function CreateOrderForm({
       deliveryFixedDay:
         deliveryOption === 'chronofresh' && fallbackLeadType === 'fixed_day' ? fallbackLeadFixedDay : undefined,
       estimatedDeliveryDate,
+      pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
       pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
       pickupInfo: useSamePickupAddress ? deliveryInfo : pickupInfo,
       pickupCity: useSamePickupAddress ? deliveryCity : pickupCity,
@@ -602,6 +603,11 @@ export function CreateOrderForm({
       .map((slot) => `${slot.label} ${slot.start || '??'}-${slot.end || '??'}`)
       .join(' / ');
   };
+  const hasEstimatedDeliveryDate = Boolean(estimatedDeliveryDate);
+  const hasPickupInfo =
+    (usePickupDate && Boolean(pickupDate)) ||
+    (visibility === 'public' && Boolean(pickupWindowRange)) ||
+    (visibility !== 'public' && pickupSlots.some((slot) => slot.enabled));
 
   return (
     <form onSubmit={handleSubmit} className="pb-6">
@@ -634,7 +640,7 @@ export function CreateOrderForm({
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-            <h2 className="text-[#1F2937] text-base font-semibold">Paramètres généraux de la commande</h2>
+            <h3 className="text-[#1F2937] text-base font-semibold">Paramètres généraux de la commande</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -694,122 +700,6 @@ export function CreateOrderForm({
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande</label>
-                <input
-                  type="number"
-                  value={normalizedMinWeight}
-                  onChange={(e) => {
-                    const next = clampWeightToRange(Number(e.target.value), minWeightLimit, maxWeightLimit);
-                    setMinWeight(next);
-                    if (maxWeight > 0 && next > maxWeight) setMaxWeight(next);
-                  }}
-                  min={minWeightInputMin}
-                  max={minWeightInputMax}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum de la commande</label>
-                <input
-                  type="number"
-                  value={normalizedMaxWeight}
-                  onChange={(e) => {
-                    let next = clampWeightToRange(Number(e.target.value), minWeightLimit, maxWeightLimit);
-                    if (next > 0 && next < normalizedMinWeight) next = normalizedMinWeight;
-                    setMaxWeight(next);
-                  }}
-                  min={maxWeightInputMin}
-                  max={maxWeightInputMax}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                />
-              </div>
-            </div>
-            {(minWeightLimit > 0 || maxWeightLimit > 0) && (
-              <p className="text-xs text-[#6B7280]">
-                Seuils producteur pour cette option : {formatWeightRange(minWeightLimit, maxWeightLimit)}.
-              </p>
-            )}
-
-          </div>
-
-          <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
-            <div>
-              <h3 className="text-[#1F2937] text-base font-semibold">Part du partageur</h3>
-              <p className="text-sm text-[#6B7280]">
-                Définissez le pourcentage que vous gardez sur la commande, puis choisissez les produits que vous souhaitez commander pour vous.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-[#6B7280] mb-2">Part partageur (%)</label>
-                <div className="relative">
-                  <Percent className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
-                  <input
-                    type="number"
-                    value={sharerPercentage}
-                    onChange={(e) => setSharerPercentage(Number(e.target.value))}
-                    min="0"
-                    max="100"
-                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                    required
-                  />
-                </div>
-              </div>
-              <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
-                <p className="font-semibold">Part du partageur :</p>
-                <p className="text-[#6B7280]">
-                  au poids minimum de la commande : <span className="text-[#1F2937] font-semibold">{minShareAtThreshold.toFixed(2)} €</span>
-                </p>
-                <p className="text-[#6B7280]">
-                  au poids maximum de la commande : <span className="text-[#1F2937] font-semibold">{maxShareAtThreshold.toFixed(2)} €</span>
-                </p>
-              </div>
-            </div>
-
-            <div className="border-t border-gray-200 pt-4 space-y-2">
-              <label
-                className={`flex items-center gap-2 text-sm ${
-                  canReceiveCashShare ? 'text-[#1F2937]' : 'text-[#9CA3AF]'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={shareMode === 'cash'}
-                  onChange={(e) => setShareMode(e.target.checked ? 'cash' : 'products')}
-                  disabled={!canReceiveCashShare}
-                />
-                Recevoir la totalité de la part du partageur en argent
-              </label>
-              <p className="text-xs text-[#6B7280]">
-                Disponible pour les profils d'auto-entrepreneur, d'entreprise ou associatifs.
-              </p>
-            </div>
-
-            {shareMode === 'products' && (
-              <div className="space-y-4">
-                <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
-                  <p>
-                    Valeur estimee : <span className="font-semibold">{shareTotalValue.toFixed(2)} €</span>
-                  </p>
-                </div>
-                <label className="block text-sm text-[#6B7280]">Selection des produits et des quantites</label>
-                {selectedProductsData.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">Selectionnez d'abord des produits dans la commande.</p>
-                ) : (
-                  <ShareProductsCarousel
-                    products={selectedProductsData}
-                    quantities={shareQuantities}
-                    onDeltaQuantity={handleShareQuantityChange}
-                    onDirectQuantity={handleShareDirectQuantity}
-                  />
-                )}
-              </div>
-            )}
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
@@ -913,6 +803,46 @@ export function CreateOrderForm({
               </div>
               {enabledDeliveryOptions.length === 0 && <p>Aucune option active sur le profil producteur.</p>}
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids minimum de la commande</label>
+                <input
+                  type="number"
+                  value={normalizedMinWeight}
+                  onChange={(e) => {
+                    const next = clampWeightToRange(Number(e.target.value), minWeightLimit, maxWeightLimit);
+                    setMinWeight(next);
+                    if (maxWeight > 0 && next > maxWeight) setMaxWeight(next);
+                  }}
+                  min={minWeightInputMin}
+                  max={minWeightInputMax}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Poids maximum de la commande</label>
+                <input
+                  type="number"
+                  value={normalizedMaxWeight}
+                  onChange={(e) => {
+                    let next = clampWeightToRange(Number(e.target.value), minWeightLimit, maxWeightLimit);
+                    if (next > 0 && next < normalizedMinWeight) next = normalizedMinWeight;
+                    setMaxWeight(next);
+                  }}
+                  min={maxWeightInputMin}
+                  max={maxWeightInputMax}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
+            </div>
+            {(minWeightLimit > 0 || maxWeightLimit > 0) && (
+              <p className="text-xs text-[#6B7280]">
+                Seuils producteur pour cette option : {formatWeightRange(minWeightLimit, maxWeightLimit)}.
+              </p>
+            )}
+
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-3">
@@ -948,6 +878,82 @@ export function CreateOrderForm({
                 </p>
               </div>
             </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-[#1F2937] text-base font-semibold">Part du partageur</h3>
+              <p className="text-sm text-[#6B7280]">
+                Définissez le pourcentage que vous gardez sur la commande, puis choisissez les produits que vous souhaitez commander pour vous.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Part partageur (%)</label>
+                <div className="relative">
+                  <Percent className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
+                  <input
+                    type="number"
+                    value={sharerPercentage}
+                    onChange={(e) => setSharerPercentage(Number(e.target.value))}
+                    min="0"
+                    max="100"
+                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    required
+                  />
+                </div>
+              </div>
+              <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
+                <p className="font-semibold">Part du partageur :</p>
+                <p className="text-[#6B7280]">
+                  au poids minimum de la commande : <span className="text-[#1F2937] font-semibold">{minShareAtThreshold.toFixed(2)} €</span>
+                </p>
+                <p className="text-[#6B7280]">
+                  au poids maximum de la commande : <span className="text-[#1F2937] font-semibold">{maxShareAtThreshold.toFixed(2)} €</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 pt-4 space-y-2">
+              <label
+                className={`flex items-center gap-2 text-sm ${
+                  canReceiveCashShare ? 'text-[#1F2937]' : 'text-[#9CA3AF]'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={shareMode === 'cash'}
+                  onChange={(e) => setShareMode(e.target.checked ? 'cash' : 'products')}
+                  disabled={!canReceiveCashShare}
+                />
+                Recevoir la totalité de la part du partageur en argent
+              </label>
+              <p className="text-xs text-[#6B7280]">
+                Disponible pour les profils d'auto-entrepreneur, d'entreprise ou associatifs.
+              </p>
+            </div>
+
+            {shareMode === 'products' && (
+              <div className="space-y-4">
+                <div className="bg-[#F9FAFB] rounded-lg border border-gray-200 p-3 text-sm text-[#1F2937] space-y-1">
+                  <p>
+                    Valeur estimee : <span className="font-semibold">{shareTotalValue.toFixed(2)} €</span>
+                  </p>
+                </div>
+                <label className="block text-sm text-[#6B7280]">Selection des produits et des quantites</label>
+                {selectedProductsData.length === 0 ? (
+                  <p className="text-sm text-[#6B7280]">Selectionnez d'abord des produits dans la commande.</p>
+                ) : (
+                  <ShareProductsCarousel
+                    products={selectedProductsData}
+                    quantities={shareQuantities}
+                    onDeltaQuantity={handleShareQuantityChange}
+                    onDirectQuantity={handleShareDirectQuantity}
+                  />
+                )}
+              </div>
+            )}
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
@@ -1242,12 +1248,14 @@ export function CreateOrderForm({
                       {selectedDeliveryOption?.title ?? 'Non precise'}
                     </span>
                   </p>
-                  <p>
-                    Date de livraison estimee :{' '}
-                    <span style={{ fontWeight: 600 }}>
-                      {estimatedDeliveryDate ? estimatedDeliveryDate.toLocaleDateString('fr-FR') : 'A definir'}
-                    </span>
-                  </p>
+                  {hasEstimatedDeliveryDate && (
+                    <p>
+                      Date de livraison estimee :{' '}
+                      <span style={{ fontWeight: 600 }}>
+                        {estimatedDeliveryDate?.toLocaleDateString('fr-FR')}
+                      </span>
+                    </p>
+                  )}
 
                 </div>
                 <div className="create-order-summary-table-wrapper is-vertical">
@@ -1284,9 +1292,11 @@ export function CreateOrderForm({
                     </tbody>
                   </table>
                 </div>
-                <p className="text-[#6B7280]">
+                {hasPickupInfo && (
+                  <p className="text-[#6B7280]">
                     Disponibilite : {renderPickupLine()}.
                   </p>
+                )}
               </div>
             )}
           </div>
