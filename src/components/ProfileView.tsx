@@ -1,4 +1,5 @@
 import React from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   MapPin,
   Shield,
@@ -11,12 +12,12 @@ import {
   Globe,
   Lock,
   Link2,
-  Upload,
   Phone,
   Building2,
 } from 'lucide-react';
 import { DeckCard, DeliveryDay, DeliveryLeadType, GroupOrder, Product, User } from '../types';
-import { ImageWithFallback } from './figma/ImageWithFallback';
+import { Avatar } from './Avatar';
+import { AvatarUploader } from './AvatarUploader';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from './ProductsLanding';
 import { toast } from 'sonner';
 
@@ -67,6 +68,8 @@ interface ProfileViewProps {
   onStartOrderFromProduct?: (product: Product) => void;
   onAddProductClick?: () => void;
   onOpenProduct?: (productId: string) => void;
+  supabaseClient?: SupabaseClient | null;
+  onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
 }
 
 export function ProfileView({
@@ -88,6 +91,8 @@ export function ProfileView({
   onStartOrderFromProduct,
   onAddProductClick,
   onOpenProduct,
+  supabaseClient,
+  onAvatarUpdated,
 }: ProfileViewProps) {
   const [internalMode, setInternalMode] = React.useState<'view' | 'edit'>('view');
   const mode = modeProp ?? internalMode;
@@ -109,7 +114,8 @@ export function ProfileView({
       ? 'Collectivité / service public'
       : 'Particulier';
   const following = Boolean(isFollowing);
-  const profileImageSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
+  const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
+  const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
 
   const handleFollowClick = React.useCallback(() => {
     if (!onToggleFollow) {
@@ -228,6 +234,8 @@ export function ProfileView({
         user={user}
         onUpdateUser={onUpdateUser}
         onClose={() => setMode('view')}
+        supabaseClient={supabaseClient ?? null}
+        onAvatarUpdated={onAvatarUpdated}
       />
     );
   }
@@ -372,8 +380,11 @@ export function ProfileView({
         <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div className="profile-header-main flex items-center gap-4">
             <div className="profile-avatar rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
-              <ImageWithFallback
-                src={profileImageSrc}
+              <Avatar
+                supabaseClient={supabaseClient ?? null}
+                path={user.avatarPath}
+                updatedAt={avatarVersion}
+                fallbackSrc={avatarFallbackSrc}
                 alt={user.name}
                 className="w-full h-full object-cover"
               />
@@ -543,10 +554,14 @@ function ProfileEditPanel({
   user,
   onUpdateUser,
   onClose,
+  supabaseClient,
+  onAvatarUpdated,
 }: {
   user: User;
   onUpdateUser: (user: Partial<User>) => void;
   onClose: () => void;
+  supabaseClient?: SupabaseClient | null;
+  onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
 }) {
   const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const [name, setName] = React.useState(user.name);
@@ -554,7 +569,6 @@ function ProfileEditPanel({
   const [addressDetails, setAddressDetails] = React.useState(user.addressDetails || '');
   const [role, setRole] = React.useState<'producer' | 'sharer' | 'participant'>(user.role);
   const [handleValue, setHandleValue] = React.useState(defaultHandle);
-  const [profileImage, setProfileImage] = React.useState(user.profileImage ?? '');
   const [profileVisibility, setProfileVisibility] = React.useState<User['profileVisibility']>(
     user.profileVisibility ?? 'public'
   );
@@ -640,17 +654,8 @@ function ProfileEditPanel({
   const [producerPickupMaxWeight, setProducerPickupMaxWeight] = React.useState<number>(
     user.legalEntity?.producerPickupMaxWeight ?? 0
   );
-  const previewImageSrc = profileImage.trim() || DEFAULT_PROFILE_AVATAR;
-  const handleProfileImageUpload = (file?: File) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setProfileImage(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
+  const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
+  const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
   const toggleDeliveryDay = (
     day: DeliveryDay,
     setter: React.Dispatch<React.SetStateAction<DeliveryDay[]>>
@@ -733,7 +738,6 @@ function ProfileEditPanel({
       accountType,
       role,
       handle: handleValue.trim() || defaultHandle,
-      profileImage: profileImage || undefined,
       profileVisibility,
       addressVisibility,
       tagline: tagline.trim(),
@@ -769,8 +773,11 @@ function ProfileEditPanel({
         <div className="profile-edit-hero flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="profile-avatar rounded-full overflow-hidden ring-2 ring-[#FFE8D7] bg-gradient-to-br from-[#FF6B4A] to-[#FFD166] flex items-center justify-center text-xl text-white">
-              <ImageWithFallback
-                src={previewImageSrc}
+              <Avatar
+                supabaseClient={supabaseClient ?? null}
+                path={user.avatarPath}
+                updatedAt={avatarVersion}
+                fallbackSrc={avatarFallbackSrc}
                 alt={name || user.name}
                 className="w-full h-full object-cover"
               />
@@ -840,31 +847,8 @@ function ProfileEditPanel({
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] resize-none"
                 />
               </div>
-            </div>
-            <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
               <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Photo de profil</label>
-                <label
-                  htmlFor="profile-image-upload"
-                  className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-[#FF6B4A] transition-colors cursor-pointer flex flex-col items-center gap-2 bg-white"
-                >
-                  <Upload className="w-8 h-8 text-[#6B7280]" />
-                  <div className="text-sm text-[#6B7280]">Cliquez pour telecharger ou glissez une image</div>
-                  <div className="text-xs text-[#9CA3AF]">Le fichier sera ajoute lors de l'enregistrement du profil.</div>
-                  <input
-                    id="profile-image-upload"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => handleProfileImageUpload(e.target.files?.[0])}
-                  />
-                </label>
-                {profileImage && (
-                  <p className="text-xs text-[#9CA3AF]">Apercu mis a jour (non envoye cote serveur).</p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Visibilite du profil</label>
+                <label className="block text-sm text-[#6B7280]">VisibilitǸ du profil</label>
                 <div className="profile-visibility-group flex items-center gap-2">
                   <VisibilityButton
                     label="Public"
@@ -873,18 +857,31 @@ function ProfileEditPanel({
                     onClick={() => setProfileVisibility('public')}
                   />
                   <VisibilityButton
-                    label="Privé"
+                    label="PrivǸ"
                     icon={Lock}
                     active={profileVisibility === 'private'}
                     onClick={() => setProfileVisibility('private')}
                   />
                 </div>
-                <p className="text-xs text-[#9CA3AF]">Le mode prive limite la visibilité de votre profil et de vos informations.</p>
+                <p className="text-xs text-[#9CA3AF]">Le mode prive limite la visibilitǸ de votre profil et de vos informations.</p>
                 {!user.verified && (
                   <button className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors">
-                    Vérifiér mon identité
+                    Verifier mon identitǸ
                   </button>
                 )}
+              </div>
+            </div>
+            <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
+              <div className="space-y-2">
+                <label className="block text-sm text-[#6B7280]">Photo de profil</label>
+                <AvatarUploader
+                  supabaseClient={supabaseClient ?? null}
+                  userId={user.id}
+                  currentPath={user.avatarPath}
+                  onUploadComplete={onAvatarUpdated}
+                  fallbackSrc={avatarFallbackSrc}
+                  avatarUpdatedAt={avatarVersion}
+                />
               </div>
             </div>
           </div>

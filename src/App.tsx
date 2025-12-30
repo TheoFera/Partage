@@ -57,6 +57,12 @@ const attributeFilterOptions = [
   { id: 'label-rouge', label: 'Label Rouge' },
 ];
 
+const profileRoleOptions = [
+  { id: 'participant', label: 'Participants' },
+  { id: 'sharer', label: 'Partageurs' },
+  { id: 'producer', label: 'Producteurs' },
+];
+
 const producerFilterOptions = [
   { id: 'eleveur', label: 'Eleveur' },
   { id: 'maraicher', label: 'Maraicher' },
@@ -294,6 +300,19 @@ type ProfileRow = {
   business_status?: string | null;
   producer_id?: string | null;
   profile_image?: string | null;
+  avatar_path?: string | null;
+  avatar_updated_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ProfileSearchResult = {
+  id: string;
+  handle: string;
+  name: string;
+  role: UserRole;
+  city?: string | null;
+  postcode?: string | null;
+  producerId?: string | null;
 };
 
 type LegalEntityRow = {
@@ -377,6 +396,9 @@ const mapProfileRowToUser = (
     role: safeRole,
     accountType: (row.account_type as User['accountType']) ?? 'individual',
     profileImage: row.profile_image ?? undefined,
+    avatarPath: row.avatar_path ?? undefined,
+    avatarUpdatedAt: row.avatar_updated_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined,
     profileVisibility: (row.profile_visibility as User['profileVisibility']) ?? 'public',
     addressVisibility: (row.address_visibility as User['addressVisibility']) ?? 'private',
     tagline: row.tagline ?? undefined,
@@ -427,6 +449,8 @@ type ProfileRouteProps = {
   onStartOrderFromProduct: (product: Product) => void;
   onAddProductClick?: () => void;
   onOpenProduct: (productId: string) => void;
+  supabaseClient?: SupabaseClient | null;
+  onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
   forceOwn?: boolean;
 };
 
@@ -452,6 +476,8 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   onStartOrderFromProduct,
   onAddProductClick,
   onOpenProduct,
+  supabaseClient,
+  onAvatarUpdated,
   forceOwn,
 }) => {
   const params = useParams<{ handle?: string }>();
@@ -604,6 +630,8 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
       onStartOrderFromProduct={onStartOrderFromProduct}
       onAddProductClick={resolvedIsOwn && profileUser.role === 'producer' ? onAddProductClick : undefined}
       onOpenProduct={onOpenProduct}
+      supabaseClient={supabaseClient ?? null}
+      onAvatarUpdated={onAvatarUpdated}
     />
   );
 };
@@ -702,6 +730,15 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isRecoveryAuth = React.useMemo(() => {
+    const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    const searchParams = new URLSearchParams(location.search || '');
+    return (
+      hashParams.get('type') === 'recovery' ||
+      searchParams.get('type') === 'recovery' ||
+      searchParams.get('reset') === '1'
+    );
+  }, [location.hash, location.search]);
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -890,10 +927,17 @@ export default function App() {
     [buildProductSharePayload, openShareOverlay]
   );
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [profileSearchResults, setProfileSearchResults] = React.useState<ProfileSearchResult[]>([]);
+  const activeTab = React.useMemo(() => getTabFromPath(location.pathname), [location.pathname]);
+  const isAuthPage = location.pathname.startsWith('/connexion');
+  const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
+  const isAddProductView = location.pathname === '/produit/nouveau';
+  const isProfileSearchTab = activeTab === 'profile' || activeTab === 'messages';
   const [filterScope, setFilterScope] = React.useState<SearchScope>('combined');
   const [filterCategories, setFilterCategories] = React.useState<string[]>([]);
   const [filterProducerTags, setFilterProducerTags] = React.useState<string[]>([]);
   const [filterAttributes, setFilterAttributes] = React.useState<string[]>([]);
+  const [profileRoleFilters, setProfileRoleFilters] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
@@ -1092,6 +1136,10 @@ export default function App() {
     (id: string) => toggleFilterValue(setFilterAttributes, id),
     [toggleFilterValue]
   );
+  const handleToggleProfileRole = React.useCallback(
+    (id: string) => toggleFilterValue(setProfileRoleFilters, id),
+    [toggleFilterValue]
+  );
   const matchesSearch = React.useCallback(
     (product: Product) => {
       if (!normalizedSearch) return true;
@@ -1101,7 +1149,7 @@ export default function App() {
     [normalizedSearch]
   );
 
-  const searchSuggestions = React.useMemo<SearchSuggestion[]>(() => {
+  const productSearchSuggestions = React.useMemo<SearchSuggestion[]>(() => {
     if (!normalizedSearch) return [];
 
     const producerMap = new Map<
@@ -1227,8 +1275,6 @@ export default function App() {
     [publicOrdersBySearch, matchesProductFilters]
   );
 
-  const activeTab = React.useMemo(() => getTabFromPath(location.pathname), [location.pathname]);
-  const isAuthPage = location.pathname.startsWith('/connexion');
   const authRedirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo;
   const hideAuthTitle = isAuthPage && Boolean(authRedirectTo?.startsWith(tabRoutes.messages));
   const isDiscoverRoute = location.pathname.startsWith('/decouvrir');
@@ -1676,6 +1722,20 @@ export default function App() {
     }
   };
 
+  const handleAvatarUpdated = React.useCallback(
+    (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => {
+      setUser((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          avatarPath: payload.avatarPath,
+          avatarUpdatedAt: payload.avatarUpdatedAt ?? prev.avatarUpdatedAt,
+        };
+      });
+    },
+    []
+  );
+
   const handleEditProfile = () => {
     if (!isAuthenticated) {
       redirectToAuth(tabRoutes.profile);
@@ -1759,12 +1819,19 @@ export default function App() {
   };
 
   const locationLabel = viewer.address?.split(',')[0] ?? 'votre quartier';
-  const openProducerProfile = React.useCallback(
-    (product: Product) => {
-      const handle = product.producerName.toLowerCase().replace(/\s+/g, '');
+  const openProfileByHandle = React.useCallback(
+    (handle: string) => {
+      if (!handle) return;
       navigate(`/profil/${handle}`);
     },
     [navigate]
+  );
+  const openProducerProfile = React.useCallback(
+    (product: Product) => {
+      const handle = product.producerName.toLowerCase().replace(/\s+/g, '');
+      openProfileByHandle(handle);
+    },
+    [openProfileByHandle]
   );
   const openSharerProfile = React.useCallback(
     (sharerName: string) => {
@@ -1781,12 +1848,16 @@ export default function App() {
         openProductView(suggestion.id);
         return;
       }
+      if (suggestion.handle) {
+        openProfileByHandle(suggestion.handle);
+        return;
+      }
       const producerProduct = products.find((product) => product.producerId === suggestion.id);
       if (producerProduct) {
         openProducerProfile(producerProduct);
       }
     },
-    [openProducerProfile, openProductView, products]
+    [openProducerProfile, openProductView, openProfileByHandle, products]
   );
   const userLocation = React.useMemo(
     () =>
@@ -1901,8 +1972,6 @@ export default function App() {
   };
 
   const pageTitle = getPageTitle();
-  const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
-  const isAddProductView = location.pathname === '/produit/nouveau';
   const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/commande/'));
   const isOrderFlowStep = /\/commande\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
   const isProductView = Boolean(selectedProduct && location.pathname.startsWith('/produit/'));
@@ -2136,18 +2205,114 @@ export default function App() {
     );
   };
 
-  const showSearch =
+  const showProductSearch =
     (activeTab === 'home' || activeTab === 'deck' || activeTab === 'create') &&
     !isOrderView &&
     !isAuthPage &&
     !isOrderCreation &&
     !isAddProductView;
+  const showProfileSearch = isProfileSearchTab && !isAuthPage && !isAddProductView;
+  const searchPlaceholder = showProfileSearch
+    ? 'Rechercher un participant, un partageur ou un producteur...'
+    : 'Rechercher un produit ou un producteur...';
+  const profileSearchSuggestions = React.useMemo<SearchSuggestion[]>(() => {
+    if (!showProfileSearch || !isAuthenticated) return [];
+    return profileSearchResults.map((profile) => {
+      const subtitle = [profile.postcode, profile.city].filter(Boolean).join(' ') || `@${profile.handle}`;
+      return {
+        id: profile.id,
+        type:
+          profile.role === 'participant'
+            ? 'participant'
+            : profile.role === 'producer'
+              ? 'producer'
+              : 'sharer',
+        label: profile.name,
+        subtitle,
+        handle: profile.handle,
+      };
+    });
+  }, [isAuthenticated, profileSearchResults, showProfileSearch]);
+  const searchSuggestions = showProfileSearch ? profileSearchSuggestions : productSearchSuggestions;
+  const showSearch = showProductSearch || showProfileSearch;
+  const canShowFilters = showSearch;
+  const handleHeaderFiltersToggle = React.useCallback(() => {
+    if (!canShowFilters) return;
+    setFiltersOpen((prev) => !prev);
+  }, [canShowFilters]);
 
   React.useEffect(() => {
-    if (!showSearch) {
+    if (!showProfileSearch || !isAuthenticated) {
+      setProfileSearchResults((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    const rawQuery = searchQuery.trim();
+    const sanitizedQuery = rawQuery.replace(/[%_,]/g, '');
+    const roleFilters = profileRoleFilters.length ? profileRoleFilters : ['participant', 'sharer', 'producer'];
+    const normalizedRoleFilters = roleFilters.filter((role) =>
+      role === 'participant' || role === 'sharer' || role === 'producer'
+    );
+    if (!sanitizedQuery || !supabaseClient || normalizedRoleFilters.length === 0) {
+      setProfileSearchResults((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
+    let active = true;
+    const timeoutId = setTimeout(() => {
+      supabaseClient
+        .from('profiles')
+        .select('id, handle, name, role, city, postcode, producer_id')
+        .in('role', normalizedRoleFilters)
+        .eq('profile_visibility', 'public')
+        .or(`name.ilike.%${sanitizedQuery}%,handle.ilike.%${sanitizedQuery}%`)
+        .limit(6)
+        .then(({ data, error }) => {
+          if (!active) return;
+          if (error) {
+            console.warn('profiles search error', error);
+            setProfileSearchResults([]);
+            return;
+          }
+          const results = (data ?? [])
+            .map((row) => {
+              const role =
+                row.role === 'participant' || row.role === 'sharer' || row.role === 'producer'
+                  ? (row.role as UserRole)
+                  : null;
+              if (!role || !row.handle) return null;
+              return {
+                id: row.id,
+                handle: row.handle,
+                name: row.name || row.handle,
+                role,
+                city: row.city,
+                postcode: row.postcode,
+                producerId: row.producer_id ?? null,
+              };
+            })
+            .filter((row): row is ProfileSearchResult => Boolean(row));
+          const filteredResults = filterProducerTags.length
+            ? results.filter((row) => {
+                if (row.role !== 'producer') return false;
+                const tags = producerTagsMap[row.producerId ?? ''] ?? ['local'];
+                return filterProducerTags.every((tag) => tags.includes(tag));
+              })
+            : results;
+          setProfileSearchResults(filteredResults);
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+    };
+  }, [filterProducerTags, isAuthenticated, profileRoleFilters, searchQuery, showProfileSearch, supabaseClient]);
+
+  React.useEffect(() => {
+    if (!canShowFilters) {
       setFiltersOpen(false);
     }
-  }, [showSearch]);
+  }, [canShowFilters]);
 
   return (
     <div className="app-shell min-h-screen bg-[#F9F2E4]">
@@ -2155,13 +2320,14 @@ export default function App() {
       <Header
         showSearch={showSearch}
         searchQuery={searchQuery}
+        searchPlaceholder={searchPlaceholder}
         onSearch={setSearchQuery}
         suggestions={searchSuggestions}
         onSelectSuggestion={handleSearchSuggestionSelect}
         onLogoClick={() => changeTab('home')}
         actions={headerActions}
         filtersActive={filtersOpen}
-        onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+        onToggleFilters={showSearch ? handleHeaderFiltersToggle : undefined}
         notificationsOpen={notificationsOpen}
         onToggleNotifications={() => setNotificationsOpen((prev) => !prev)}
       />
@@ -2171,7 +2337,7 @@ export default function App() {
         style={{ paddingTop: `${mainPaddingTop}px`, paddingBottom: mainPaddingBottom }}
       >
         <FiltersPopover
-          open={filtersOpen && showSearch && activeTab !== 'home'}
+          open={filtersOpen && canShowFilters && activeTab !== 'home'}
           onClose={() => setFiltersOpen(false)}
           scope={filterScope}
           onScopeChange={setFilterScope}
@@ -2184,6 +2350,10 @@ export default function App() {
           productOptions={productFilterOptions}
           producerOptions={producerFilterOptions}
           attributeOptions={attributeFilterOptions}
+          profileOptions={profileRoleOptions}
+          profileValues={profileRoleFilters}
+          onToggleProfile={handleToggleProfileRole}
+          mode={showProfileSearch ? 'profiles' : 'products'}
         />
         <NotificationsPopover
           open={notificationsOpen}
@@ -2224,7 +2394,7 @@ export default function App() {
           <Route
             path="/connexion"
             element={
-              isAuthenticated ? (
+              isAuthenticated && !isRecoveryAuth ? (
                 <Navigate to={tabRoutes.home} replace />
               ) : (
                 <AuthPage
@@ -2283,6 +2453,8 @@ export default function App() {
                   onStartOrderFromProduct={handleStartOrderFromProduct}
                   onAddProductClick={openAddProductForm}
                   onOpenProduct={openProductView}
+                  supabaseClient={supabaseClient}
+                  onAvatarUpdated={handleAvatarUpdated}
                   forceOwn
                 />
               ) : (
@@ -2319,6 +2491,8 @@ export default function App() {
                 onStartOrderFromProduct={handleStartOrderFromProduct}
                 onAddProductClick={openAddProductForm}
                 onOpenProduct={openProductView}
+                supabaseClient={supabaseClient}
+                onAvatarUpdated={handleAvatarUpdated}
               />
             }
           />

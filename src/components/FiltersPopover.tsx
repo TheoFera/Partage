@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { SlidersHorizontal, Users, Leaf, ChevronDown } from 'lucide-react';
 
 type SearchScope = 'products' | 'producers' | 'combined';
+type FilterMode = 'products' | 'profiles';
 
 type FilterOption = {
   id: string;
@@ -12,6 +13,7 @@ type FilterOption = {
 interface FiltersPopoverProps {
   open: boolean;
   onClose: () => void;
+  mode?: FilterMode;
   scope: SearchScope;
   onScopeChange: (scope: SearchScope) => void;
   categories: string[];
@@ -23,11 +25,15 @@ interface FiltersPopoverProps {
   productOptions: FilterOption[];
   producerOptions: FilterOption[];
   attributeOptions: FilterOption[];
+  profileOptions?: FilterOption[];
+  profileValues?: string[];
+  onToggleProfile?: (id: string) => void;
 }
 
 export function FiltersPopover({
   open,
   onClose,
+  mode = 'products',
   scope,
   onScopeChange,
   categories,
@@ -39,9 +45,14 @@ export function FiltersPopover({
   productOptions,
   producerOptions,
   attributeOptions,
+  profileOptions = [],
+  profileValues = [],
+  onToggleProfile,
 }: FiltersPopoverProps) {
   const filterAnchor =
     typeof document !== 'undefined' ? document.getElementById('filters-anchor') : null;
+  const isProfileMode = mode === 'profiles';
+  const handleToggleProfile = onToggleProfile ?? (() => {});
 
   const popoverRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -122,20 +133,32 @@ export function FiltersPopover({
         <p style={{ fontSize: 14, fontWeight: 600, color: '#1F2937', margin: 0 }}>Filtres</p>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <ScopeToggle active={scope === 'combined'} label="Tous" onClick={() => onScopeChange('combined')} />
-        <ScopeToggle active={scope === 'products'} label="Produits" onClick={() => onScopeChange('products')} />
-        <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => onScopeChange('producers')} />
-      </div>
+      {!isProfileMode && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <ScopeToggle active={scope === 'combined'} label="Tous" onClick={() => onScopeChange('combined')} />
+          <ScopeToggle active={scope === 'products'} label="Produits" onClick={() => onScopeChange('products')} />
+          <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => onScopeChange('producers')} />
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
-        <FilterGroup
-          label="Filtres produits"
-          icon={<SlidersHorizontal style={{ width: 16, height: 16 }} />}
-          options={productOptions}
-          activeValues={categories}
-          onToggle={onToggleCategory}
-        />
+        {isProfileMode ? (
+          <FilterGroup
+            label="Filtres Profils"
+            icon={<SlidersHorizontal style={{ width: 16, height: 16 }} />}
+            options={profileOptions}
+            activeValues={profileValues}
+            onToggle={handleToggleProfile}
+          />
+        ) : (
+          <FilterGroup
+            label="Filtres produits"
+            icon={<SlidersHorizontal style={{ width: 16, height: 16 }} />}
+            options={productOptions}
+            activeValues={categories}
+            onToggle={onToggleCategory}
+          />
+        )}
         <FilterGroup
           label="Filtres producteurs"
           icon={<Users style={{ width: 16, height: 16 }} />}
@@ -143,13 +166,15 @@ export function FiltersPopover({
           activeValues={producerFilters}
           onToggle={onToggleProducer}
         />
-        <FilterGroup
-          label="Caractéristiques"
-          icon={<Leaf style={{ width: 16, height: 16 }} />}
-          options={attributeOptions}
-          activeValues={attributes}
-          onToggle={onToggleAttribute}
-        />
+        {!isProfileMode && (
+          <FilterGroup
+            label="Caracteristiques"
+            icon={<Leaf style={{ width: 16, height: 16 }} />}
+            options={attributeOptions}
+            activeValues={attributes}
+            onToggle={onToggleAttribute}
+          />
+        )}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

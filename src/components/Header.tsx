@@ -5,13 +5,15 @@ import { Bell, Search, SlidersHorizontal } from 'lucide-react';
 export type SearchSuggestion = {
   id: string;
   label: string;
-  type: 'product' | 'producer';
+  type: 'product' | 'producer' | 'participant' | 'sharer';
   subtitle?: string;
+  handle?: string;
 };
 
 interface HeaderProps {
   showSearch?: boolean;
   searchQuery?: string;
+  searchPlaceholder?: string;
   onSearch?: (query: string) => void;
   suggestions?: SearchSuggestion[];
   onSelectSuggestion?: (suggestion: SearchSuggestion) => void;
@@ -26,6 +28,7 @@ interface HeaderProps {
 export function Header({
   showSearch = false,
   searchQuery = '',
+  searchPlaceholder = 'Rechercher un produit ou un producteur...',
   onSearch,
   suggestions = [],
   onSelectSuggestion,
@@ -48,6 +51,8 @@ export function Header({
   const [suggestionsOpen, setSuggestionsOpen] = React.useState(false);
   const trimmedQuery = searchQuery.trim();
   const hasQuery = trimmedQuery.length > 0;
+  const participantSuggestions = suggestions.filter((suggestion) => suggestion.type === 'participant');
+  const sharerSuggestions = suggestions.filter((suggestion) => suggestion.type === 'sharer');
   const producerSuggestions = suggestions.filter((suggestion) => suggestion.type === 'producer');
   const productSuggestions = suggestions.filter((suggestion) => suggestion.type === 'product');
   const showSuggestions = hasQuery && suggestionsOpen;
@@ -110,7 +115,7 @@ export function Header({
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
                   <input
                     type="text"
-                    placeholder="Rechercher un produit ou un producteur..."
+                    placeholder={searchPlaceholder}
                     value={searchQuery}
                     onChange={handleSearch}
                     onFocus={handleSearchFocus}
@@ -120,6 +125,56 @@ export function Header({
                     <div className="header-search-suggestions">
                       <div className="header-search-suggestions__title">Propositions</div>
                       <div className="header-search-suggestions__list">
+                        {participantSuggestions.length > 0 && (
+                          <div className="header-search-suggestions__section">
+                            <div className="header-search-suggestions__section-title">Participants</div>
+                            {participantSuggestions.map((suggestion) => (
+                              <button
+                                key={`participant-${suggestion.id}`}
+                                type="button"
+                                onClick={() => handleSuggestionClick(suggestion)}
+                                className="header-search-suggestions__item"
+                              >
+                                <div className="header-search-suggestions__item-text">
+                                  <p className="header-search-suggestions__item-title">
+                                    {suggestion.label}
+                                  </p>
+                                  {suggestion.subtitle && (
+                                    <p className="header-search-suggestions__item-subtitle">
+                                      {suggestion.subtitle}
+                                    </p>
+                                  )}
+                                </div>
+                                <span className="header-search-suggestions__item-tag">Profil</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {sharerSuggestions.length > 0 && (
+                          <div className="header-search-suggestions__section">
+                            <div className="header-search-suggestions__section-title">Partageurs</div>
+                            {sharerSuggestions.map((suggestion) => (
+                              <button
+                                key={`sharer-${suggestion.id}`}
+                                type="button"
+                                onClick={() => handleSuggestionClick(suggestion)}
+                                className="header-search-suggestions__item"
+                              >
+                                <div className="header-search-suggestions__item-text">
+                                  <p className="header-search-suggestions__item-title">
+                                    {suggestion.label}
+                                  </p>
+                                  {suggestion.subtitle && (
+                                    <p className="header-search-suggestions__item-subtitle">
+                                      {suggestion.subtitle}
+                                    </p>
+                                  )}
+                                </div>
+                                <span className="header-search-suggestions__item-tag">Profil</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         {producerSuggestions.length > 0 && (
                           <div className="header-search-suggestions__section">
                             <div className="header-search-suggestions__section-title">Producteurs</div>
@@ -170,7 +225,10 @@ export function Header({
                             ))}
                           </div>
                         )}
-                        {!producerSuggestions.length && !productSuggestions.length && (
+                        {!participantSuggestions.length &&
+                          !sharerSuggestions.length &&
+                          !producerSuggestions.length &&
+                          !productSuggestions.length && (
                           <div className="header-search-suggestions__empty">
                             Aucune proposition pour cette recherche.
                           </div>

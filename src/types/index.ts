@@ -9,6 +9,9 @@ export interface User {
   handle?: string;
   accountType?: 'individual' | 'company' | 'association' | 'public_institution';
   profileImage?: string;
+  avatarPath?: string;
+  avatarUpdatedAt?: string;
+  updatedAt?: string;
   profileVisibility?: 'public' | 'private';
   addressVisibility?: 'public' | 'private';
   tagline?: string;

@@ -5,7 +5,7 @@ import { Mail, Lock, UserPlus, ArrowRight, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Logo } from './Logo';
 
-type AuthMode = 'login' | 'signup';
+type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
 
 type AuthLocationState = {
   redirectTo?: string;
@@ -31,6 +31,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [mode, setMode] = React.useState<AuthMode>(locationState?.mode ?? 'login');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
+  const [resetPassword, setResetPassword] = React.useState('');
+  const [resetPasswordConfirm, setResetPasswordConfirm] = React.useState('');
   const [fullName, setFullName] = React.useState('');
   const [handleValue, setHandleValue] = React.useState('');
   const [phone, setPhone] = React.useState('');
@@ -40,6 +42,18 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [addressDetails, setAddressDetails] = React.useState(locationState?.signupPrefill?.addressDetails ?? '');
   const [accountType, setAccountType] = React.useState<'individual' | 'company' | 'association' | 'public_institution'>('individual');
   const [loading, setLoading] = React.useState(false);
+  const [resetEmailSent, setResetEmailSent] = React.useState(false);
+
+  const isRecoveryLink = React.useMemo(() => {
+    const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    const searchParams = new URLSearchParams(location.search || '');
+    return (
+      hashParams.get('type') === 'recovery' ||
+      searchParams.get('type') === 'recovery' ||
+      searchParams.get('reset') === '1'
+    );
+  }, [location.hash, location.search]);
+  const activeMode: AuthMode = isRecoveryLink ? 'reset' : mode;
 
   const storedRedirect = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
@@ -51,6 +65,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   }, []);
 
   const redirectTo = locationState?.redirectTo || storedRedirect || location.pathname || '/';
+  const resetRedirectTo = React.useMemo(() => {
+    if (typeof window === 'undefined') return undefined;
+    return `${window.location.origin}/connexion`;
+  }, []);
 
   const clearStoredRedirect = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -81,7 +99,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     }
     setLoading(true);
     try {
-      if (mode === 'login') {
+      if (activeMode === 'login') {
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
         if (data.user) {
@@ -92,7 +110,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         } else {
           toast.info('Vérifiez vos emails pour confirmer votre connexion.');
         }
-      } else {
+      } else if (activeMode === 'signup') {
         const safeHandle = sanitizeHandle(handleValue || email);
         if (!safeHandle) {
           toast.error('Choisissez un tag valide (lettres et chiffres, sans espace).');
@@ -142,6 +160,36 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         } else {
           toast.success('Compte crée. Consultez vos emails pour activer votre accès.');
         }
+      } else if (activeMode === 'forgot') {
+        const trimmedEmail = email.trim();
+        if (!trimmedEmail) {
+          toast.error('Merci de saisir votre email.');
+          return;
+        }
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(
+          trimmedEmail,
+          resetRedirectTo ? { redirectTo: resetRedirectTo } : undefined
+        );
+        if (error) throw error;
+        setResetEmailSent(true);
+        toast.success('Email envoye. Consultez votre boite pour reinitialiser votre mot de passe.');
+      } else {
+        if (resetPassword.length < 6) {
+          toast.error('Le mot de passe doit contenir au moins 6 caracteres.');
+          return;
+        }
+        if (resetPassword !== resetPasswordConfirm) {
+          toast.error('Les mots de passe ne correspondent pas.');
+          return;
+        }
+        const { data, error } = await supabaseClient.auth.updateUser({ password: resetPassword });
+        if (error) throw error;
+        if (data.user) {
+          onAuthSuccess(data.user);
+        }
+        clearStoredRedirect();
+        toast.success('Mot de passe mis a jour.');
+        navigate(storedRedirect || '/', { replace: true });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Impossible de terminer la demande.';
@@ -156,6 +204,34 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     clearStoredRedirect();
     navigate(redirectTo, { replace: true });
   };
+
+  React.useEffect(() => {
+    if (activeMode === 'forgot') return;
+    setResetEmailSent(false);
+  }, [activeMode]);
+
+  React.useEffect(() => {
+    if (activeMode === 'reset') return;
+    setResetPassword('');
+    setResetPasswordConfirm('');
+  }, [activeMode]);
+
+  const title =
+    activeMode === 'login'
+      ? 'Connexion'
+      : activeMode === 'signup'
+      ? 'Creer un compte'
+      : activeMode === 'forgot'
+      ? 'Mot de passe oublie'
+      : 'Reinitialiser le mot de passe';
+  const submitLabel =
+    activeMode === 'login'
+      ? 'Se connecter'
+      : activeMode === 'signup'
+      ? 'Creer et continuer'
+      : activeMode === 'forgot'
+      ? 'Envoyer le lien'
+      : 'Mettre a jour le mot de passe';
 
   return (
     <div className="w-full flex justify-center px-2 sm:px-4 py-6 sm:py-10">
@@ -175,15 +251,13 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         <div className="p-8 md:p-10 space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[#6B7280]">{mode === 'login' ? '' : ''}</p>
-              <h2 className="text-2xl font-semibold text-[#1F2937]">
-                {mode === 'login' ? 'Connexion' : 'Créer un compte'}
-              </h2>
+              <p className="text-sm text-[#6B7280]">{activeMode === 'login' ? '' : ''}</p>
+              <h2 className="text-2xl font-semibold text-[#1F2937]">{title}</h2>
             </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' ? (
+            {activeMode === 'signup' ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -334,7 +408,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                   </div>
                 </div>
               </>
-            ) : (
+            ) : activeMode === 'login' ? (
               <>
                 <div className="space-y-2">
                   <label className="text-sm text-[#374151] font-semibold">Email</label>
@@ -368,6 +442,75 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                     />
                   </div>
                 </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setMode('forgot')}
+                    className="text-xs text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
+                  >
+                    Mot de passe oublie ?
+                  </button>
+                </div>
+              </>
+            ) : activeMode === 'forgot' ? (
+              <>
+                <p className="text-sm text-[#6B7280]">
+                  Saisissez votre email pour recevoir un lien de reinitialisation.
+                </p>
+                <div className="space-y-2">
+                  <label className="text-sm text-[#374151] font-semibold">Email</label>
+                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
+                    <Mail className="w-5 h-5 text-[#9CA3AF]" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="vous@exemple.fr"
+                      className="flex-1 outline-none text-[#1F2937]"
+                      autoComplete="email"
+                      required
+                    />
+                  </div>
+                </div>
+                {resetEmailSent ? (
+                  <p className="text-xs text-[#10B981]">Lien envoye. Pensez a verifier vos spams.</p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-[#6B7280]">Choisissez un nouveau mot de passe (6 caracteres min).</p>
+                <div className="space-y-2">
+                  <label className="text-sm text-[#374151] font-semibold">Nouveau mot de passe</label>
+                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
+                    <Lock className="w-5 h-5 text-[#9CA3AF]" />
+                    <input
+                      type="password"
+                      value={resetPassword}
+                      onChange={(e) => setResetPassword(e.target.value)}
+                      placeholder="Minimum 6 caracteres"
+                      className="flex-1 outline-none text-[#1F2937]"
+                      autoComplete="new-password"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm text-[#374151] font-semibold">Confirmer le mot de passe</label>
+                  <div className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-xl bg-white focus-within:border-[#FF6B4A] transition-colors">
+                    <ShieldCheck className="w-5 h-5 text-[#9CA3AF]" />
+                    <input
+                      type="password"
+                      value={resetPasswordConfirm}
+                      onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                      placeholder="Confirmez le mot de passe"
+                      className="flex-1 outline-none text-[#1F2937]"
+                      autoComplete="new-password"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                </div>
               </>
             )}
 
@@ -376,23 +519,40 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               disabled={loading}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#FF6B4A] text-white font-semibold shadow-md hover:bg-[#FF5A39] transition-colors disabled:opacity-60"
             >
-              {loading ? 'Traitement...' : mode === 'login' ? 'Se connecter' : 'Créer et continuer'}
+              {loading ? 'Traitement...' : submitLabel}
               <ArrowRight className="w-5 h-5" />
             </button>
           </form>
 
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[#6B7280]">
-              {mode === 'login' ? 'Pas encore de compte ?' : 'Deja inscrit ?'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-              className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
-            >
-              {mode === 'login' ? 'Créer un compte' : 'Se connecter'}
-            </button>
-          </div>
+          {!isRecoveryLink ? (
+            <div className="flex items-center gap-2">
+              {activeMode === 'login' || activeMode === 'signup' ? (
+                <>
+                  <span className="text-sm text-[#6B7280]">
+                    {activeMode === 'login' ? 'Pas encore de compte ?' : 'Deja inscrit ?'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMode(activeMode === 'login' ? 'signup' : 'login')}
+                    className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
+                  >
+                    {activeMode === 'login' ? 'Creer un compte' : 'Se connecter'}
+                  </button>
+                </>
+              ) : activeMode === 'forgot' ? (
+                <>
+                  <span className="text-sm text-[#6B7280]">Vous avez deja un compte ?</span>
+                  <button
+                    type="button"
+                    onClick={() => setMode('login')}
+                    className="text-sm text-[#FF6B4A] font-semibold hover:text-[#FF5A39]"
+                  >
+                    Retour a la connexion
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="pt-4 border-t border-dashed border-gray-200 space-y-3">
             <div className="flex items-center justify-between">
@@ -412,4 +572,3 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     </div>
   );
 }
-
