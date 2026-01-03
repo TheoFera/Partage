@@ -28,6 +28,7 @@ import { ProductResultCard } from './ProductsLanding';
 import './ProductDetailView.css';
 import { generateBase62Code } from '../lib/codeGenerator';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../lib/money';
+import { formatUnitWeightLabel } from '../lib/weight';
 import { fetchLotBreakdown, saveProducerLotBreakdown } from '../lib/pricing';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
 import { DEMO_MODE } from '../data/productsProvider';
@@ -773,6 +774,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   React.useEffect(() => {
     if (!isLotManagement) return;
+    if (lotEditMode === 'create') return;
     if (!selectedLot) return;
     if (lotDraft?.id === selectedLot.id && lotEditMode === 'edit') return;
     setLotDraft({
@@ -2398,12 +2400,15 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const handleAddLot = () => {
     const draft = createLotDraft();
-    const baseLabelDetails = latestLotId
-      ? lotLabelsByLot[latestLotId] ?? productBadgeDetails
-      : productBadgeDetails;
-    const basePosts = latestLotId
-      ? lotPriceBreakdownByLot[latestLotId] ?? productPosts
-      : productPosts;
+    const referenceLotId = selectedLotId ?? latestLotId ?? null;
+    const baseLabelDetails =
+      referenceLotId && lotLabelsByLot[referenceLotId]
+        ? lotLabelsByLot[referenceLotId]
+        : productBadgeDetails;
+    const basePosts =
+      referenceLotId && lotPriceBreakdownByLot[referenceLotId]
+        ? lotPriceBreakdownByLot[referenceLotId]
+        : productPosts;
     setLotDraft(draft);
     setLotEditMode('create');
     setSelectedLotId(draft.id);
@@ -2708,6 +2713,22 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   const measurementValue = editMode ? localMeasurement : product.measurement;
   const unitValue = editMode ? localUnit : product.unit;
   const measurementLabel = measurementValue === 'kg' ? '/ Kg' : '/ unite';
+  const sanitizedUnitValue = (unitValue || '').trim();
+  const unitWeightLabel =
+    measurementValue === 'unit' ? formatUnitWeightLabel(product.weightKg) : '';
+  const measurementDetails = [sanitizedUnitValue];
+  if (unitWeightLabel) measurementDetails.push(unitWeightLabel);
+  const measurementDetailsLabel = measurementDetails.filter(Boolean).join(' ');
+  const measurementParenthetical = measurementDetailsLabel ? (
+    <span className="measurement-parenthetical">({measurementDetailsLabel})</span>
+  ) : null;
+  const measurementInlineLabel = measurementParenthetical ? (
+    <>
+      {measurementLabel} {measurementParenthetical}
+    </>
+  ) : (
+    measurementLabel
+  );
   const basePriceCents = overrideLotPriceCents ?? eurosToCents(product.price);
   const computedPriceCents = editMode ? breakdownPriceCents : basePriceCents;
   const displayPriceLabel =
@@ -3166,10 +3187,10 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   </div>
                   <div className="pd-grid pd-grid--two pd-gap-sm pd-text-xs pd-text-muted">
                     <p>
-                      Disponibilite : {availabilityStart || '-'} {'->'} {availabilityEnd || '-'}
+                      Disponibilité : {availabilityStart || '-'} {'->'} {availabilityEnd || '-'}
                     </p>
                     <p>
-                      Quantites : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
+                      Quantités : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
                     </p>
                     <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
                     <p>Reference producteur : {lot.numeroLot || 'A preciser'}</p>
@@ -3928,7 +3949,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             >
               <Package className="header-action-icon" />
               <span className="header-action-label">
-                {isLotManagement ? 'Quitter la gestion des lots' : 'Gerer les lots'}
+                {isLotManagement ? 'Quitter la gestion des lots' : 'Gérer les lots'}
               </span>
             </button>
             <button
@@ -4068,7 +4089,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Code lot plateforme</span>
+                      <span className="pd-label">Code du lot plateforme</span>
                       <input
                         className="pd-input"
                         value={lotDraft.lotDbId ? lotDraft.id : 'Genere apres enregistrement'}
@@ -4077,7 +4098,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Reference lot producteur</span>
+                      <span className="pd-label">Réference lot producteur</span>
                       <input
                         className="pd-input"
                         value={lotDraft.numeroLot || ''}
@@ -4094,11 +4115,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       >
                         <option value="a_venir">A venir</option>
                         <option value="en_cours">En cours</option>
-                        <option value="epuise">Epuise</option>
+                        <option value="epuise">Epuisé</option>
                       </select>
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Debut</span>
+                      <span className="pd-label">Début de la période de vente du lot</span>
                       <input
                         type="date"
                         className="pd-input"
@@ -4107,7 +4128,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Fin</span>
+                      <span className="pd-label">Fin de la période de vente du lot</span>
                       <input
                         type="date"
                         className="pd-input"
@@ -4116,7 +4137,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Quantite totale</span>
+                      <span className="pd-label">Quantité totale (en unité ou Kg)</span>
                       <input
                         type="number"
                         className="pd-input"
@@ -4129,7 +4150,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Quantite restante</span>
+                      <span className="pd-label">Quantité restante (en unité ou Kg)</span>
                       <input
                         type="number"
                         className="pd-input"
@@ -4227,11 +4248,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                           </div>
                           <p className="pd-text-strong">{displayLot.nomLot || 'Lot sans nom'}</p>
                           <p className="pd-text-xs pd-text-muted">
-                            Reference producteur : {displayLot.numeroLot || 'A preciser'}
+                            Réference producteur : {displayLot.numeroLot || 'A preciser'}
                           </p>
                           <p className="pd-text-xs pd-text-muted">Code lot plateforme : {lot.id}</p>
                           <p className="pd-text-xs pd-text-muted">
-                            Quantites : {displayLot.qteRestante ?? '-'} / {displayLot.qteTotale ?? '-'}
+                            Quantités : {displayLot.qteRestante ?? '-'} / {displayLot.qteTotale ?? '-'}
                           </p>
                         </button>
                       );
@@ -4398,9 +4419,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             ) : (
               <div className="pd-row pd-row--wrap pd-gap-sm pd-text-sm">
                 <span className="pd-price">{displayPriceLabel}</span>
-                <span className="pd-measurement-inline">
-                  {measurementLabel} ({unitValue})
-                </span>
+                <span className="pd-measurement-inline">{measurementInlineLabel}</span>
               </div>
             )}
 

@@ -734,6 +734,7 @@
   background: linear-gradient(135deg, #FFF6EB 0%, #F4F7FF 100%);
   overflow: hidden;
   position: relative;
+  z-index: 0;
 }
 
 .pd-map--circuit {
@@ -1087,4 +1088,7 @@
 
 .pd-related-row > * {
   scroll-snap-align: start;
+}
+.measurement-parenthetical {
+  white-space: nowrap;
 }
