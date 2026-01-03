@@ -1,6 +1,10 @@
 import { Product, GroupOrder, User } from '../types';
 
-const demoImage = (name: string) => `${import.meta.env.BASE_URL}images/demo/${name}`;
+const demoImage = (name: string) => {
+  const base = import.meta.env.BASE_URL ?? '/';
+  const prefix = base === '/' ? '' : base;
+  return `${prefix}images/demo/${name}`;
+};
 
 export const mockUser: User = {
   id: '1',
