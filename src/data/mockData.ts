@@ -1,5 +1,7 @@
 import { Product, GroupOrder, User } from '../types';
 
+const demoImage = (name: string) => `${import.meta.env.BASE_URL}images/demo/${name}`;
+
 export const mockUser: User = {
   id: '1',
   name: 'Marie Dupont',
@@ -47,8 +49,7 @@ export const mockProducts: Product[] = [
     unit: '120g',
     quantity: 30,
     category: 'Fromages & Crèmerie',
-    imageUrl:
-      '/images/demo/chevre-frais.jpg',
+    imageUrl: demoImage('chevre-frais.svg'),
     producerId: 'p2',
     producerName: 'La Chèvrerie du Bois',
     producerLocation: '25 km',
@@ -173,7 +174,7 @@ export const mockProducts: Product[] = [
     unit: '2 kg',
     quantity: 90,
     category: 'Fruits & Légumes',
-    imageUrl: '/images/demo/pommes-pink-lady.jpg',
+    imageUrl: demoImage('pommes-pink-lady.svg'),
     producerId: 'p3',
     producerName: 'Verger du Plateau',
     producerLocation: '9 km',
@@ -190,7 +191,7 @@ export const mockProducts: Product[] = [
     unit: '3 kg',
     quantity: 18,
     category: 'Fruits & Légumes',
-    imageUrl: '/images/demo/panier-gourmand.jpg',
+    imageUrl: demoImage('panier-gourmand.svg'),
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '5 km',
@@ -207,7 +208,7 @@ export const mockProducts: Product[] = [
     unit: '400g',
     quantity: 22,
     category: 'Épicerie Sucrée',
-    imageUrl: '/images/demo/miel-cremeux.jpg',
+    imageUrl: demoImage('miel-cremeux.svg'),
     producerId: 'p4',
     producerName: 'Rucher des Collines',
     producerLocation: '17 km',
@@ -242,8 +243,7 @@ export const mockProducts: Product[] = [
     unit: 'kg',
     quantity: 60,
     category: 'Fruits & Légumes',
-    imageUrl:
-      '/images/demo/courges-butternut.jpg',
+    imageUrl: demoImage('courges-butternut.svg'),
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '4 km',
@@ -296,8 +296,7 @@ export const mockProducts: Product[] = [
     unit: '6 pcs',
     quantity: 36,
     category: 'Fruits & Légumes',
-    imageUrl:
-      '/images/demo/oeufs.jpg',
+    imageUrl: demoImage('oeufs.svg'),
     producerId: 'current-user',
     producerName: 'Ma Ferme',
     producerLocation: '5 km',
@@ -314,7 +313,7 @@ export const mockProducts: Product[] = [
     unit: '250g',
     quantity: 32,
     category: 'Épicerie Sucrée',
-    imageUrl: '/images/demo/confiture-framboise.jpg',
+    imageUrl: demoImage('confiture-framboise.svg'),
     producerId: 'p4',
     producerName: 'Rucher des Collines',
     producerLocation: '18 km',
@@ -331,7 +330,7 @@ export const mockProducts: Product[] = [
     unit: '300g',
     quantity: 27,
     category: 'Épicerie Sucrée',
-    imageUrl: '/images/demo/granola-maison.jpg',
+    imageUrl: demoImage('granola-maison.svg'),
     producerId: 'p5',
     producerName: 'Boulangerie du Village',
     producerLocation: '6 km',

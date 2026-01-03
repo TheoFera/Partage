@@ -1,0 +1,17 @@
+<svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-eggs" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fdfaf3" />
+      <stop offset="100%" stop-color="#f8f2e4" />
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#bg-eggs)" />
+  <ellipse cx="210" cy="230" rx="70" ry="95" fill="#fff9ee" stroke="#e3c987" stroke-width="8" />
+  <ellipse cx="330" cy="240" rx="70" ry="95" fill="#fff9ee" stroke="#e3c987" stroke-width="8" />
+  <ellipse cx="270" cy="250" rx="55" ry="75" fill="#fffefc" stroke="#d4b978" stroke-width="8" />
+  <path d="M150 280 q160 -50 300 0" stroke="#d4b978" stroke-width="10" fill="none" />
+  <text x="300" y="360" font-family="Verdana, Arial, sans-serif" font-size="24" fill="#b0792f" text-anchor="middle">
+    Oeufs plein air
+  </text>
+  <ellipse cx="300" cy="330" rx="160" ry="14" fill="rgba(255,255,255,0.5)" />
+</svg>

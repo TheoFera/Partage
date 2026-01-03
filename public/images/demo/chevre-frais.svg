@@ -1,0 +1,21 @@
+<svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-goat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff4e6" />
+      <stop offset="100%" stop-color="#f2e6d7" />
+    </linearGradient>
+  </defs>
+  <rect width="600" height="400" fill="url(#bg-goat)" />
+  <circle cx="300" cy="230" r="110" fill="#fff9f0" stroke="#d3bfa1" stroke-width="10" />
+  <circle cx="260" cy="200" r="18" fill="#4f4d5b" />
+  <circle cx="340" cy="200" r="18" fill="#4f4d5b" />
+  <path d="M250 180 q20 -30 50 0" stroke="#4f4d5b" stroke-width="8" fill="none" />
+  <path d="M350 180 q-20 -30 -50 0" stroke="#4f4d5b" stroke-width="8" fill="none" />
+  <path d="M260 240 q40 30 80 0" stroke="#c0a47c" stroke-width="12" fill="none" />
+  <path d="M200 170 q-40 -20 -70 0 q30 40 70 25 z" fill="#f7e1cf" stroke="#d3bfa1" stroke-width="6" />
+  <path d="M400 170 q40 -20 70 0 q-30 40 -70 25 z" fill="#f7e1cf" stroke="#d3bfa1" stroke-width="6" />
+  <ellipse cx="300" cy="320" rx="140" ry="18" fill="rgba(255,255,255,0.6)" />
+  <text x="300" y="360" text-anchor="middle" font-family="Verdana, Arial, sans-serif" font-size="24" fill="#c48251">
+    Fromage de chevre frais
+  </text>
+</svg>
