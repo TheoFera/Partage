@@ -779,7 +779,7 @@ export function ProductsLanding({
               >
                 <ChevronDown className="modern-intro__chevron" aria-hidden="true" />
                 <span className="modern-intro__count">{orderGroups.length}</span>
-                <span className="modern-intro__text"> commandes disponibles</span>
+                <span className="modern-intro__text"> commandes en cours</span>
                 <ChevronDown className="modern-intro__chevron" aria-hidden="true" />
               </button>
               {orderGroups.length ? (
@@ -1362,6 +1362,10 @@ export function ProductGroupContainer({
         selected ? 'border-2 border-[#FF6B4A]' : 'border border-[#FFE0D1]'
       }`}
       style={containerStyle}
+      onMouseLeave={() => {
+        setHeaderHover(false);
+        setBodyHover(false);
+      }}
     >
       {/* Header */}
       <div
@@ -1458,6 +1462,7 @@ export function ProductGroupContainer({
           }}
           className="products-landing__header-overlay"
           data-visible={showHeaderOverlay ? 'true' : 'false'}
+          onMouseLeave={() => setHeaderHover(false)}
         >
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {isOrder ? (
