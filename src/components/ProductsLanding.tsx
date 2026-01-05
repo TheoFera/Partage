@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ShoppingCart,
   Heart,
 } from 'lucide-react';
 import {
@@ -1455,6 +1456,8 @@ export function ProductGroupContainer({
             transition: 'opacity 160ms ease-out',
             pointerEvents: showHeaderOverlay ? 'auto' : 'none',
           }}
+          className="products-landing__header-overlay"
+          data-visible={showHeaderOverlay ? 'true' : 'false'}
         >
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {isOrder ? (
@@ -1540,20 +1543,58 @@ export function ProductGroupContainer({
               <button
                 type="button"
                 onClick={() => onCreateOrder(firstProduct)}
-                className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
-                style={{ minWidth: '90px' }}
+                className="products-landing__header-overlay-button px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
+                style={{
+                  minWidth: '90px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: '9999px',
+                  background: '#FF6B4A',
+                  color: '#FFFFFF',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.01em',
+                  whiteSpace: 'nowrap',
+                  transition: 'background 150ms ease, transform 150ms ease',
+                  boxShadow: '0 12px 22px -14px rgba(255, 107, 74, 0.8)',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
               >
-                Créer
+                <ShoppingCart className="w-4 h-4"/>
+                <span>Créer</span>
               </button>
             )}
             {isOrder && onOpenOrder && (
               <button
                 type="button"
                 onClick={() => onOpenOrder(group.orderId ?? group.id)}
-                className="px-4 py-2 rounded-full bg-[#FF6B4A] text-white text-xs font-semibold hover:bg-[#FF5A39] transition-colors whitespace-nowrap shadow-sm"
-                style={{ minWidth: '90px' }}
+                className="products-landing__header-overlay-button"
+                style={{
+                  minWidth: '90px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: '9999px',
+                  background: '#FF6B4A',
+                  color: '#FFFFFF',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  letterSpacing: '-0.01em',
+                  whiteSpace: 'nowrap',
+                  transition: 'background 150ms ease, transform 150ms ease',
+                  boxShadow: '0 12px 22px -14px rgba(255, 107, 74, 0.8)',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
               >
-                Participer
+                <ShoppingCart className="w-4 h-4"/>
+                <span>Participer</span>
               </button>
             )}
           </div>

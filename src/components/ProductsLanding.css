@@ -158,6 +158,24 @@
   display: none;
 }
 
+.products-landing__header-overlay-button {
+  transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.products-landing__header-overlay[data-visible='true'] .products-landing__header-overlay-button {
+  animation: products-landing__cta-pulse 400ms ease-in-out infinite alternate;
+  box-shadow: 10px 24px 32px -18px rgba(255, 107, 74, 0.85);
+}
+
+@keyframes products-landing__cta-pulse {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(0) scale(1.1);
+  }
+}
+
 .products-landing__category-button {
   flex: 0 0 auto;
   display: inline-flex;

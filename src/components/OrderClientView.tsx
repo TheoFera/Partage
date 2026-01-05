@@ -50,7 +50,9 @@ function labelForDay(day?: string) {
   return map[day] ?? day;
 }
 
-function formatPickupSlotLabel(slot: GroupOrder['pickupSlots'][number]) {
+type PickupSlot = NonNullable<GroupOrder['pickupSlots']>[number];
+
+function formatPickupSlotLabel(slot: PickupSlot) {
   if (slot.date) {
     const date = new Date(slot.date);
     if (!Number.isNaN(date.getTime())) {
@@ -649,7 +651,7 @@ export function OrderClientView({
                 className="order-client-view__purchase-button"
               >
                 <ShoppingCart className="w-4 h-4" />
-                Participer
+                Payer
               </button>
             </div>
             </div>
