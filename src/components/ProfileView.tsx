@@ -238,6 +238,67 @@ export function ProfileView({
     }
   }, [onMessageUser]);
 
+const buildProfileHandle = React.useCallback((value?: string | null) => {
+  return value ? value.toLowerCase().replace(/\s+/g, '') : '';
+}, []);
+
+const orderSharerIds = React.useMemo(() => {
+  const ids = new Set<string>();
+  const visible = isOwnProfile ? orders : orders.filter((order) => order.visibility === 'public');
+  visible.forEach((order) => {
+    const sharerId = (order as any).sharerId ?? (order as any).sharerProfileId;
+    if (typeof sharerId === 'string' && sharerId.trim()) ids.add(sharerId);
+  });
+  return Array.from(ids);
+}, [orders, isOwnProfile]);
+
+const [profileMetaById, setProfileMetaById] = React.useState<
+  Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }>
+>({});
+
+React.useEffect(() => {
+  let active = true;
+
+  if (!supabaseClient || orderSharerIds.length === 0) {
+    setProfileMetaById({});
+    return () => {
+      active = false;
+    };
+  }
+
+  (async () => {
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .select('id, handle, avatar_path, avatar_updated_at')
+      .in('id', orderSharerIds);
+
+    if (!active) return;
+
+    if (error) {
+      console.warn('[ProfileView] fetch profile meta error', error);
+      setProfileMetaById({});
+      return;
+    }
+
+    const mapped: Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }> = {};
+    (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+      const id = typeof row.id === 'string' ? row.id : '';
+      if (!id) return;
+      mapped[id] = {
+        path: (row.avatar_path as string | null) ?? null,
+        updatedAt: (row.avatar_updated_at as string | null) ?? null,
+        handle: (row.handle as string | null) ?? null,
+      };
+    });
+
+    setProfileMetaById(mapped);
+  })();
+
+  return () => {
+    active = false;
+  };
+}, [orderSharerIds, supabaseClient]);
+
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     const mergedMap = new Map<string, GroupOrder>();
     const visible = isOwnProfile ? orders : orders.filter((order) => order.visibility === 'public');
@@ -255,6 +316,11 @@ export function ProfileView({
         order.producerName ||
         order.sharerName ||
         '';
+      const sharerId = (order as any).sharerId ?? (order as any).sharerProfileId ?? '';
+      const meta = sharerId ? profileMetaById[sharerId] : undefined;
+      const handleFromDb = (meta?.handle ?? '').trim();
+      const fallbackHandle = buildProfileHandle(order.sharerName || order.producerName || '');
+      const resolvedHandle = handleFromDb || fallbackHandle;
         return {
           id: order.id,
           orderId: order.orderCode ?? order.id,
@@ -264,6 +330,7 @@ export function ProfileView({
           products: sortedProducts,
           variant: 'order',
           status: order.status,
+          statusUpdatedAt: order.statusUpdatedAt,
           sharerName: order.sharerName || order.producerName,
           sharerPercentage: order.sharerPercentage,
           minWeight: order.minWeight,
@@ -271,10 +338,13 @@ export function ProfileView({
           orderedWeight: order.orderedWeight,
           deliveryFeeCents: order.deliveryFeeCents,
           deadline: deadlineDate,
+          profileHandle: resolvedHandle || undefined,
+          avatarPath: meta?.path ?? null,
+          avatarUpdatedAt: meta?.updatedAt ?? null,
           avatarUrl: sortedProducts[0]?.imageUrl,
         };
     });
-  }, [orders, isOwnProfile]);
+  }, [orders, isOwnProfile, profileMetaById]);
 
   const productCount = producerProducts.length;
   const ordersCount = orderGroups.length;
@@ -432,6 +502,7 @@ export function ProfileView({
             <div key={`order-${group.id}`} className="profile-group-item">
               <ProductGroupContainer
                 group={group}
+                supabaseClient={supabaseClient ?? null}
                 canSave={canSaveProducts}
                 deckIds={selectionSet}
                 onSave={onAddToDeck}
@@ -1585,7 +1656,7 @@ function ProfileEditPanel({
               <h3 className="text-[#1F2937] font-semibold">Contacts publics</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm text-[#6B7280]">Telephone public</label>
+                  <label className="block text-sm text-[#6B7280]">Téléphone public</label>
                   <input
                     type="text"
                     value={phonePublic}

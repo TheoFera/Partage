@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEMO_MODE } from '../data/productsProvider';
 import { getSupabaseClient } from '../lib/supabaseClient';
 import { mockGroupOrders } from '../data/mockData';
-import type { GroupOrder, Product, ProductListingRow } from '../types';
+import type { DbProduct, GroupOrder, Product, ProductListingRow } from '../types';
 import {
   centsToEuros,
   type DbOrder,
@@ -94,6 +94,9 @@ const ensureDemoState = (order: GroupOrder): DemoOrderState => {
     totalAmountCents: 0,
     createdAt: now,
     updatedAt: now,
+    pickupCode: null,
+    pickupCodeGeneratedAt: null,
+    pickedUpAt: null,
     profileName: order.sharerName ?? 'Partageur',
     profileHandle: null,
     avatarPath: null,
@@ -341,11 +344,44 @@ const mapProductListingToProduct = (row: ProductListingRow, client: SupabaseClie
   };
 };
 
+const mapDbProductToListingRow = (row: DbProduct): ProductListingRow => ({
+  product_id: row.id,
+  product_code: row.product_code,
+  slug: row.slug,
+  name: row.name,
+  category: row.category,
+  sale_unit: row.sale_unit,
+  packaging: row.packaging,
+  unit_weight_kg: row.unit_weight_kg ?? null,
+  description: row.description ?? null,
+  default_price_cents: row.default_price_cents ?? null,
+  producer_profile_id: row.producer_profile_id ?? null,
+  producer_name: row.producer_name ?? null,
+  producer_location: row.producer_location ?? null,
+  primary_image_path: null,
+  active_lot_id: null,
+  active_lot_code: null,
+  active_lot_price_cents: null,
+  active_lot_stock_units: null,
+  active_lot_stock_kg: null,
+  display_price_cents: row.default_price_cents ?? null,
+});
+
 const fetchProductsByIds = async (client: SupabaseClient, productIds: string[]) => {
   if (!productIds.length) return [] as ProductListingRow[];
   const { data, error } = await client.from('v_products_listing').select('*').in('product_id', productIds);
   if (error) throw error;
-  return (data as ProductListingRow[]) ?? [];
+  const listingRows = (data as ProductListingRow[]) ?? [];
+  const listingIds = new Set(listingRows.map((row) => row.product_id));
+  const missingIds = productIds.filter((id) => !listingIds.has(id));
+  if (!missingIds.length) return listingRows;
+  const { data: fallbackData, error: fallbackError } = await client
+    .from('products')
+    .select('*')
+    .in('id', missingIds);
+  if (fallbackError) throw fallbackError;
+  const fallbackRows = ((fallbackData as DbProduct[]) ?? []).map(mapDbProductToListingRow);
+  return [...listingRows, ...fallbackRows];
 };
 
 const fetchProductsByCodes = async (client: SupabaseClient, productCodes: string[]) => {
@@ -365,7 +401,7 @@ const fetchProfilesByIds = async (client: SupabaseClient, profileIds: string[]) 
   return (data as Array<Record<string, unknown>>) ?? [];
 };
 
-const isPositiveNumber = (value: number | null | undefined) =>
+const isPositiveNumber = (value: number | null | undefined): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 const resolveUnitWeightKg = (saleUnit: string | null, unitWeightKg: number | null, packaging?: string | null) => {
@@ -942,18 +978,21 @@ export const requestParticipation = async (orderCode: string, profileId: string,
       reviewedBy: null,
       pickupSlotId: null,
       pickupSlotStatus: null,
-      pickupSlotRequestedAt: null,
-      pickupSlotReviewedAt: null,
-      pickupSlotReviewedBy: null,
-      totalWeightKg: 0,
-      totalAmountCents: 0,
-      createdAt: now,
-      updatedAt: now,
-      profileName: null,
-      profileHandle: null,
-      avatarPath: null,
-      avatarUpdatedAt: null,
-    };
+    pickupSlotRequestedAt: null,
+    pickupSlotReviewedAt: null,
+    pickupSlotReviewedBy: null,
+    totalWeightKg: 0,
+    totalAmountCents: 0,
+    createdAt: now,
+    updatedAt: now,
+    pickupCode: null,
+    pickupCodeGeneratedAt: null,
+    pickedUpAt: null,
+    profileName: null,
+    profileHandle: null,
+    avatarPath: null,
+    avatarUpdatedAt: null,
+  };
     state.participants.push(participant);
     return participant;
   }
@@ -1296,7 +1335,7 @@ export const listOrdersForUser = async (profileId: string): Promise<GroupOrder[]
 
 export const listPublicOrders = async (): Promise<GroupOrder[]> => {
   const client = getClient();
-  const { data, error } = await client.from('orders').select('*').eq('visibility', 'public').eq('status', 'open');
+  const { data, error } = await client.from('orders').select('*').eq('visibility', 'public');
   if (error) throw error;
   return buildGroupOrdersFromRows(client, (data as DbOrder[]) ?? []);
 };
@@ -1390,6 +1429,7 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
       message: order.message ?? '',
       status: order.status,
       visibility: order.visibility,
+      statusUpdatedAt: order.updatedAt,
       autoApproveParticipationRequests: order.autoApproveParticipationRequests,
       allowSharerMessages: order.allowSharerMessages,
       autoApprovePickupSlots: order.autoApprovePickupSlots,
@@ -1471,10 +1511,24 @@ export const getParticipantByProfile = async (orderId: string, profileId: string
   return mapParticipantRow(data as DbOrderParticipant);
 };
 
-export const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
+export const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<OrderStatus> => {
+  if (DEMO_MODE) {
+    demoOrderOverrides.set(orderId, { status });
+    return status;
+  }
   const client = getClient();
-  const { error } = await client.from('orders').update({ status }).eq('id', orderId);
+  const { error: rpcError } = await client.rpc('set_order_status', {
+    p_order_id: orderId,
+    p_status: status,
+  });
+  if (rpcError) throw rpcError;
+
+  const { data, error } = await client.from('orders').select('status').eq('id', orderId).maybeSingle();
   if (error) throw error;
+  if (!data?.status) {
+    throw new Error("Aucune ligne mise a jour. Verifiez les droits d'acces sur la commande.");
+  }
+  return data.status as OrderStatus;
 };
 
 export const updateOrderVisibility = async (orderId: string, visibility: 'public' | 'private') => {

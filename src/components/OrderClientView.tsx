@@ -24,7 +24,7 @@ import { toast } from 'sonner';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import './OrderClientView.css';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
-import { getOrderStatusLabel } from '../lib/orderStatus';
+import { getOrderStatusLabel, getOrderStatusProgress } from '../lib/orderStatus';
 import {
   addItem,
   approveParticipation,
@@ -38,7 +38,7 @@ import {
   updateOrderStatus,
   updateOrderVisibility,
 } from '../services/orders';
-import { centsToEuros, type OrderFull } from '../types/orders';
+import { centsToEuros, type OrderFull, type OrderStatus } from '../types/orders';
 
 interface OrderClientViewProps {
   onClose: () => void;
@@ -129,6 +129,12 @@ const resolveOrderEffectiveWeightKg = (
   }
   return Math.max(current, min);
 };
+
+const ORDER_DELIVERY_OPTION_LABELS = {
+  chronofresh: 'Chronofresh',
+  producer_delivery: 'Livraison producteur',
+  producer_pickup: 'Retrait par le partageur',
+} as const;
 
 const ORDER_CARD_WIDTH = CARD_WIDTH;
 
@@ -306,20 +312,47 @@ export function OrderClientView({
       weightKg: unitWeightKg ?? undefined,
     };
   });
-  const sharerParticipant = orderFullValue.participants.find((participant) => participant.role === 'sharer');
-  const sharerName = sharerParticipant?.profileName ?? 'Partageur';
+
+const profiles = orderFullValue.profiles ?? {};
+
+const sharerProfileId = order.sharerProfileId;
+const sharerProfileMeta = sharerProfileId ? profiles[sharerProfileId] : undefined;
+
+const sharerParticipant = orderFullValue.participants.find((p) => p.role === 'sharer');
+
+const sharerName =
+  sharerProfileMeta?.name ??
+  sharerParticipant?.profileName ??
+  'Partageur';
+
+const sharerProfileHandle =
+  sharerProfileMeta?.handle ??
+  sharerParticipant?.profileHandle ??
+  null;
+
+const sharerAvatarPath =
+  sharerProfileMeta?.avatarPath ??
+  sharerParticipant?.avatarPath ??
+  null;
+
+const sharerAvatarUpdatedAt =
+  sharerProfileMeta?.avatarUpdatedAt ??
+  sharerParticipant?.avatarUpdatedAt ??
+  null;
+
+
   const isOwner = Boolean(
     currentUser &&
       (currentUser.id === order.sharerProfileId || currentUser.id === order.createdBy)
   );
-  const isProducer = Boolean(currentUser && currentUser.id === order.producerProfileId);
+  const isProducer = Boolean(
+    currentUser &&
+      (currentUser.id === order.producerProfileId ||
+        currentUser.producerId === order.producerProfileId)
+  );
   const canShowPickupCodes = isOwner || isProducer;
   const myParticipant = currentUser
     ? orderFullValue.participants.find((participant) => participant.profileId === currentUser.id)
-    : undefined;
-  const profiles = orderFullValue.profiles ?? {};
-  const sharerProfileMeta = sharerParticipant?.profileId
-    ? profiles[sharerParticipant.profileId]
     : undefined;
   const producerProfileMeta =
     order.producerProfileId && order.producerProfileId !== ''
@@ -337,10 +370,7 @@ export function OrderClientView({
     if (!target) return;
     navigate(`/profil/${encodeURIComponent(target)}`);
   };
-  const sharerProfileHandle = sharerProfileMeta?.handle ?? sharerParticipant?.profileHandle ?? null;
   const producerProfileHandle = producerProfileMeta?.handle ?? null;
-  const sharerAvatarPath = sharerProfileMeta?.avatarPath ?? sharerParticipant?.avatarPath ?? null;
-  const sharerAvatarUpdatedAt = sharerProfileMeta?.avatarUpdatedAt ?? sharerParticipant?.avatarUpdatedAt ?? null;
   const producerAvatarPath = producerProfileMeta?.avatarPath ?? null;
   const producerAvatarUpdatedAt = producerProfileMeta?.avatarUpdatedAt ?? null;
   const updateOrderLocal = (updates: Partial<typeof order>) => {
@@ -588,8 +618,8 @@ export function OrderClientView({
     if (!isOwner || isWorking || order.status === 'locked') return;
     setIsWorking(true);
     updateOrderStatus(order.id, 'locked')
-      .then(() => {
-        updateOrderLocal({ status: 'locked' });
+      .then((updatedStatus) => {
+        updateOrderLocal({ status: updatedStatus });
         toast.success('Commande cloturee.');
       })
       .catch((error) => {
@@ -598,6 +628,79 @@ export function OrderClientView({
       })
       .finally(() => setIsWorking(false));
   };
+
+  const handleStatusUpdate = (nextStatus: OrderStatus, successMessage: string) => {
+    if (isWorking) return;
+    setIsWorking(true);
+    updateOrderStatus(order.id, nextStatus)
+      .then((updatedStatus) => {
+        updateOrderLocal({ status: updatedStatus });
+        toast.success(successMessage);
+      })
+      .catch((error) => {
+        console.error('Order status update error:', error);
+        toast.error('Impossible de mettre a jour le statut de la commande.');
+      })
+      .finally(() => setIsWorking(false));
+  };
+
+  const statusActions = React.useMemo(() => {
+    const actions: Array<{
+      id: string;
+      label: string;
+      nextStatus: OrderStatus;
+      successMessage: string;
+    }> = [];
+    if (isProducer) {
+      if (order.status === 'locked') {
+        actions.push({
+          id: 'producer-confirmed',
+          label: 'Confirmer la commande',
+          nextStatus: 'confirmed',
+          successMessage: 'Commande confirmée.',
+        });
+      } else if (order.status === 'confirmed') {
+        actions.push({
+          id: 'producer-preparing',
+          label: 'Démarrer la préparation',
+          nextStatus: 'preparing',
+          successMessage: 'Préparation demarrée.',
+        });
+      } else if (order.status === 'preparing') {
+        actions.push({
+          id: 'producer-prepared',
+          label: 'Commencer à livrer',
+          nextStatus: 'prepared',
+          successMessage: 'La commande est désormais en train de se faire livrer.',
+        });
+      }
+    }
+    if (isOwner) {
+      if (order.status === 'prepared') {
+        actions.push({
+          id: 'owner-delivered',
+          label: 'Commande livrée',
+          nextStatus: 'delivered',
+          successMessage: 'La commande a bien été réceptionnée.',
+        });
+      } else if (order.status === 'delivered') {
+        actions.push({
+          id: 'owner-distributed',
+          label: 'Commande distribuée',
+          nextStatus: 'distributed',
+          successMessage: 'Les participants ont récupéré leur commande.',
+        });
+      } else if (order.status === 'distributed') {
+        actions.push({
+          id: 'owner-finished',
+          label: 'Terminer la commande',
+          nextStatus: 'finished',
+          successMessage: 'Commande terminée.',
+        });
+      }
+    }
+    return actions;
+  }, [isOwner, isProducer, order.status]);
 
   const handlePurchase = async () => {
     if (totalCards === 0) {
@@ -753,7 +856,17 @@ export function OrderClientView({
       .filter(Boolean)
       .join(', ') ||
     [order.pickupPostcode, order.pickupCity].filter(Boolean).join(' ') ||
-    'Lieu précis communiqué après paiement';
+    'Lieu précis communiqué aprÃ¨s paiement';
+
+  const deliveryAddress =
+    [order.deliveryStreet, [order.deliveryPostcode, order.deliveryCity].filter(Boolean).join(' ') || undefined]
+      .filter(Boolean)
+      .join(', ') ||
+    order.deliveryAddress ||
+    'Adresse non renseignee';
+  const deliveryInfo = order.deliveryInfo?.trim() || '';
+  const pickupInfo = order.pickupInfo?.trim() || '';
+  const deliveryModeLabel = ORDER_DELIVERY_OPTION_LABELS[order.deliveryOption] ?? 'Livraison';
 
   const estimatedDeliveryDate =
     order.estimatedDeliveryDate instanceof Date
@@ -809,6 +922,26 @@ export function OrderClientView({
     pickupDurationLabel && pickupWindowEndDate
       ? `${pickupDurationLabel} (jusqu'au ${pickupWindowEndDate.toLocaleDateString('fr-FR')})`
       : pickupDurationLabel;
+  const deliveryDetailLines = React.useMemo(() => {
+    const lines = [`Adresse de livraison : ${deliveryAddress}`];
+    if (deliveryInfo) lines.push(`Infos livraison : ${deliveryInfo}`);
+    if (order.deliveryOption === 'producer_pickup') {
+      if (pickupAddress) lines.push(`Adresse de retrait : ${pickupAddress}`);
+      if (pickupInfo) lines.push(`Infos retrait : ${pickupInfo}`);
+      if (pickupWindowLabel) lines.push(`Fenetre de retrait : ${pickupWindowLabel}`);
+    } else if (deliveryDateLabel) {
+      lines.push(`Livraison estimee : ${deliveryDateLabel}`);
+    }
+    return lines;
+  }, [
+    deliveryAddress,
+    deliveryInfo,
+    deliveryDateLabel,
+    order.deliveryOption,
+    pickupAddress,
+    pickupInfo,
+    pickupWindowLabel,
+  ]);
   const pickupLine = deliveryDateLabel
     ? `Livraison estimee : ${deliveryDateLabel}`
     : hasPickupSlots
@@ -839,6 +972,13 @@ export function OrderClientView({
           : statusTone === 'muted'
             ? 'bg-[#F3F4F6] text-[#4B5563] border-[#E5E7EB]'
             : 'bg-[#E0F2FE] text-[#075985] border-[#BAE6FD]';
+  const statusProgress = getOrderStatusProgress(order.status);
+  const canViewStatusProgress =
+    order.status !== 'open' &&
+    (isProducer || isOwner || Boolean(myParticipant?.participationStatus === 'accepted'));
+  const showStatusProgress = canViewStatusProgress && statusProgress !== null;
+  const statusProgressPercent = statusProgress ? Math.round(statusProgress.ratio * 100) : 0;
+  const statusProgressLabel = statusProgress ? `Etape ${statusProgress.step}/${statusProgress.total}` : '';
   const productCodeByDbId = React.useMemo(() => {
     const entries = orderFullValue.productsOffered.map((entry) => [
       entry.productId,
@@ -882,12 +1022,29 @@ export function OrderClientView({
     () => ({ profile: true, content: true, weight: true, amount: true }),
     []
   );
+  const baseParticipantVisibility = React.useMemo(
+    () => ({
+      profile: order.visibility === 'public' ? false : participantsVisibility.profile,
+      content: participantsVisibility.content,
+      weight: participantsVisibility.weight,
+      amount: participantsVisibility.amount,
+    }),
+    [order.visibility, participantsVisibility]
+  );
+  const producerParticipantVisibility = React.useMemo(
+    () => ({
+      profile: false,
+      content: true,
+      weight: true,
+      amount: participantsVisibility.amount,
+    }),
+    [participantsVisibility.amount]
+  );
   const viewerVisibility = isOwner
     ? ownerVisibility
-    : {
-        ...order.participantsVisibility,
-        profile: order.visibility === 'public' ? false : order.participantsVisibility.profile,
-      };
+    : isProducer
+      ? producerParticipantVisibility
+      : baseParticipantVisibility;
   const isProfileVisibilityLocked = order.visibility === 'public';
   const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
   const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
@@ -1063,9 +1220,6 @@ export function OrderClientView({
                       à la commande
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 text-xs font-semibold">
-                    <span className={`px-2.5 py-1 rounded-full border ${statusColor}`}>{statusLabel}</span>
-                  </div>
                 </div>
               </div>
 
@@ -1125,6 +1279,20 @@ export function OrderClientView({
                   )}
                   <p className="text-xs text-[#6B7280]">{pickupAddress}</p>
                 </div>
+                {isProducer && (
+                  <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
+                      <Globe2 className="w-4 h-4 text-[#FF6B4A]" />
+                      Livraison
+                    </div>
+                    <p className="text-[#1F2937] font-semibold text-lg leading-tight">{deliveryModeLabel}</p>
+                    {deliveryDetailLines.map((line, index) => (
+                      <p key={`delivery-${index}`} className="text-xs text-[#6B7280]">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {order.message && (
@@ -1138,30 +1306,32 @@ export function OrderClientView({
             </div>
           </div>
 
-          <div className="order-client-view__products-section space-y-4 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-            <div className="h-px bg-gray-100" />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-semibold text-[#1F2937]">Choisissez vos produits</h3>
+          {!isProducer && (
+            <div className="order-client-view__products-section space-y-4 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+              <div className="h-px bg-gray-100" />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#1F2937]">Choisissez vos produits</h3>
+                </div>
               </div>
-            </div>
 
-            {products.length === 0 ? (
-              <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
-                Aucun produit n'est associe a cette commande pour l'instant.
-              </div>
-            ) : (
-              <OrderProductsCarousel
-                products={products}
-                quantities={quantities}
-                onDeltaQuantity={handleQuantityChange}
-                onDirectQuantity={(productId, value) =>
-                  setQuantities((prev) => ({ ...prev, [productId]: Math.max(0, value) }))
-                }
-                unitPriceLabelsById={unitPriceLabelsById}
-              />
-            )}
-          </div>
+              {products.length === 0 ? (
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
+                  Aucun produit n'est associe a cette commande pour l'instant.
+                </div>
+              ) : (
+                <OrderProductsCarousel
+                  products={products}
+                  quantities={quantities}
+                  onDeltaQuantity={handleQuantityChange}
+                  onDirectQuantity={(productId, value) =>
+                    setQuantities((prev) => ({ ...prev, [productId]: Math.max(0, value) }))
+                  }
+                  unitPriceLabelsById={unitPriceLabelsById}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         <div className="order-client-view__aside">
@@ -1172,47 +1342,85 @@ export function OrderClientView({
                 <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] border border-[#FF6B4A]/20">
                   <Users className="w-4 h-4" />
                 </span>
-                <p className="text-lg font-semibold text-[#1F2937] leading-snug">Progression de la commande : partagez là autour de vous pour qu'elle soit complétée</p>
+                <p className="text-lg font-semibold text-[#1F2937] leading-snug">
+                  {showStatusProgress
+                    ? 'Progression de la commande'
+                    : "Progression de la commande"}
+                </p>
               </div>
               <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white text-[#B45309] border border-[#FFDCC4] font-semibold text-sm shadow-sm">
-                {progressPercent.toFixed(0)}%
+                {showStatusProgress ? `${statusProgressPercent}%` : `${progressPercent.toFixed(0)}%`}
               </span>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
-                <span className="text-[#15803d] font-semibold">Déjà achetés : {alreadyOrderedWeight.toFixed(2)} kg</span>
-                <span className="text-[#d97706] font-semibold">Votre sélection : {selectedWeight.toFixed(2)} kg</span>
-                <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeightKg} kg</span>
+            {showStatusProgress && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
+                  <span className="text-[#FF6B4A] font-semibold">{statusProgressLabel}</span>
+                  <span className="text-[#1F2937] font-semibold">Statut : {statusLabel}</span>
+                </div>
+                <div className="order-client-view__status-progress-track">
+                  <div
+                    className="order-client-view__status-progress-fill"
+                    style={{ width: `${statusProgressPercent}%` }}
+                  />
+                </div>
+                {statusActions.length > 0 && (
+                  <div className="flex flex-wrap gap-3">
+                    {statusActions.map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className="order-client-view__purchase-button"
+                        onClick={() => handleStatusUpdate(action.nextStatus, action.successMessage)}
+                        disabled={isWorking}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <p className="text-[11px] text-[#6B7280]">
+                  Étapes : open - locked - confirmed - preparing - prepared - delivered - distributed - finished
+                </p>
               </div>
-              <div
-                className="relative w-full h-5 rounded-full bg-[#F3F4F6] overflow-hidden border border-[#E5E7EB]"
-                style={{ boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.08)' }}
-              >
-                <div
-                  className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-[#22c55e] to-[#16a34a] transition-all duration-500 ease-out"
-                  style={baseSegmentStyle}
-                />
-                <div
-                  className="absolute top-0 h-full rounded-full bg-gradient-to-r from-[#facc15] to-[#f59e0b] transition-all duration-500 ease-out"
-                  style={selectionSegmentStyle}
-                />
-              </div>
-            </div>
+            )}
 
-            {extraPercent > 0 && (
+            {!showStatusProgress && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
+                  <span className="text-[#15803d] font-semibold">Déjà achetés : {alreadyOrderedWeight.toFixed(2)} kg</span>
+                  <span className="text-[#d97706] font-semibold">Votre sélection : {selectedWeight.toFixed(2)} kg</span>
+                  <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeightKg} kg</span>
+                </div>
+                <div className="order-client-view__progress-track">
+                  <div
+                    className="order-client-view__progress-fill order-client-view__progress-fill--base"
+                    style={baseSegmentStyle}
+                  />
+                  <div
+                    className="order-client-view__progress-fill order-client-view__progress-fill--selection"
+                    style={selectionSegmentStyle}
+                  />
+                </div>
+              </div>
+            )}
+
+            {!showStatusProgress && extraPercent > 0 && (
               <div className="flex items-start gap-3 text-xs text-[#9A3412] bg-[#FFF7ED] border border-[#FFDCC4] rounded-2xl px-3 py-3 shadow-sm">
                 <span className="inline-flex w-2 h-2 mt-1 rounded-full bg-[#FF6B4A]" />
                 <span>Les {extraPercent.toFixed(0)}% au-dessus du minimum requis pour lancer la commande vous permettent d'obtenir des avoirs sur des prochaines commandes.</span>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="bg-[#FFF9F3] border border-[#FFDCC4] rounded-2xl p-3 space-y-1 shadow-sm">
-                <p className="text-xs text-[#B45309] font-semibold">Poids restant</p>
-                <p className="text-xl font-semibold text-[#1F2937]">{remainingWeight.toFixed(2)} kg</p>
+            {!showStatusProgress && (
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="bg-[#FFF9F3] border border-[#FFDCC4] rounded-2xl p-3 space-y-1 shadow-sm">
+                  <p className="text-xs text-[#B45309] font-semibold">Poids restant</p>
+                  <p className="text-xl font-semibold text-[#1F2937]">{remainingWeight.toFixed(2)} kg</p>
+                </div>
               </div>
-            </div>
+            )}
             {isOwner && (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -1247,11 +1455,15 @@ export function OrderClientView({
                   <ShieldCheck className="w-4 h-4" />
                   Clôturer
                 </button>
+                <div className="flex items-center gap-2 text-xs font-semibold">
+                    <span className={`px-2.5 py-1 rounded-full border ${statusColor}`}>Statut de la commande : {statusLabel}</span>
+                  </div>
               </div>
             )}
           </div>
 
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
+            {!isProducer && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
             <div className="text-sm text-[#6B7280] space-y-1">
               <p>
                 Total : <span className="text-[#1F2937] font-semibold">{totalCards}</span>
@@ -1291,6 +1503,7 @@ export function OrderClientView({
               </button>
             </div>
             </div>
+            )}
           </div>
         </div>
       </div>

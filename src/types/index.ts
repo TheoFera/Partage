@@ -124,6 +124,7 @@ export interface GroupOrder {
     | 'finished'
     | 'cancelled';
   visibility: 'public' | 'private';
+  statusUpdatedAt?: Date;
   autoApproveParticipationRequests?: boolean;
   allowSharerMessages?: boolean;
   autoApprovePickupSlots?: boolean;

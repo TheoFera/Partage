@@ -8,7 +8,7 @@ import { FiltersPopover } from './FiltersPopover';
 import './ProductsLanding.css';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
 import { formatUnitWeightLabel } from '../lib/weight';
-import { getOrderStatusLabel } from '../lib/orderStatus';
+import { getOrderStatusLabel, getOrderStatusProgress } from '../lib/orderStatus';
 import {
   Sparkles,
   MapPin,
@@ -69,6 +69,7 @@ export interface ProductGroupDescriptor {
   orderedWeight?: number;
   deliveryFeeCents?: number;
   deadline?: Date;
+  statusUpdatedAt?: Date;
   avatarUrl?: string;
   avatarPath?: string | null;
   avatarUpdatedAt?: string | null;
@@ -386,6 +387,7 @@ export function ProductsLanding({
 
   const ordersResults = React.useMemo(() => {
     return filteredOrders.filter((order) => {
+      if (order.status !== 'open') return false;
       const orderHasMatch = order.products.some((product) => {
         if (!hasValidLotPrice(product)) return false;
         const categorySlug = slugify(product.category);
@@ -513,6 +515,7 @@ export function ProductsLanding({
           products: sortedProducts,
           variant: 'order',
           status: order.status,
+          statusUpdatedAt: order.statusUpdatedAt,
           profileHandle: profileMetaById[order.sharerId]?.handle ?? undefined,
           sharerName: order.sharerName,
           sharerPercentage: order.sharerPercentage,
@@ -1258,15 +1261,27 @@ export function ProductGroupContainer({
   const orderProgress = React.useMemo(() => {
     if (group.variant !== 'order') return null;
     const target = group.minWeight ?? group.maxWeight ?? 0;
-    const current = group.orderedWeight ?? 0;
+    const current = Math.max(0, group.orderedWeight ?? 0);
     if (!(target > 0)) return { ratio: 0, label: null };
-    const ratio = Math.max(0, Math.min(1, current / target));
-    const percentLabel = `${Math.round(ratio * 100)}%`;
+    const rawRatio = current / target;
+    const ratio = Math.max(0, Math.min(1, rawRatio));
+    const percentLabel = `${Math.round(Math.max(0, rawRatio) * 100)}%`;
     return { ratio, label: percentLabel };
   }, [group.maxWeight, group.minWeight, group.orderedWeight, group.variant]);
   const orderStatusLabel =
     isOrder && group.status ? getOrderStatusLabel(group.status) : '';
-  const showOrderStage = isOrder && group.status && group.status !== 'open';
+  const statusProgress = React.useMemo(
+    () => (isOrder ? getOrderStatusProgress(group.status) : null),
+    [group.status, isOrder]
+  );
+  const statusProgressLabel = statusProgress ? `${statusProgress.step}/${statusProgress.total}` : '';
+  const isOrderClosed = isOrder && group.status && group.status !== 'open';
+  const stageDateLabel = React.useMemo(() => {
+    if (!group.statusUpdatedAt) return null;
+    const date = group.statusUpdatedAt instanceof Date ? group.statusUpdatedAt : new Date(group.statusUpdatedAt);
+    if (!Number.isFinite(date.getTime())) return null;
+    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+  }, [group.statusUpdatedAt]);
 
   const availabilityProgress = React.useMemo(() => {
     if (group.variant !== 'producer') return null;
@@ -1549,75 +1564,113 @@ export function ProductGroupContainer({
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {isOrder ? (
               <>
-                {deadlineLabel ? (
-                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
-                    Clôture : {deadlineLabel}
-                  </p>
-                ) : null}
-                {showOrderStage && orderStatusLabel ? (
-                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
-                    Etape : {orderStatusLabel}
-                  </p>
-                ) : orderProgress ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                    <div
-                      style={{
-                        position: 'relative',
-                        width: '100%',
-                        height: '8px',
-                        borderRadius: '9999px',
-                        background: '#F3F4F6',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${Math.round(orderProgress.ratio * 100)}%`,
-                          height: '100%',
-                          borderRadius: '9999px',
-                          background: '#FF6B4A',
-                          transition: 'width 180ms ease-out',
-                        }}
-                      />
-                    </div>
-                    <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
-                      Avancement {orderProgress.label ?? ''}
-                    </span>
-                  </div>
-                ) : null}
+                {isOrderClosed ? (
+                  <>
+                    {orderStatusLabel && (
+                      <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                        {orderStatusLabel} :{''}
+                        {stageDateLabel ? (
+                          <span className="text-[#6B7280]" style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                            {' '}{stageDateLabel}
+                          </span>
+                        ) : null}
+                      </p>
+                    )}
+                    {statusProgress ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                        <div
+                          style={{
+                            position: 'relative',
+                            width: '100%',
+                            height: '8px',
+                            borderRadius: '9999px',
+                            background: '#F3F4F6',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${Math.round(statusProgress.ratio * 100)}%`,
+                              height: '100%',
+                              borderRadius: '9999px',
+                              background: '#FF6B4A',
+                              transition: 'width 180ms ease-out',
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
+                          Avancement {statusProgressLabel ?? ''}
+                        </span>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {deadlineLabel ? (
+                      <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                        Clôture : {deadlineLabel}
+                      </p>
+                    ) : null}
+                    {orderProgress ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                        <div
+                          style={{
+                            position: 'relative',
+                            width: '100%',
+                            height: '8px',
+                            borderRadius: '9999px',
+                            background: '#F3F4F6',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${Math.round(orderProgress.ratio * 100)}%`,
+                              height: '100%',
+                              borderRadius: '9999px',
+                              background: '#FF6B4A',
+                              transition: 'width 180ms ease-out',
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
+                          Avancement {orderProgress.label ?? ''}
+                        </span>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </>
-            ) : (
-              availabilityProgress && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
-                    Disponibilité
-                  </p>
+            ) : availabilityProgress ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <p style={{ margin: 0, fontSize: '12px', color: '#374151', fontWeight: 600 }}>
+                  Disponibilité
+                </p>
+                <div
+                  style={{
+                    position: 'relative',
+                    width: '100%',
+                    height: '8px',
+                    borderRadius: '9999px',
+                    background: '#F3F4F6',
+                    overflow: 'hidden',
+                  }}
+                >
                   <div
                     style={{
-                      position: 'relative',
-                      width: '100%',
-                      height: '8px',
+                      width: `${Math.round(availabilityProgress.ratio * 100)}%`,
+                      height: '100%',
                       borderRadius: '9999px',
-                      background: '#F3F4F6',
-                      overflow: 'hidden',
+                      background: '#34D399',
+                      transition: 'width 180ms ease-out',
                     }}
-                  >
-                    <div
-                      style={{
-                        width: `${Math.round(availabilityProgress.ratio * 100)}%`,
-                        height: '100%',
-                        borderRadius: '9999px',
-                        background: '#34D399',
-                        transition: 'width 180ms ease-out',
-                      }}
-                    />
-                  </div>
-                  <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
-                    {availabilityProgress.label}
-                  </span>
+                  />
                 </div>
-              )
-            )}
+                <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 600 }}>
+                  {availabilityProgress.label}
+                </span>
+              </div>
+            ) : null}
           </div>
 
           <div
