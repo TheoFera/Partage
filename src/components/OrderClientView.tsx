@@ -415,6 +415,15 @@ const sharerAvatarUpdatedAt =
   const shouldShowParticipationRequestButton =
     !isOwner && !myParticipant && !autoApproveParticipationRequests;
 
+  const isOrderClosed =
+    order.status === 'locked' ||
+    order.status === 'confirmed' ||
+    order.status === 'preparing' ||
+    order.status === 'prepared' ||
+    order.status === 'delivered' ||
+    order.status === 'distributed' ||
+    order.status === 'finished';
+
   const orderEffectiveWeightKg = React.useMemo(
     () => resolveOrderEffectiveWeightKg(order.orderedWeightKg ?? 0, order.minWeightKg, order.maxWeightKg),
     [order.maxWeightKg, order.minWeightKg, order.orderedWeightKg]
@@ -525,6 +534,7 @@ const sharerAvatarUpdatedAt =
   };
 
   const handleQuantityChange = (productId: string, delta: number) => {
+    if (isOrderClosed) return;
     setQuantities((prev) => {
       const current = prev[productId] ?? 0;
       const next = Math.max(0, current + delta);
@@ -703,6 +713,10 @@ const sharerAvatarUpdatedAt =
   }, [isOwner, isProducer, order.status]);
 
   const handlePurchase = async () => {
+    if (isOrderClosed) {
+      toast.info('La commande est cloturee.');
+      return;
+    }
     if (totalCards === 0) {
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
@@ -1325,9 +1339,13 @@ const sharerAvatarUpdatedAt =
                   quantities={quantities}
                   onDeltaQuantity={handleQuantityChange}
                   onDirectQuantity={(productId, value) =>
-                    setQuantities((prev) => ({ ...prev, [productId]: Math.max(0, value) }))
+                    setQuantities((prev) => {
+                      if (isOrderClosed) return prev;
+                      return { ...prev, [productId]: Math.max(0, value) };
+                    })
                   }
                   unitPriceLabelsById={unitPriceLabelsById}
+                  isSelectionLocked={isOrderClosed}
                 />
               )}
             </div>
@@ -1495,7 +1513,7 @@ const sharerAvatarUpdatedAt =
               <button
                 type="button"
                 onClick={handlePurchase}
-                disabled={totalCards === 0 || isWorking}
+                disabled={totalCards === 0 || isWorking || isOrderClosed}
                 className="order-client-view__purchase-button"
               >
                 <ShoppingCart className="w-4 h-4" />
@@ -1762,12 +1780,14 @@ function OrderProductsCarousel({
   onDeltaQuantity,
   onDirectQuantity,
   unitPriceLabelsById,
+  isSelectionLocked,
 }: {
   products: Product[];
   quantities: Record<string, number>;
   onDeltaQuantity: (productId: string, delta: number) => void;
   onDirectQuantity: (productId: string, value: number) => void;
   unitPriceLabelsById: Record<string, string>;
+  isSelectionLocked: boolean;
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
@@ -1872,6 +1892,7 @@ function OrderProductsCarousel({
                     onClick={() => onDeltaQuantity(product.id, -1)}
                     className="order-client-view__quantity-button order-client-view__quantity-button--decrement"
                     aria-label={`Retirer une carte de ${product.name}`}
+                    disabled={isSelectionLocked}
                   >
                     -
                   </button>
@@ -1885,12 +1906,14 @@ function OrderProductsCarousel({
                     }}
                     className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
                     aria-label={`Quantite pour ${product.name}`}
+                    disabled={isSelectionLocked}
                   />
                   <button
                     type="button"
                     onClick={() => onDeltaQuantity(product.id, 1)}
                     className="order-client-view__quantity-button order-client-view__quantity-button--increment"
                     aria-label={`Ajouter une carte de ${product.name}`}
+                    disabled={isSelectionLocked}
                   >
                     +
                   </button>
