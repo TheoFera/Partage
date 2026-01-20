@@ -1,37 +1,52 @@
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
+import { createClient } from "npm:@supabase/supabase-js@2";
 
-const expected = Deno.env.get("BILLING_INTERNAL_SECRET") ?? "";
-const got = req.headers.get("x-internal-secret") ?? "";
-if (!expected || got !== expected) return new Response("Unauthorized", { status: 401 });
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const BILLING_INTERNAL_SECRET = Deno.env.get("BILLING_INTERNAL_SECRET") ?? "";
 
-
-// Setup type definitions for built-in Supabase Runtime APIs
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-
-console.log("Hello from Functions!")
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 Deno.serve(async (req) => {
-  const { name } = await req.json()
-  const data = {
-    message: `Hello ${name}!`,
+  // 1) Sécurité: header obligatoire
+  const got = req.headers.get("x-internal-secret") ?? "";
+  if (!BILLING_INTERNAL_SECRET || got !== BILLING_INTERNAL_SECRET) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
-  return new Response(
-    JSON.stringify(data),
-    { headers: { "Content-Type": "application/json" } },
-  )
-})
+  // 2) Lecture body
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch (_) {
+    body = {};
+  }
+  const mode = body?.mode ?? "scan_pending";
 
-/* To invoke locally:
+  if (mode !== "scan_pending") {
+    return new Response(JSON.stringify({ ok: false, error: "mode invalide" }), {
+      headers: { "Content-Type": "application/json" },
+      status: 400,
+    });
+  }
 
-  1. Run `supabase start` (see: https://supabase.com/docs/reference/cli/supabase-start)
-  2. Make an HTTP request:
+  // 3) Lire 10 jobs pending
+  const { data: jobs, error } = await supabase
+    .from("emails_sortants")
+    .select("id, kind, status, to_profile_id, facture_id, try_count, created_at")
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(10);
 
-  curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/process-emails-sortants' \
-    --header 'Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImI4MTI2OWYxLTIxZDgtNGYyZS1iNzE5LWMyMjQwYTg0MGQ5MCIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjIwODQyODE4MjN9.FxV6eCcSWC4w1f-UWLwsTlru_Xawhrvo3JjPUsj8DcORNY7UJhXDI2vHH0bPBLexM4BiYPAjRXa_0iMfI6h0Pg' \
-    --header 'Content-Type: application/json' \
-    --data '{"name":"Functions"}'
+  if (error) {
+    return new Response(JSON.stringify({ ok: false, error: error.message }), {
+      headers: { "Content-Type": "application/json" },
+      status: 500,
+    });
+  }
 
-*/
+  return new Response(JSON.stringify({ ok: true, mode, pending: jobs?.length ?? 0, jobs }), {
+    headers: { "Content-Type": "application/json" },
+  });
+});
