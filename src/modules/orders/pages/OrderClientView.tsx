@@ -1697,7 +1697,7 @@ const sharerAvatarUpdatedAt =
                 </div>
               </div>
             )}
-            {isOwner && (
+            {isOwner && isOrderOpen && (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                   <span className="text-[#6B7280] font-medium">Part du partageur accumulée :</span>

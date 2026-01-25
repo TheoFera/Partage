@@ -6,11 +6,16 @@ dist/
 build/
 .vite/
 
+# Supabase local artifacts
+supabase/.temp/
+supabase/notifications.sql
+
 # Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.log
 
 # Environment files
 .env
@@ -20,8 +25,13 @@ pnpm-debug.log*
 # Miscellaneous system/editor files
 .DS_Store
 Thumbs.db
+Desktop.ini
 *.swp
 *.swo
+
+# IDEs
+.vscode/
+.idea/
 
 # TypeScript
 *.tsbuildinfo

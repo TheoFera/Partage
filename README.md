@@ -6,7 +6,7 @@ This is a code bundle for TEST Site Partage. The original project is available a
 
 1. Run `npm i` to install the dependencies.
 2. Run `npm run dev` to start the development server.
-3. Copiez `.env.example` vers `.env` et renseignez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` si vous branchez Supabase.
+3. Creez un fichier `.env` et renseignez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` si vous branchez Supabase (optionnel: `VITE_DEMO_MODE=true`).
 
 ## Routing
 
@@ -17,6 +17,8 @@ L'application utilise `react-router-dom` (BrowserRouter). Les routes principales
 ## Supabase
 
 `src/shared/lib/supabaseClient.ts` expose `getSupabaseClient()`/`supabase`. Le client est instancie si `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` sont renseignees dans votre `.env`.
+
+Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`).
 
 ## Mode demo
 
@@ -59,6 +61,10 @@ L'application utilise `react-router-dom` (BrowserRouter). Les routes principales
 - `src/shared/constants/` : constantes partagees (cards, producerLabels).
 - `src/shared/types/` : types communs a l'application.
 - `src/shared/config/` : config runtime (ex: `demoMode`).
+
+### Supabase
+
+- `supabase/` : configuration et fonctions edge (voir section Supabase).
 
 ### Data
 

@@ -36,6 +36,17 @@
 ## Data
 - `src/data/fixtures/`: demo/mock data (used by demo mode).
 
+## Supabase
+- `supabase/config.toml`: local Supabase CLI config.
+- `supabase/functions/`: edge functions (`finalize-payment`, `process-emails-sortants`).
+
+## Static assets
+- `public/`: static assets served by Vite.
+
+## Scaffolding (currently empty)
+- `src/components/figma/`: placeholder for Figma exports.
+- `src/constants/`, `src/lib/`, `src/services/`, `src/types/`: reserved top-level folders (prefer `src/shared/` or modules).
+
 ## Conventions
 - Route-level components live in `src/modules/<domain>/pages`.
 - Domain-specific logic stays inside its module.
