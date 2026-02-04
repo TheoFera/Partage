@@ -29,7 +29,7 @@ jobs:
           host: ${{ secrets.SFTP_HOST }}
           username: ${{ secrets.SFTP_USER }}
           password: ${{ secrets.SFTP_PASS }}
-          port: 22
+          port: 21
           source: "dist/*"
           target: ${{ secrets.SFTP_PATH }}
           strip_components: 1
