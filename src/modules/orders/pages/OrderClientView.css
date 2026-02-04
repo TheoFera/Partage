@@ -399,6 +399,32 @@
   outline-offset: 2px;
 }
 
+.order-client-view__calendar-day--my-pickup {
+  box-shadow: inset 0 0 0 2px #9ca3af;
+}
+
+.order-client-view__calendar-day-pickup {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #6b7280;
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 12px -8px rgba(17, 24, 39, 0.8);
+}
+
+.order-client-view__calendar-day-pickup--pending {
+  background: #6b7280;
+  color: #ffffff;
+}
+
 .order-client-view__calendar-day--clickable {
   cursor: pointer;
 }
@@ -415,6 +441,25 @@
   height: 6px;
   border-radius: 9999px;
   background: #16a34a;
+}
+
+.order-client-view__calendar-day-count {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: #ff6b4a;
+  color: #ffffff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 12px -8px rgba(255, 107, 74, 0.8);
 }
 
 .order-client-view__calendar-slots {
@@ -491,6 +536,12 @@
   gap: 8px;
 }
 
+.order-client-view__pickup-slot-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .order-client-view__pickup-slot {
   display: flex;
   align-items: center;
@@ -498,13 +549,156 @@
   gap: 10px;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid #f3f4f6;
-  background: #fffaf7;
-  min-height: 58px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  min-height: 72px;
   width: 100%;
   text-align: left;
+}
+
+.order-client-view__pickup-slot-time-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px dashed #e5e7eb;
+  background: #ffffff;
+}
+
+.order-client-view__pickup-slot-time-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.order-client-view__pickup-slot-time-select {
+  border: 1px solid #e5e7eb;
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: #1f2937;
+  background: #ffffff;
+}
+
+.order-client-view__pickup-slot-validate {
+  width: 100%;
+  border: 1px solid #6b7280;
+  background: #6b7280;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 9999px;
   cursor: pointer;
-  appearance: none;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.order-client-view__pickup-slot-validate:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.order-client-view__pickup-slot-validate:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px -12px rgba(255, 107, 74, 0.8);
+}
+
+.order-client-view__pickup-slot-time-select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.order-client-view__pickup-slot-reservations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px dashed #e5e7eb;
+  background: #f9fafb;
+}
+
+.order-client-view__pickup-slot-reservations-title {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.order-client-view__pickup-slot-reservations-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.order-client-view__pickup-slot-reservation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.order-client-view__pickup-slot-reservation-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.order-client-view__pickup-slot-reservation-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-client-view__pickup-slot-reservation-action {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+
+.order-client-view__pickup-slot-reservation-action--accept {
+  border-color: #bbf7d0;
+  background: #ecfdf3;
+  color: #166534;
+}
+
+.order-client-view__pickup-slot-reservation-action--reject {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.order-client-view__pickup-slot-reservation-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.order-client-view__pickup-slot-reservation--pending {
+  background: #fff7ed;
+  border-color: #ffd6c6;
+  color: #b45309;
+}
+
+.order-client-view__pickup-slot-reservation--accepted {
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+  color: #166534;
 }
 
 .order-client-view__progress-track {
@@ -550,16 +744,16 @@
 }
 
 .order-client-view__pickup-slot--disabled {
-  opacity: 0.65;
+  opacity: 0.6;
   border-style: dashed;
   background: #f9fafb;
   cursor: not-allowed;
 }
 
 .order-client-view__pickup-slot--selected {
-  border-color: #ff6b4a;
-  background: #fff1e6;
-  box-shadow: 0 8px 16px -12px rgba(255, 107, 74, 0.6);
+  border-color: #e5e7eb;
+  background: #f9fafb;
+  box-shadow: none;
 }
 
 .order-client-view__pickup-slot-status {
@@ -577,17 +771,23 @@
   gap: 4px;
   padding: 2px 6px;
   border-radius: 9999px;
-  background: #ecfdf3;
-  border: 1px solid #bbf7d0;
-  color: #166534;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
   font-weight: 600;
   font-size: 0.65rem;
 }
 
 .order-client-view__pickup-slot-tag--pending {
-  background: #fff7ed;
-  border-color: #ffd6c6;
-  color: #b45309;
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #4b5563;
+}
+
+.order-client-view__pickup-slot-tag--rejected {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+  color: #4b5563;
 }
 
 .order-client-view__pickup-slots-note {
@@ -906,9 +1106,25 @@
   margin-bottom: 2px;
 }
 
+.order-client-view__participants-table-product-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 auto 2px;
+  width: 100%;
+  text-align: center;
+  font: inherit;
+  cursor: pointer;
+}
+
+.order-client-view__participants-table-product-button:hover,
+.order-client-view__participants-table-product-button:focus-visible {
+  color: #ff6b4a;
+}
+
 .order-client-view__participants-table-unit {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   color: #9ca3af;
 }
 

@@ -22,7 +22,7 @@ import { AuthPage } from './modules/auth/pages/AuthPage';
 import { ShareOverlay } from './shared/ui/ShareOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/fixtures/mockData';
 import { ProductDetailView } from './modules/products/pages/ProductDetailView';
-import { OrderProductContextView } from './modules/orders/pages/OrderProductContextView';
+import type { OrderFull } from './modules/orders/types';
 import {
   CreateProductPayload,
   Product,
@@ -44,6 +44,7 @@ import { getLotByCode, getProductByCode, listProducts } from './modules/products
 import {
   addItem,
   createPaymentStub,
+  getOrderFullByCode,
   getParticipantByProfile,
   listOrdersForUser,
   listPublicOrders,
@@ -297,6 +298,7 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
   return {
     id: authUser.id,
     name: authUser.user_metadata?.full_name || fallbackHandle || 'Profil',
+    email: authUser.email ?? undefined,
     handle: authUser.user_metadata?.handle || fallbackHandle,
     role: safeRole,
     profileImage: authUser.user_metadata?.avatar_url,
@@ -615,6 +617,7 @@ const mapProfileRowToUser = (
   return {
     id: row.id,
     name: row.name || fallbackName,
+    email: authUser?.email ?? undefined,
     handle: row.handle || sanitizeHandle(fallbackName),
     role: safeRole,
     accountType: (row.account_type as User['accountType']) ?? 'individual',
@@ -908,6 +911,7 @@ type ProductRouteViewProps = {
   onAddToDeck: (product: Product) => void;
   onRemoveFromDeck: (productId: string) => void;
   onShareProduct: (product: Product) => void;
+  onSearchProductOrders?: (product: Product) => void;
 };
 
 const ProductRouteView: React.FC<ProductRouteViewProps> = ({
@@ -926,23 +930,33 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   onAddToDeck,
   onRemoveFromDeck,
   onShareProduct,
+  onSearchProductOrders,
 }) => {
-  const params = useParams<{ id?: string; slugAndCode?: string; lotCode?: string }>();
+  const params = useParams<{
+    id?: string;
+    slugAndCode?: string;
+    productSlug?: string;
+    lotCode?: string;
+    orderCode?: string;
+  }>();
   const navigate = useNavigate();
-  const productCode = params.slugAndCode
-    ? parseSlugAndCode(params.slugAndCode).productCode
-    : params.id ?? null;
+  const slugParam = params.slugAndCode ?? params.productSlug ?? null;
+  const productCode = slugParam ? parseSlugAndCode(slugParam).productCode : params.id ?? null;
   const lotCode = params.lotCode ?? null;
+  const orderCode = params.orderCode ?? null;
   const [product, setProduct] = React.useState<Product | null>(null);
   const [detail, setDetail] = React.useState<ProductDetail | null>(null);
   const [activeLotCode, setActiveLotCode] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [producerProfileLabels, setProducerProfileLabels] = React.useState<ProducerLabelDetail[]>([]);
+  const [orderContext, setOrderContext] = React.useState<OrderFull | null>(null);
 
   const ordersForProduct = React.useMemo(() => {
     if (!product) return [] as GroupOrder[];
-    return groupOrders.filter((order) =>
-      order.products.some((item) => item.id === product.id || item.name === product.name)
+    return groupOrders.filter(
+      (order) =>
+        order.status === 'open' &&
+        order.products.some((item) => item.id === product.id || item.name === product.name)
     );
   }, [groupOrders, product?.id, product?.name]);
 
@@ -962,11 +976,9 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     if (!ordersForProduct.length) {
       toast.info('Aucune commande active pour ce produit.');
     }
-    const search = new URLSearchParams();
-    search.set('search', product.name);
-    search.set('filter', 'contientProduit');
-    navigate(`/commandes?${search.toString()}`);
-  }, [navigate, ordersForProduct.length, product]);
+    onSearchProductOrders?.(product);
+    navigate(tabRoutes.home);
+  }, [navigate, onSearchProductOrders, ordersForProduct.length, product]);
 
   const handleToggleSave = React.useCallback(
     (next: boolean) => {
@@ -1030,6 +1042,74 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
       active = false;
     };
   }, [createdProductDetails, lotCode, productCode, products, useDemoProducts]);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!orderCode) {
+      setOrderContext(null);
+      return () => {
+        active = false;
+      };
+    }
+    getOrderFullByCode(orderCode)
+      .then((data) => {
+        if (!active) return;
+        setOrderContext(data);
+      })
+      .catch((error) => {
+        console.warn('Order context load error:', error);
+        if (!active) return;
+        setOrderContext(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [orderCode]);
+
+  const orderTimelineStep = React.useMemo(() => {
+    const order =
+      orderContext?.order ??
+      groupOrders.find((entry) => entry.orderCode === orderCode || entry.id === orderCode) ??
+      null;
+    if (!order || !orderCode) return null;
+    const orderData = order as Partial<OrderFull['order']> &
+      Partial<GroupOrder> & {
+        pickupLat?: number | null;
+        pickupLng?: number | null;
+        deliveryLat?: number | null;
+        deliveryLng?: number | null;
+      };
+    const pickupCity = orderData.pickupCity ?? '';
+    const pickupPostcode = orderData.pickupPostcode ?? '';
+    const deliveryCity = orderData.deliveryCity ?? '';
+    const deliveryPostcode = orderData.deliveryPostcode ?? '';
+    const usesPickup =
+      orderData.deliveryOption === 'producer_pickup' || pickupCity || pickupPostcode;
+    const city = (usesPickup ? pickupCity : deliveryCity).trim() || undefined;
+    const postcode = (usesPickup ? pickupPostcode : deliveryPostcode).trim() || undefined;
+    const lat =
+      (usesPickup ? orderData.pickupLat : orderData.deliveryLat) ?? orderData.mapLocation?.lat ?? undefined;
+    const lng =
+      (usesPickup ? orderData.pickupLng : orderData.deliveryLng) ?? orderData.mapLocation?.lng ?? undefined;
+    const locationLabel = [postcode, city].filter(Boolean).join(' ');
+    const resolvedDate = orderData.estimatedDeliveryDate ?? orderData.pickupDate ?? null;
+    const parsedDate = resolvedDate ? new Date(resolvedDate) : null;
+    const dateLabel =
+      parsedDate && !Number.isNaN(parsedDate.getTime())
+        ? parsedDate.toISOString().slice(0, 10)
+        : undefined;
+    if (!locationLabel && !dateLabel) return null;
+    return {
+      localId: `order-step-${orderCode}`,
+      etape: 'Recuperation de la commande',
+      city,
+      postcode,
+      lat: typeof lat === 'number' ? lat : orderData.mapLocation?.lat,
+      lng: typeof lng === 'number' ? lng : orderData.mapLocation?.lng,
+      date: dateLabel,
+      dateType: dateLabel ? 'date' : undefined,
+    } as const;
+  }, [groupOrders, orderCode, orderContext?.order]);
 
   React.useEffect(() => {
     if (!product || lotCode || !activeLotCode) return;
@@ -1107,6 +1187,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
       onParticipate={handleParticipate}
       onToggleSave={canSaveProduct ? handleToggleSave : undefined}
       initialLotId={lotCode ?? activeLotCode ?? undefined}
+      timelineExtraSteps={orderTimelineStep ? [orderTimelineStep] : undefined}
     />
   );
 };
@@ -2994,6 +3075,12 @@ export default function App() {
     },
     [openProducerProfile, openProductView, openProfileByHandle, products]
   );
+  const handleSearchProductOrders = React.useCallback(
+    (product: Product) => {
+      setSearchQuery(product.name);
+    },
+    [setSearchQuery]
+  );
   const userLocation = React.useMemo(
     () =>
       viewer.addressLat !== undefined && viewer.addressLng !== undefined
@@ -3674,7 +3761,26 @@ export default function App() {
           />
           <Route
             path="/produits/:productSlug/lot/:lotCode/cmd/:orderCode"
-            element={<OrderProductContextView />}
+            element={
+              <ProductRouteView
+                products={products}
+                deck={deck}
+                groupOrders={groupOrders}
+                user={user}
+                canSaveProduct={canSaveProduct}
+                useDemoProducts={useDemoProducts}
+                createdProductDetails={createdProductDetails}
+                supabaseClient={supabaseClient}
+                onHeaderActionsChange={setProductHeaderActions}
+                onOpenProducer={openProducerProfile}
+                onOpenRelatedProduct={openProductView}
+                onStartOrderFromProduct={handleStartOrderFromProduct}
+                onAddToDeck={handleAddToDeck}
+                onRemoveFromDeck={handleRemoveFromDeck}
+                onShareProduct={openProductShare}
+                onSearchProductOrders={handleSearchProductOrders}
+              />
+            }
           />
           <Route
             path="/produits/:slugAndCode"
@@ -3695,6 +3801,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onSearchProductOrders={handleSearchProductOrders}
               />
             }
           />
@@ -3717,6 +3824,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onSearchProductOrders={handleSearchProductOrders}
               />
             }
           />
@@ -3739,6 +3847,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onSearchProductOrders={handleSearchProductOrders}
               />
             }
           />

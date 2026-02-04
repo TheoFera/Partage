@@ -17,6 +17,7 @@ import {
 import type { User, Product } from '../../../shared/types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ProductResultCard } from '../../products/components/ProductGroup';
+import { formatUnitWeightLabel } from '../../products/utils/weight';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { CARD_WIDTH, CARD_GAP, MIN_VISIBLE_CARDS, CONTAINER_SIDE_PADDING } from '../../../shared/constants/cards';
 import { toast } from 'sonner';
@@ -26,7 +27,7 @@ import { getOrderStatusLabel, getOrderStatusProgress } from '../utils/orderStatu
 import {
   addItem,
   approveParticipation,
-  createPlatformInvoiceForOrder,
+  createPlatformInvoiceAndSendForOrder,
   createPaymentStub,
   finalizePaymentSimulation,
   fetchParticipantInvoices,
@@ -34,6 +35,7 @@ import {
   getInvoiceDownloadUrl,
   getOrderFullByCode,
   rejectParticipation,
+  reviewParticipantPickupSlot,
   requestParticipation,
   setParticipantPickupSlot,
   updateParticipantsVisibility,
@@ -41,7 +43,7 @@ import {
   updateOrderStatus,
   updateOrderVisibility,
 } from '../api/orders';
-import { centsToEuros, type Facture, type OrderFull, type OrderStatus } from '../types';
+import { centsToEuros, type Facture, type OrderFull, type OrderStatus, type PickupSlotStatus } from '../types';
 
 interface OrderClientViewProps {
   onClose: () => void;
@@ -55,19 +57,50 @@ function formatPrice(value: number) {
   return formatEurosFromCents(eurosToCents(value));
 }
 
+const DAY_LABELS: Record<string, string> = {
+  monday: 'Lundi',
+  tuesday: 'Mardi',
+  wednesday: 'Mercredi',
+  thursday: 'Jeudi',
+  friday: 'Vendredi',
+  saturday: 'Samedi',
+  sunday: 'Dimanche',
+};
+
 function labelForDay(day?: string | null) {
-  const map: Record<string, string> = {
-    monday: 'Lundi',
-    tuesday: 'Mardi',
-    wednesday: 'Mercredi',
-    thursday: 'Jeudi',
-    friday: 'Vendredi',
-    saturday: 'Samedi',
-    sunday: 'Dimanche',
-  };
   if (!day) return '';
-  return map[day] ?? day;
+  return DAY_LABELS[day] ?? day;
 }
+
+const normalizeOpeningHoursDayKey = (value?: string | null) => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (DAY_LABELS[normalized]) return normalized;
+  const match = Object.entries(DAY_LABELS).find(([, label]) => label.toLowerCase() === normalized);
+  return match ? match[0] : null;
+};
+
+const OPENING_HOURS_DAY_ORDER: Record<string, number> = {
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+  saturday: 5,
+  sunday: 6,
+};
+
+const buildOpeningHoursByDay = (openingHours?: Record<string, string> | null) => {
+  const result: Record<string, string> = {};
+  if (!openingHours) return result;
+  Object.entries(openingHours).forEach(([day, hours]) => {
+    const key = normalizeOpeningHoursDayKey(day);
+    const value = (hours ?? '').trim();
+    if (!key || !value) return;
+    result[key] = value;
+  });
+  return result;
+};
 
 type PickupSlot = {
   day?: string | null;
@@ -75,6 +108,13 @@ type PickupSlot = {
   label?: string | null;
   start?: string | null;
   end?: string | null;
+};
+
+type PickupSlotReservation = {
+  id: string;
+  name: string;
+  status: PickupSlotStatus | null;
+  time: string | null;
 };
 
 function formatPickupSlotLabel(slot: PickupSlot) {
@@ -96,7 +136,58 @@ function formatPickupSlotTime(value?: string | null) {
   return match ? match[1] : trimmed;
 }
 
+const PICKUP_SLOT_TIME_STEP_MINUTES = 15;
+
+const parseTimeToMinutes = (value?: string | null) => {
+  if (!value) return null;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+
+const formatMinutesToTime = (value: number) => {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+};
+
+const ceilToStep = (value: number, step: number) => Math.ceil(value / step) * step;
+
+const buildPickupTimeOptions = (
+  start?: string | null,
+  end?: string | null,
+  minMinutes?: number | null
+) => {
+  const startMinutes = parseTimeToMinutes(start);
+  const endMinutes = parseTimeToMinutes(end);
+  if (startMinutes === null || endMinutes === null) return [];
+  const [from, to] = startMinutes <= endMinutes ? [startMinutes, endMinutes] : [endMinutes, startMinutes];
+  const minBound =
+    typeof minMinutes === 'number'
+      ? Math.min(Math.max(ceilToStep(minMinutes, PICKUP_SLOT_TIME_STEP_MINUTES), from), to + 1)
+      : from;
+  const options: string[] = [];
+  for (let current = minBound; current <= to; current += PICKUP_SLOT_TIME_STEP_MINUTES) {
+    options.push(formatMinutesToTime(current));
+  }
+  return options;
+};
+
+const PICKUP_SLOT_STATUS_LABELS: Record<PickupSlotStatus, string> = {
+  accepted: 'Accepté',
+  rejected: 'Refusé',
+  requested: 'En attente',
+};
+
+const formatPickupSlotStatusLabel = (status?: PickupSlotStatus | null) =>
+  status ? PICKUP_SLOT_STATUS_LABELS[status] ?? null : null;
+
 const WEEKDAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -153,6 +244,12 @@ const buildCalendarDays = (month: Date) => {
   });
 };
 
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 function getProductWeightKg(product: { weightKg?: number; unit?: string; measurement?: 'unit' | 'kg' }) {
   if (product.weightKg) return product.weightKg;
   const unit = product.unit?.toLowerCase() ?? '';
@@ -166,6 +263,34 @@ function getProductWeightKg(product: { weightKg?: number; unit?: string; measure
   if (product.measurement === 'kg') return 1;
   return 0.25;
 }
+
+const getProductMeasurementLabel = (product: { measurement?: 'unit' | 'kg'; weightKg?: number | null }) => {
+  if (product.measurement === 'kg') return 'kg';
+  if (product.measurement === 'unit') return formatUnitWeightLabel(product.weightKg);
+  return '';
+};
+
+const normalizeTextForSlug = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+const slugify = (value: string) =>
+  normalizeTextForSlug(value)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '');
+
+const buildProductPath = (product: Product, orderCode?: string | null) => {
+  const productCode = product.productCode ?? product.id;
+  const slug = product.slug ?? slugify(product.name);
+  const lotCode = product.activeLotCode ?? null;
+  if (lotCode) {
+    const base = `/produits/${slug || 'produit'}-${productCode}/lot/${lotCode}`;
+    return orderCode ? `${base}/cmd/${orderCode}` : base;
+  }
+  return `/produits/${slug || 'produit'}-${productCode}`;
+};
 
 const DEFAULT_PROFILE_AVATAR =
   'data:image/svg+xml;utf8,' +
@@ -282,6 +407,8 @@ const emptyOrder: OrderFull['order'] = {
   deliveryCity: null,
   deliveryPostcode: null,
   deliveryAddress: null,
+  deliveryPhone: null,
+  deliveryEmail: null,
   deliveryLat: null,
   deliveryLng: null,
   estimatedDeliveryDate: null,
@@ -407,6 +534,7 @@ export function OrderClientView({
 
   const orderFullValue = orderFull ?? emptyOrderFull;
   const order = orderFullValue.order;
+  const resolvedOrderCode = order.orderCode || orderCode || null;
   const products = orderFullValue.productsOffered.map((entry) => {
     const info = entry.product;
     const productKey = info?.code ?? entry.productId;
@@ -420,6 +548,9 @@ export function OrderClientView({
       id: productKey,
       productCode: info?.code ?? productKey,
       dbId: entry.productId,
+      slug: info?.slug ?? undefined,
+      activeLotCode: info?.activeLotCode ?? undefined,
+      activeLotId: info?.activeLotId ?? undefined,
       name: info?.name ?? 'Produit',
       description: info?.description ?? '',
       price: centsToEuros(unitBasePriceCents),
@@ -503,9 +634,58 @@ const sharerAvatarUpdatedAt =
   const producerProfileHandle = producerProfileMeta?.handle ?? null;
   const producerAvatarPath = producerProfileMeta?.avatarPath ?? null;
   const producerAvatarUpdatedAt = producerProfileMeta?.avatarUpdatedAt ?? null;
+  const producerOpeningHoursByDay = React.useMemo(
+    () => buildOpeningHoursByDay(producerProfileMeta?.openingHours ?? null),
+    [producerProfileMeta?.openingHours]
+  );
+  const producerOpeningHoursEntries = React.useMemo(() => {
+    const entries = Object.entries(producerOpeningHoursByDay)
+      .map(([day, hours]) => ({
+        day,
+        label: labelForDay(day) || day,
+        hours,
+      }))
+      .filter((entry) => entry.hours.trim().length > 0)
+      .sort((a, b) => (OPENING_HOURS_DAY_ORDER[a.day] ?? 99) - (OPENING_HOURS_DAY_ORDER[b.day] ?? 99));
+    return entries;
+  }, [producerOpeningHoursByDay]);
+  const producerPickupAddress = React.useMemo(() => {
+    const parts = [
+      producerProfileMeta?.address,
+      producerProfileMeta?.addressDetails,
+      [producerProfileMeta?.postcode, producerProfileMeta?.city].filter(Boolean).join(' ') || undefined,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    if (parts) return parts;
+    return (
+      orderFullValue.productsOffered[0]?.product?.producerLocation ||
+      producerProfileMeta?.city ||
+      'Adresse du producteur a confirmer'
+    );
+  }, [
+    orderFullValue.productsOffered,
+    producerProfileMeta?.address,
+    producerProfileMeta?.addressDetails,
+    producerProfileMeta?.city,
+    producerProfileMeta?.postcode,
+  ]);
+  const producerPickupHoursLabel = React.useMemo(() => {
+    if (producerOpeningHoursEntries.length === 0) return 'Horaires a confirmer';
+    return producerOpeningHoursEntries.map((entry) => `${entry.label} ${entry.hours}`).join(' / ');
+  }, [producerOpeningHoursEntries]);
+  const shouldShowProducerPickupDetails = isOwner && order.deliveryOption === 'producer_pickup';
   const updateOrderLocal = (updates: Partial<typeof order>) => {
     setOrderFull((prev) => (prev ? { ...prev, order: { ...prev.order, ...updates } } : prev));
   };
+
+  const handleOpenProduct = React.useCallback(
+    (product: Product) => {
+      const target = buildProductPath(product, resolvedOrderCode);
+      navigate(target);
+    },
+    [navigate, resolvedOrderCode]
+  );
 
   React.useEffect(() => {
     if (!participantsPanelOpen) return;
@@ -708,13 +888,13 @@ const sharerAvatarUpdatedAt =
         updateOrderLocal({ autoApproveParticipationRequests: value });
         toast.success(
           value
-            ? 'Les demandes seront validees automatiquement.'
-            : 'Les demandes necessitent desormais une validation manuelle.'
+            ? 'Les demandes seront validées automatiquement.'
+            : 'Les demandes nécessitent desormais une validation manuelle.'
         );
       })
       .catch((error) => {
         console.error('Participation settings error:', error);
-        toast.error('Impossible de mettre a jour ce parametre.');
+        toast.error('Impossible de mettre à jour ce parametre.');
       })
       .finally(() => setIsWorking(false));
   };
@@ -780,7 +960,8 @@ const sharerAvatarUpdatedAt =
         updateOrderLocal({ status: updatedStatus });
         if (nextStatus === 'distributed') {
           try {
-            await createPlatformInvoiceForOrder(order.id);
+            await createPlatformInvoiceAndSendForOrder(order.id);
+            await loadInvoices(order.id, order.producerProfileId);
           } catch (error) {
             console.error('Platform invoice error:', error);
             toast.error("Impossible d'emettre la facture plateforme.");
@@ -998,20 +1179,66 @@ const sharerAvatarUpdatedAt =
     }
   };
 
-  const handlePickupSlotSelect = async (slotId: string) => {
+  const handlePickupSlotSelect = async (slotId: string, pickupSlotTime?: string | null) => {
     if (!myParticipant) return;
+    if (!canSelectPickupSlot) {
+      toast.info('Seuls les participants acceptés peuvent réserver un créneau.');
+      return;
+    }
+    if (isSelectedDatePast) {
+      toast.info("Impossible de réserver un créneau dans le passé.");
+      return;
+    }
+    if (pickupSlotTime) {
+      const selectedMinutes = parseTimeToMinutes(pickupSlotTime);
+      if (
+        typeof minSelectableMinutes === 'number' &&
+        selectedMinutes !== null &&
+        selectedMinutes < minSelectableMinutes
+      ) {
+        toast.info('Choisissez une heure au moins 30 minutes après maintenant.');
+        return;
+      }
+    }
     setIsWorking(true);
     try {
+      if (myParticipant.pickupSlotId && myParticipant.pickupSlotId !== slotId) {
+        setPickupSlotTimesById((prev) => {
+          const next = { ...prev };
+          delete next[myParticipant.pickupSlotId as string];
+          return next;
+        });
+      }
       await setParticipantPickupSlot({
         orderId: order.id,
         participantId: myParticipant.id,
         pickupSlotId: slotId,
+        pickupSlotTime: pickupSlotTime ?? null,
       });
       await loadOrder();
       toast.success('Creneau enregistre.');
     } catch (error) {
       console.error('Pickup slot error:', error);
       toast.error('Impossible de selectionner ce creneau.');
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const handlePickupSlotReview = async (participantId: string, status: Exclude<PickupSlotStatus, 'requested'>) => {
+    if (!isOwner || autoApprovePickupSlots) return;
+    setIsWorking(true);
+    try {
+      await reviewParticipantPickupSlot({
+        participantId,
+        status,
+        reviewerId: currentUser?.id ?? null,
+      });
+      await loadOrder();
+      toast.success(status === 'accepted' ? 'Créneau validé.' : 'Créneau refusé.');
+    } catch (error) {
+      console.error('Pickup slot review error:', error);
+      toast.error("Impossible de mettre à jour ce créneau.");
     } finally {
       setIsWorking(false);
     }
@@ -1076,6 +1303,8 @@ const sharerAvatarUpdatedAt =
   const pickupAddress = canViewFullAddress ? pickupAddressFull : pickupCityLine || cityFallbackLabel;
   const deliveryAddress = canViewFullAddress ? deliveryAddressFull : deliveryCityLine || cityFallbackLabel;
   const deliveryInfo = order.deliveryInfo?.trim() || '';
+  const deliveryPhone = order.deliveryPhone?.trim() || '';
+  const deliveryEmail = order.deliveryEmail?.trim() || '';
   const pickupInfo = order.pickupInfo?.trim() || '';
   const deliveryModeLabel = ORDER_DELIVERY_OPTION_LABELS[order.deliveryOption] ?? 'Livraison';
   const locationAddress = order.deliveryOption === 'producer_pickup' ? pickupAddress : deliveryAddress;
@@ -1156,12 +1385,16 @@ const sharerAvatarUpdatedAt =
       ? `${pickupDurationLabel} (jusqu'au ${pickupWindowEndDate.toLocaleDateString('fr-FR')})`
       : pickupDurationLabel;
   const isPickupSelectionOpen = ['delivered', 'distributed', 'finished'].includes(order.status);
-  const canSelectPickupSlot = isPickupSelectionOpen && Boolean(myParticipant);
+  const isAcceptedParticipant = Boolean(
+    myParticipant && myParticipant.participationStatus === 'accepted' && myParticipant.role === 'participant'
+  );
+  const canSelectPickupSlot = isPickupSelectionOpen && isAcceptedParticipant;
   const shouldHidePickupSlots = isVisitor;
   const canShowPickupSlotDetails = pickupSlotsByDate.size > 0 && !shouldHidePickupSlots;
   const createdAtDay = parseDateValue(order.createdAt);
   const deadlineDay = parseDateValue(order.deadline);
   const estimatedDeliveryDay = parseDateValue(estimatedDeliveryDate ?? null);
+  const pickupStartDay = estimatedDeliveryDay ? addDays(estimatedDeliveryDay, 1) : null;
   const pickupWindowEndDay = parseDateValue(pickupWindowEndDate ?? null);
   const explicitPickupDay = order.usePickupDate ? parseDateValue(order.pickupDate ?? null) : null;
   const slotRangeStart = pickupSlotDateKeys.length ? parseDateValue(pickupSlotDateKeys[0]) : null;
@@ -1170,9 +1403,10 @@ const sharerAvatarUpdatedAt =
     : null;
   const openRange = toRange(createdAtDay, deadlineDay);
   const deliveryRange = toRange(deadlineDay, estimatedDeliveryDay);
+  const availabilityStart = pickupStartDay ?? slotRangeStart;
   const availabilityRange = explicitPickupDay
     ? { start: explicitPickupDay, end: explicitPickupDay }
-    : toRange(estimatedDeliveryDay ?? slotRangeStart, pickupWindowEndDay ?? slotRangeEnd);
+    : toRange(availabilityStart, pickupWindowEndDay ?? slotRangeEnd);
   const calendarSeedKey = availabilityRange
     ? toDateKey(availabilityRange.start)
     : deliveryRange
@@ -1186,23 +1420,56 @@ const sharerAvatarUpdatedAt =
   }, [calendarSeedKey]);
   const [calendarMonth, setCalendarMonth] = React.useState<Date>(() => initialCalendarMonth);
   const [selectedPickupDateKey, setSelectedPickupDateKey] = React.useState<string | null>(null);
+  const [pickupSlotTimesById, setPickupSlotTimesById] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
     if (!order.id) return;
     setCalendarMonth(initialCalendarMonth);
     setSelectedPickupDateKey(null);
+    setPickupSlotTimesById({});
   }, [order.id, initialCalendarMonth]);
+  const myParticipantPickupTime = React.useMemo(
+    () => formatPickupSlotTime(myParticipant?.pickupSlotTime ?? null),
+    [myParticipant?.pickupSlotTime]
+  );
+  React.useEffect(() => {
+    const slotId = myParticipant?.pickupSlotId ?? null;
+    if (!slotId) return;
+    setPickupSlotTimesById((prev) => {
+      const next = { ...prev };
+      if (myParticipantPickupTime) {
+        next[slotId] = myParticipantPickupTime;
+      } else {
+        delete next[slotId];
+      }
+      return next;
+    });
+  }, [myParticipant?.pickupSlotId, myParticipantPickupTime]);
   const calendarDays = React.useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
   const calendarMonthLabel = React.useMemo(
     () => calendarMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
     [calendarMonth]
   );
-  const today = React.useMemo(() => new Date(), []);
-  const todayKey = toDateKey(today);
+  const now = new Date();
+  const todayKey = toDateKey(now);
   const selectedPickupDate = selectedPickupDateKey ? parseDateValue(selectedPickupDateKey) : null;
   const selectedDateSlots = selectedPickupDateKey ? pickupSlotsByDate.get(selectedPickupDateKey) ?? [] : [];
   const selectedDateLabel = selectedPickupDate
     ? selectedPickupDate.toLocaleDateString('fr-FR')
     : selectedPickupDateKey;
+  const myPickupSlotDateKey = React.useMemo(() => {
+    if (!myParticipant || myParticipant.role !== 'participant' || !myParticipant.pickupSlotId) return null;
+    const slot = pickupSlots.find((entry) => entry.id === myParticipant.pickupSlotId);
+    return slot?.dateKey ?? null;
+  }, [myParticipant, pickupSlots]);
+  const myPickupSlotStatus = myParticipant?.pickupSlotStatus ?? null;
+  const isSelectedDateToday = Boolean(selectedPickupDateKey && selectedPickupDateKey === todayKey);
+  const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const isSelectedDatePast = Boolean(
+    selectedPickupDate && selectedPickupDate.getTime() < todayDate.getTime()
+  );
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const minSelectableMinutes = isSelectedDateToday ? nowMinutes + 30 : null;
+  const canSelectPickupSlotOnSelectedDate = canSelectPickupSlot && !isSelectedDatePast;
   const selectedDateSlotsSorted = React.useMemo(() => {
     if (selectedDateSlots.length === 0) return [];
     return [...selectedDateSlots].sort((a, b) => {
@@ -1211,14 +1478,62 @@ const sharerAvatarUpdatedAt =
       return (a.start ?? '').localeCompare(b.start ?? '');
     });
   }, [selectedDateSlots]);
-  const pickupSlotStatusLabel =
-    myParticipant?.pickupSlotStatus === 'accepted'
-      ? 'Accepté'
-      : myParticipant?.pickupSlotStatus === 'rejected'
-        ? 'Refusé'
-        : myParticipant?.pickupSlotStatus === 'requested'
-          ? 'En attente'
-          : null;
+  const minSelectableTimeLabel =
+    minSelectableMinutes !== null
+      ? formatMinutesToTime(ceilToStep(minSelectableMinutes, PICKUP_SLOT_TIME_STEP_MINUTES))
+      : null;
+  const pickupSlotHeaderStatus = React.useMemo(() => {
+    if (!isAcceptedParticipant) return null;
+    if (!isPickupSelectionOpen) return 'Sélection possible après livraison';
+    if (isSelectedDatePast) return "Impossible de réserver dans le passé";
+    return null;
+  }, [isAcceptedParticipant, isPickupSelectionOpen, isSelectedDatePast]);
+  const pickupSlotStatusLabel = formatPickupSlotStatusLabel(myParticipant?.pickupSlotStatus ?? null);
+  const pickupSlotReservations = React.useMemo(() => {
+    if (!isOwner) return new Map<string, PickupSlotReservation[]>();
+    const map = new Map<string, PickupSlotReservation[]>();
+    orderFullValue.participants.forEach((participant) => {
+      if (participant.role !== 'participant') return;
+      if (!participant.pickupSlotId) return;
+      const meta = getProfileMeta(participant.profileId);
+      const baseName = participant.profileName ?? meta?.name ?? 'Participant';
+      const name = baseName;
+      const entry: PickupSlotReservation = {
+        id: participant.id,
+        name,
+        status: participant.pickupSlotStatus ?? null,
+        time: formatPickupSlotTime(participant.pickupSlotTime) ?? null,
+      };
+      const list = map.get(participant.pickupSlotId) ?? [];
+      list.push(entry);
+      map.set(participant.pickupSlotId, list);
+    });
+    map.forEach((list) => list.sort((a, b) => a.name.localeCompare(b.name)));
+    return map;
+  }, [getProfileMeta, isOwner, orderFullValue.participants]);
+
+  const pickupSlotReservationCountsByDate = React.useMemo(() => {
+    if (!isOwner) return new Map<string, number>();
+    const map = new Map<string, number>();
+    pickupSlots.forEach((slot) => {
+      if (!slot.dateKey) return;
+      const reservations = pickupSlotReservations.get(slot.id) ?? [];
+      const count = reservations.filter((reservation) => reservation.status !== 'rejected').length;
+      if (!count) return;
+      map.set(slot.dateKey, (map.get(slot.dateKey) ?? 0) + count);
+    });
+    return map;
+  }, [isOwner, pickupSlots, pickupSlotReservations]);
+
+  const selectedDateReservationCount = React.useMemo(() => {
+    if (!isOwner || selectedDateSlotsSorted.length === 0) return 0;
+    return selectedDateSlotsSorted.reduce(
+      (sum, slot) =>
+        sum +
+        (pickupSlotReservations.get(slot.id) ?? []).filter((reservation) => reservation.status !== 'rejected').length,
+      0
+    );
+  }, [isOwner, pickupSlotReservations, selectedDateSlotsSorted]);
   const deliveryDetailLines = React.useMemo(() => {
     if (!canViewFullAddress) {
       const lines: string[] = [];
@@ -1234,6 +1549,10 @@ const sharerAvatarUpdatedAt =
     }
     const lines = [`Adresse de livraison : ${deliveryAddress}`];
     if (deliveryInfo) lines.push(`Infos livraison : ${deliveryInfo}`);
+    if (order.deliveryOption === 'producer_delivery') {
+      if (deliveryPhone) lines.push(`Telephone livraison : ${deliveryPhone}`);
+      if (deliveryEmail) lines.push(`Email livraison : ${deliveryEmail}`);
+    }
     if (order.deliveryOption === 'producer_pickup') {
       if (pickupAddress) lines.push(`Adresse de retrait : ${pickupAddress}`);
       if (pickupInfo) lines.push(`Infos retrait : ${pickupInfo}`);
@@ -1248,12 +1567,21 @@ const sharerAvatarUpdatedAt =
     deliveryCityLine,
     deliveryDateLabel,
     deliveryInfo,
+    deliveryPhone,
+    deliveryEmail,
     order.deliveryOption,
     pickupAddress,
     pickupCityLine,
     pickupInfo,
     pickupWindowLabel,
   ]);
+  const producerPickupDetailLines = React.useMemo(() => {
+    if (!shouldShowProducerPickupDetails) return [];
+    return [
+      `Adresse producteur : ${producerPickupAddress}`,
+      `Horaires producteur : ${producerPickupHoursLabel}`,
+    ];
+  }, [producerPickupAddress, producerPickupHoursLabel, shouldShowProducerPickupDetails]);
   const pickupLine = deliveryDateLabel
     ? `Livraison estimée : ${deliveryDateLabel}`
     : hasPickupSlots
@@ -1392,6 +1720,7 @@ const sharerAvatarUpdatedAt =
   );
   const shouldShowTotals = viewerVisibility.content || viewerVisibility.weight || viewerVisibility.amount;
   const shouldShowInvoiceColumn = isProducer;
+  const canReviewPickupSlots = isOwner && !autoApprovePickupSlots;
   const formatUnitsTotal = (value: number) =>
     Number.isInteger(value) ? String(value) : value.toFixed(2);
   const canShowPreview = isAuthenticated && Boolean(myParticipant) && !isOwner && !isProducer;
@@ -1592,6 +1921,44 @@ const sharerAvatarUpdatedAt =
                       chez <span className="font-semibold text-[#1F2937]">{producerName}</span> : participez avec lui
                       à la commande
                     </p>
+                    {order.message && (
+                    <div className="bg-white border border-[#FFDCC4] rounded-2xl p-4 text-sm text-[#92400E] shadow-sm">
+                      <span className="inline-flex items-center gap-2 font-semibold text-[#B45309]">
+                        <Info className="w-4 h-4" />
+                      </span>
+                      <p className="mt-2 leading-relaxed text-[#92400E]">{order.message}</p>
+                    </div>
+                      )}
+                      {isProducer && (
+                      <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
+                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
+                          <Globe2 className="w-4 h-4 text-[#FF6B4A]" />
+                          Livraison
+                        </div>
+                        <p className="text-[#1F2937] font-semibold text-lg leading-tight">{deliveryModeLabel}</p>
+                        {deliveryDetailLines.map((line, index) => (
+                          <p key={`delivery-${index}`} className="text-xs text-[#6B7280]">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                      {shouldShowProducerPickupDetails && (
+                      <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
+                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
+                          <MapPin className="w-4 h-4 text-[#FF6B4A]" />
+                          Retrait producteur
+                        </div>
+                        <p className="text-[#1F2937] font-semibold text-lg leading-tight">
+                          Retrait chez {producerName}
+                        </p>
+                        {producerPickupDetailLines.map((line, index) => (
+                          <p key={`producer-pickup-${index}`} className="text-xs text-[#6B7280]">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1600,8 +1967,8 @@ const sharerAvatarUpdatedAt =
                 <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-3 shadow-sm order-client-view__calendar-card">
                   <div className="order-client-view__calendar-header">
                     <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                      <CalendarClock className="w-4 h-4 text-[#FF6B4A]" />
-                      Calendrier
+                      <MapPin className="w-4 h-4 text-[#FF6B4A]" />
+                      Retrait {locationAddress}
                     </div>
                     <div className="order-client-view__calendar-nav">
                       <button
@@ -1630,7 +1997,7 @@ const sharerAvatarUpdatedAt =
                   <div className="order-client-view__calendar-legend">
                     <span className="order-client-view__calendar-legend-item">
                       <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--open" />
-                      Open
+                      Commande
                     </span>
                     <span className="order-client-view__calendar-legend-item">
                       <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--delivery" />
@@ -1638,7 +2005,7 @@ const sharerAvatarUpdatedAt =
                     </span>
                     <span className="order-client-view__calendar-legend-item">
                       <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--availability" />
-                      Disponibilite
+                      Récupération
                     </span>
                   </div>
                   <div className="order-client-view__calendar-grid">
@@ -1663,9 +2030,21 @@ const sharerAvatarUpdatedAt =
                       const isInOpen = openRange ? isDateInRange(day, openRange) : false;
                       const isSelected = selectedPickupDateKey === dateKey;
                       const isToday = todayKey === dateKey;
+                      const isMyPickupDay = Boolean(myPickupSlotDateKey && myPickupSlotDateKey === dateKey);
+                      const isMyPickupDayAccepted = isMyPickupDay && myPickupSlotStatus === 'accepted';
+                      const isMyPickupDayPending = isMyPickupDay && myPickupSlotStatus === 'requested';
+                      const myPickupSymbol = isMyPickupDayAccepted ? '✓' : isMyPickupDayPending ? '…' : null;
+                      const dayScheduleKey = WEEKDAY_KEYS[day.getDay()];
+                      const hasProducerPickupDay = Boolean(
+                        shouldShowProducerPickupDetails && producerOpeningHoursByDay[dayScheduleKey]
+                      );
+                      const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
                       const hasSlots =
                         canShowPickupSlotDetails &&
                         (pickupSlotsByDate.get(dateKey) ?? []).some((slot) => slot.enabled);
+                      const hasCalendarMarker = hasSlots || showProducerPickupIndicator;
+                      const reservationCount = pickupSlotReservationCountsByDate.get(dateKey) ?? 0;
+                      const reservationCountLabel = reservationCount > 9 ? '9+' : String(reservationCount);
                       const isClickable = Boolean(availabilityRange) && isInAvailability && canShowPickupSlotDetails;
                       const toneClass = isInAvailability
                         ? 'order-client-view__calendar-day--availability'
@@ -1681,6 +2060,8 @@ const sharerAvatarUpdatedAt =
                           className={`order-client-view__calendar-day ${toneClass} ${
                             isSelected ? 'order-client-view__calendar-day--selected' : ''
                           } ${isToday ? 'order-client-view__calendar-day--today' : ''} ${
+                            isMyPickupDayAccepted ? 'order-client-view__calendar-day--my-pickup' : ''
+                          } ${
                             isClickable
                               ? 'order-client-view__calendar-day--clickable'
                               : 'order-client-view__calendar-day--inactive'
@@ -1694,7 +2075,31 @@ const sharerAvatarUpdatedAt =
                           tabIndex={isClickable ? 0 : -1}
                         >
                           <span>{day.getDate()}</span>
-                          {hasSlots && <span className="order-client-view__calendar-day-dot" />}
+                          {hasCalendarMarker && <span className="order-client-view__calendar-day-dot" />}
+                          {myPickupSymbol && (
+                            <span
+                              className={`order-client-view__calendar-day-pickup ${
+                                isMyPickupDayPending ? 'order-client-view__calendar-day-pickup--pending' : ''
+                              }`}
+                              title={
+                                isMyPickupDayAccepted
+                                  ? 'Créneau confirmé'
+                                  : isMyPickupDayPending
+                                    ? 'Créneau en attente'
+                                    : 'Votre créneau'
+                              }
+                            >
+                              {myPickupSymbol}
+                            </span>
+                          )}
+                          {reservationCount > 0 && (
+                            <span
+                              className="order-client-view__calendar-day-count"
+                              title={`${reservationCount} réservation${reservationCount > 1 ? 's' : ''}`}
+                            >
+                              {reservationCountLabel}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -1705,108 +2110,201 @@ const sharerAvatarUpdatedAt =
                         <>
                           <div className="order-client-view__calendar-slots-header">
                             <span className="order-client-view__calendar-slots-title">
-                              Disponibilites le {selectedDateLabel}
+                              Disponibilités le {selectedDateLabel}
                             </span>
-                            {!canSelectPickupSlot && (
+                            {pickupSlotHeaderStatus && (
                               <span className="order-client-view__calendar-slots-status">
-                                Selection possible apres livraison
+                                {pickupSlotHeaderStatus}
+                              </span>
+                            )}
+                            {isOwner && selectedDateReservationCount > 0 && (
+                              <span className="order-client-view__pickup-slots-count">
+                                {selectedDateReservationCount} réservation
+                                {selectedDateReservationCount > 1 ? 's' : ''}
                               </span>
                             )}
                           </div>
                           {selectedDateSlotsSorted.length === 0 ? (
-                            <p className="order-client-view__calendar-slots-note">Aucun creneau pour cette date.</p>
+                            <p className="order-client-view__calendar-slots-note">Aucun créneau pour cette date.</p>
                           ) : (
                             <div className="order-client-view__pickup-slots-grid">
                               {selectedDateSlotsSorted.map((slot) => {
                                 const isSelected = myParticipant?.pickupSlotId === slot.id;
-                                const isDisabled = !slot.enabled || !canSelectPickupSlot;
+                                const isDisabled = !slot.enabled || !canSelectPickupSlotOnSelectedDate;
+                                const slotReservations = pickupSlotReservations.get(slot.id) ?? [];
+                                const reservationCount = slotReservations.filter(
+                                  (reservation) => reservation.status !== 'rejected'
+                                ).length;
+                                const timeOptions = buildPickupTimeOptions(
+                                  slot.start,
+                                  slot.end,
+                                  isSelectedDateToday ? minSelectableMinutes : null
+                                );
+                                const hasSelectableTimes = timeOptions.length > 0;
+                                const rawSelectedTime =
+                                  pickupSlotTimesById[slot.id] ?? (isSelected ? myParticipantPickupTime ?? '' : '');
+                                const normalizedTimeOptions =
+                                  timeOptions.length > 0 && rawSelectedTime && !timeOptions.includes(rawSelectedTime)
+                                    ? [rawSelectedTime, ...timeOptions]
+                                    : timeOptions;
+                                const selectedTime = rawSelectedTime && normalizedTimeOptions.includes(rawSelectedTime)
+                                  ? rawSelectedTime
+                                  : '';
                                 return (
-                                  <button
-                                    key={slot.id}
-                                    type="button"
-                                    className={`order-client-view__pickup-slot ${
-                                      isDisabled ? 'order-client-view__pickup-slot--disabled' : ''
-                                    } ${isSelected ? 'order-client-view__pickup-slot--selected' : ''}`}
-                                    onClick={() => {
-                                      if (isDisabled || isWorking) return;
-                                      handlePickupSlotSelect(slot.id);
-                                    }}
-                                    disabled={isDisabled || isWorking}
-                                  >
-                                    <div>
-                                      <p className="order-client-view__pickup-slot-date">{slot.timeLabel}</p>
-                                      <p className="order-client-view__pickup-slot-time">{slot.label}</p>
+                                  <div key={slot.id} className="order-client-view__pickup-slot-wrapper">
+                                    <div
+                                      className={`order-client-view__pickup-slot ${
+                                        isDisabled ? 'order-client-view__pickup-slot--disabled' : ''
+                                      } ${isSelected ? 'order-client-view__pickup-slot--selected' : ''}`}
+                                    >
+                                      <div>
+                                        <p className="order-client-view__pickup-slot-date">{slot.timeLabel}</p>
+                                        <p className="order-client-view__pickup-slot-time">{slot.label}</p>
+                                      </div>
+                                      <div className="order-client-view__pickup-slot-status">
+                                        {isSelected && (
+                                          <span className="order-client-view__pickup-slot-tag">
+                                            Selectionne{myParticipantPickupTime ? ` à ${myParticipantPickupTime}` : ''}
+                                          </span>
+                                        )}
+                                        {isSelected && myParticipant?.pickupSlotStatus === 'accepted' && (
+                                          <span className="order-client-view__pickup-slot-tag">
+                                            Créneau confirmé
+                                          </span>
+                                        )}
+                                        {isSelected && myParticipant?.pickupSlotStatus === 'requested' && (
+                                          <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--pending">
+                                            En attente de validation
+                                          </span>
+                                        )}
+                                        {isSelected && myParticipant?.pickupSlotStatus === 'rejected' && (
+                                          <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--rejected">
+                                            Demande refusée
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
-                                    <div className="order-client-view__pickup-slot-status">
-                                      {isSelected && (
-                                        <span className="order-client-view__pickup-slot-tag">Selectionne</span>
-                                      )}
-                                      {isSelected && !autoApprovePickupSlots && pickupSlotStatusLabel && (
-                                        <span className="order-client-view__pickup-slot-tag order-client-view__pickup-slot-tag--pending">
-                                          Demande envoyee - {pickupSlotStatusLabel}
+                                    {canSelectPickupSlotOnSelectedDate && timeOptions.length > 0 && (
+                                      <div className="order-client-view__pickup-slot-time-picker">
+                                        <label
+                                          htmlFor={`pickup-slot-time-${slot.id}`}
+                                          className="order-client-view__pickup-slot-time-label"
+                                        >
+                                          Heure souhaitée
+                                        </label>
+                                        <select
+                                          id={`pickup-slot-time-${slot.id}`}
+                                          className="order-client-view__pickup-slot-time-select"
+                                          value={selectedTime}
+                                          onChange={(event) => {
+                                            const value = event.target.value;
+                                            setPickupSlotTimesById((prev) => ({ ...prev, [slot.id]: value }));
+                                          }}
+                                          disabled={isDisabled || isWorking}
+                                        >
+                                          <option value="">Choisir une heure</option>
+                                          {normalizedTimeOptions.map((option) => (
+                                            <option key={option} value={option}>
+                                              {option}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+                                    {canSelectPickupSlotOnSelectedDate && (
+                                      <button
+                                        type="button"
+                                        className="order-client-view__pickup-slot-validate"
+                                        onClick={() => {
+                                          if (isDisabled || isWorking) return;
+                                          if (!hasSelectableTimes) {
+                                            toast.info('Aucune heure disponible pour ce créneau.');
+                                            return;
+                                          }
+                                          if (!selectedTime) {
+                                            toast.info('Choisissez une heure pour ce créneau.');
+                                            return;
+                                          }
+                                          handlePickupSlotSelect(slot.id, selectedTime);
+                                        }}
+                                        disabled={isDisabled || isWorking || !hasSelectableTimes || !selectedTime}
+                                      >
+                                        Valider
+                                      </button>
+                                    )}
+                                    {isOwner && reservationCount > 0 && (
+                                      <div className="order-client-view__pickup-slot-reservations">
+                                        <span className="order-client-view__pickup-slot-reservations-title">
+                                          {reservationCount} réservation{reservationCount > 1 ? 's' : ''}
                                         </span>
-                                      )}
-                                    </div>
-                                  </button>
+                                        <div className="order-client-view__pickup-slot-reservations-list">
+                                          {slotReservations.map((reservation) => {
+                                            const statusLabel =
+                                              reservation.status && reservation.status !== 'accepted'
+                                                ? formatPickupSlotStatusLabel(reservation.status)
+                                                : null;
+                                            const statusClass =
+                                              reservation.status === 'requested'
+                                                ? 'order-client-view__pickup-slot-reservation--pending'
+                                                : reservation.status === 'accepted'
+                                                  ? 'order-client-view__pickup-slot-reservation--accepted'
+                                                  : '';
+                                            const timeLabel = reservation.time ? ` · ${reservation.time}` : '';
+                                            const canReview = canReviewPickupSlots && reservation.status === 'requested';
+                                            return (
+                                              <div
+                                                key={reservation.id}
+                                                className={`order-client-view__pickup-slot-reservation ${statusClass}`}
+                                              >
+                                                <span className="order-client-view__pickup-slot-reservation-name">
+                                                  {reservation.name}
+                                                  {timeLabel}
+                                                  {statusLabel ? ` · ${statusLabel}` : ''}
+                                                </span>
+                                                {canReview && (
+                                                  <div className="order-client-view__pickup-slot-reservation-actions">
+                                                    <button
+                                                      type="button"
+                                                      className="order-client-view__pickup-slot-reservation-action order-client-view__pickup-slot-reservation-action--accept"
+                                                      onClick={() => handlePickupSlotReview(reservation.id, 'accepted')}
+                                                      disabled={isWorking}
+                                                    >
+                                                      Valider
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      className="order-client-view__pickup-slot-reservation-action order-client-view__pickup-slot-reservation-action--reject"
+                                                      onClick={() => handlePickupSlotReview(reservation.id, 'rejected')}
+                                                      disabled={isWorking}
+                                                    >
+                                                      Refuser
+                                                    </button>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 );
                               })}
                             </div>
                           )}
-                          {canSelectPickupSlot ? (
-                            <p className="order-client-view__calendar-slots-note">
-                              {autoApprovePickupSlots
-                                ? 'Votre creneau est valide automatiquement.'
-                                : 'Votre demande sera validee manuellement.'}
-                            </p>
-                          ) : (
-                            <p className="order-client-view__calendar-slots-note">
-                              {isPickupSelectionOpen
-                                ? 'Connectez-vous en tant que participant pour selectionner un creneau.'
-                                : 'La selection des creneaux sera ouverte une fois la commande livree.'}
-                            </p>
-                          )}
                         </>
                       ) : (
                         <p className="order-client-view__calendar-slots-note">
-                          Selectionnez un jour dans la periode de recuperation.
+                          Sélectionnez un jour dans la période de récupération.
                         </p>
                       )}
                     </div>
                   )}
+                  
                 </div>
-                <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                  <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                    <MapPin className="w-4 h-4 text-[#FF6B4A]" />
-                    Retrait {locationAddress}
-                  </div>
-                  <p className="text-[#1F2937] font-semibold text-lg leading-tight">{pickupLine}</p>
-                  {pickupWindowLabel && (
-                    <p className="text-xs text-[#6B7280]">Periode de recuperation : {pickupWindowLabel}</p>
-                  )}
-                </div>
-                {isProducer && (
-                  <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                    <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                      <Globe2 className="w-4 h-4 text-[#FF6B4A]" />
-                      Livraison
-                    </div>
-                    <p className="text-[#1F2937] font-semibold text-lg leading-tight">{deliveryModeLabel}</p>
-                    {deliveryDetailLines.map((line, index) => (
-                      <p key={`delivery-${index}`} className="text-xs text-[#6B7280]">
-                        {line}
-                      </p>
-                    ))}
-                  </div>
-                )}
+                
               </div>
-              {order.message && (
-                <div className="bg-white border border-[#FFDCC4] rounded-2xl p-4 text-sm text-[#92400E] shadow-sm">
-                  <span className="inline-flex items-center gap-2 font-semibold text-[#B45309]">
-                    <Info className="w-4 h-4" />
-                  </span>
-                  <p className="mt-2 leading-relaxed text-[#92400E]">{order.message}</p>
-                </div>
-              )}
+              
             </div>
           </div>
 
@@ -1836,6 +2334,7 @@ const sharerAvatarUpdatedAt =
                   }
                   unitPriceLabelsById={unitPriceLabelsById}
                   isSelectionLocked={!isOrderOpen}
+                  onOpenProduct={handleOpenProduct}
                 />
               )}
             </div>
@@ -2152,14 +2651,33 @@ const sharerAvatarUpdatedAt =
                       <tr>
                         {viewerVisibility.profile && <th>Participant</th>}
                         {viewerVisibility.content &&
-                          products.map((product) => (
-                            <th key={product.id} style={{ minWidth: 120 }}>
-                              <span className="order-client-view__participants-table-product">{product.name}</span>
-                              {product.unit && (
-                                <span className="order-client-view__participants-table-unit">{product.unit}</span>
-                              )}
-                            </th>
-                          ))}
+                          products.map((product) => {
+                            const unitLabel = (product.unit ?? '').trim();
+                            const measurementLabel = getProductMeasurementLabel(product);
+                            const showMeasurement =
+                              Boolean(measurementLabel) &&
+                              measurementLabel.toLowerCase() !== unitLabel.toLowerCase();
+                            return (
+                              <th key={product.id} style={{ minWidth: 120 }}>
+                                <button
+                                  type="button"
+                                  className="order-client-view__participants-table-product order-client-view__participants-table-product-button"
+                                  onClick={() => handleOpenProduct(product)}
+                                  aria-label={`Voir le produit ${product.name}`}
+                                >
+                                  {product.name}
+                                </button>
+                                {unitLabel && (
+                                  <span className="order-client-view__participants-table-unit">{unitLabel}</span>
+                                )}
+                                {showMeasurement && (
+                                  <span className="order-client-view__participants-table-unit">
+                                    {measurementLabel}
+                                  </span>
+                                )}
+                              </th>
+                            );
+                          })}
                         {viewerVisibility.weight && (
                           <th className="order-client-view__participants-table-number">Poids</th>
                         )}
@@ -2353,6 +2871,7 @@ function OrderProductsCarousel({
   onDirectQuantity,
   unitPriceLabelsById,
   isSelectionLocked,
+  onOpenProduct,
 }: {
   products: Product[];
   quantities: Record<string, number>;
@@ -2360,6 +2879,7 @@ function OrderProductsCarousel({
   onDirectQuantity: (productId: string, value: number) => void;
   unitPriceLabelsById: Record<string, string>;
   isSelectionLocked: boolean;
+  onOpenProduct: (product: Product) => void;
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
@@ -2447,7 +2967,7 @@ function OrderProductsCarousel({
                 related={[]}
                 canSave={false}
                 inDeck={false}
-                onOpen={() => undefined}
+                onOpen={() => onOpenProduct(product)}
                 onOpenProducer={() => undefined}
                 showSelectionControl={false}
                 cardWidth={ORDER_CARD_WIDTH}

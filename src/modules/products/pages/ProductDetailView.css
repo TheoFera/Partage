@@ -533,6 +533,26 @@
   color: #FF6B4A;
 }
 
+@media (max-width: 640px) {
+  .pd-producer-button {
+    width: 100%;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    text-align: center;
+  }
+
+  .pd-producer-button > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .pd-producer-button .pd-row {
+    justify-content: center;
+  }
+}
+
 .pd-price {
   font-size: 1.6rem;
   font-weight: 600;
@@ -862,12 +882,12 @@
 
 .pd-timeline {
   position: relative;
-  padding-left: 1.5rem;
+  padding-left: 0;
 }
 
 .pd-timeline__line {
   position: absolute;
-  left: 0.5rem;
+  left: 0.8rem;
   top: 0;
   bottom: 0;
   width: 1px;
@@ -880,6 +900,11 @@
 
 .pd-timeline__item {
   position: relative;
+  padding-left: 2.4rem;
+}
+
+.pd-timeline__item + .pd-timeline__item {
+  margin-top: 1.4rem;
 }
 
 .pd-timeline__item--dragging {
@@ -911,18 +936,59 @@
 
 .pd-timeline__marker {
   position: absolute;
-  left: -1rem;
-  top: 0.5rem;
-  width: 0.7rem;
-  height: 0.7rem;
+  left: 0;
+  top: 0.2rem;
+  width: 1.6rem;
+  height: 1.6rem;
   border-radius: 9999px;
   background: #FF6B4A;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .pd-timeline__row {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.pd-timeline__title,
+.pd-timeline__title-input {
+  margin-top: 0.2rem;
+}
+
+@media (max-width: 640px) {
+  .pd-timeline__item + .pd-timeline__item {
+    margin-top: 1rem;
+  }
+
+  .pd-timeline__item {
+    padding-left: 2rem;
+  }
+
+  .pd-timeline__line {
+    left: 0.7rem;
+  }
+
+  .pd-timeline__marker {
+    width: 1.4rem;
+    height: 1.4rem;
+    font-size: 0.7rem;
+  }
+
+  .pd-timeline__row {
+    gap: 0.55rem;
+  }
+
+  .pd-timeline__title,
+  .pd-timeline__title-input {
+    margin-top: 0.1rem;
+  }
 }
 
 @media (min-width: 1024px) {

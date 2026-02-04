@@ -15,7 +15,6 @@ import {
   Lock,
   Link2,
   Phone,
-  Building2,
 } from 'lucide-react';
 import {
   DeckCard,
@@ -92,15 +91,6 @@ const findDeliveryDayOption = (day: string) => {
 
 const normalizeOpeningHoursDayKey = (day: string) => findDeliveryDayOption(day)?.option.id;
 
-const getOpeningDayLabel = (day: string) => {
-  const match = findDeliveryDayOption(day);
-  if (match) return match.option.label;
-  if (!day) return '';
-  return `${day.charAt(0).toUpperCase()}${day.slice(1)}`;
-};
-
-const getOpeningDayOrderIndex = (day: string) => findDeliveryDayOption(day)?.index ?? deliveryDayOptions.length;
-
 const parseTimeSegment = (segment?: string) => {
   if (!segment) return '';
   const trimmed = segment.trim();
@@ -141,6 +131,49 @@ const producerCategoryOptions: Array<{ id: string; label: string }> = [
   { id: 'autre', label: 'Autre' },
 ];
 
+const sharerCharterSections = [
+  {
+    title: 'Je suis fiable',
+    items: [
+      {
+        id: 'deadlines',
+        label: "Je respecte les délais annoncés et j’informe rapidement en cas d’imprévu.",
+      },
+      {
+        id: 'communication',
+        label: "Je communique clairement les dates, lieux et consignes aux participants.",
+      },
+    ],
+  },
+  {
+    title: 'Je transporte avec soin',
+    items: [
+      {
+        id: 'collection',
+        label: "Je récupère la commande auprès du producteur et je la redistribue.",
+      },
+      {
+        id: 'conservation',
+        label: "Je respecte la chaîne du froid et les conditions de conservation.",
+      },
+    ],
+  },
+  {
+    title: 'Je respecte les règles',
+    items: [
+      {
+        id: 'pricing',
+        label: "Je respecte les prix convenus et je ne revends pas.",
+      },
+      {
+        id: 'respect',
+        label: "Je reste clair, courtois et fiable à chaque étape.",
+      },
+    ],
+  },
+];
+
+const sharerCharterItems = sharerCharterSections.flatMap((section) => section.items);
 const DEFAULT_PROFILE_AVATAR =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -206,8 +239,12 @@ export function ProfileView({
   const profileVisibility = user.profileVisibility ?? 'public';
   const addressVisibility = user.addressVisibility ?? 'public';
   const isProfilePublic = profileVisibility === 'public';
-  const canShowAddress = isOwnProfile || addressVisibility === 'public';
-  const addressLabel = canShowAddress ? user.address || 'Adresse non renseignée' : 'Adresse masquée';
+  const canShowAddress = addressVisibility === 'public';
+  const postalCityLabel = [user.postcode, user.city].filter(Boolean).join(' ');
+  const addressLine = canShowAddress
+    ? [user.address || 'Adresse non renseignée', postalCityLabel].filter(Boolean).join(' - ')
+    : postalCityLabel;
+  const shouldShowAddressLine = Boolean(addressLine);
   const profileTagline = user.tagline ?? '';
   const accountTypeLabel =
     user.accountType === 'auto_entrepreneur'
@@ -407,13 +444,6 @@ React.useEffect(() => {
     [onOpenProduct]
   );
 
-  const openingHoursEntries = React.useMemo(() => {
-    if (!user.openingHours) return [];
-    return Object.entries(user.openingHours).sort(
-      (a, b) => getOpeningDayOrderIndex(a[0]) - getOpeningDayOrderIndex(b[0])
-    );
-  }, [user.openingHours]);
-
   if (mode === 'edit') {
     return (
       <ProfileEditPanel
@@ -564,139 +594,123 @@ React.useEffect(() => {
   };
 
   return (
-    <div className="space-y-8 md:space-y-10 pb-24">
-      <div className="bg-white text-[#1F2937] rounded-2xl p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-6">
-        <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
-          <div className="profile-header-main flex items-center gap-4">
-            <div className="profile-avatar rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
-              <Avatar
-                supabaseClient={supabaseClient ?? null}
-                path={user.avatarPath}
-                updatedAt={avatarVersion}
-                fallbackSrc={avatarFallbackSrc}
-                alt={user.name}
-                className="w-full h-full object-cover"
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <h2 className="text-2xl font-semibold">{user.name}</h2>
-                {user.verified && (
-                  <span className="profile-verified-badge">
-                    <Check className="profile-verified-badge__icon" />
-                    Vérifié
+    <div className="space-y-6 md:space-y-8 pb-16">
+      <div className="bg-white text-[#1F2937] rounded-2xl p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-4">
+        <div className="relative flex flex-col gap-6">
+          <div className="profile-header-main flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="flex flex-col items-center gap-4 text-center md:flex-row md:items-center md:text-left">
+              <div className="profile-avatar w-24 h-24 md:w-28 md:h-28 rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
+                <Avatar
+                  supabaseClient={supabaseClient ?? null}
+                  path={user.avatarPath}
+                  updatedAt={avatarVersion}
+                  fallbackSrc={avatarFallbackSrc}
+                  alt={user.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-center gap-2 md:justify-start">
+                  <h2 className="text-2xl md:text-3xl font-semibold">{user.name}</h2>
+                </div>
+                <p className="text-sm text-[#6B7280]">@{profileHandle}</p>
+                <div className="profile-header-badges flex flex-wrap items-center justify-center gap-2 md:justify-start">
+                  <span className="px-3 py-1 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-xs text-[#B45309]">
+                    {user.role === 'producer' ? 'Producteur' : user.role === 'sharer' ? 'Partageur' : 'Participant'}
                   </span>
-                )}
-              </div>
-              <p className="text-sm text-[#6B7280]">@{profileHandle}</p>
-              {profileTagline && (
-                <p className="text-sm text-[#374151]" style={{ whiteSpace: 'pre-line' }}>
-                  {profileTagline}
-                </p>
-              )}
-              <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
-                <MapPin className="w-4 h-4" />
-                <span>{addressLabel}</span>
-                {!canShowAddress && <Lock className="w-4 h-4 text-[#9CA3AF]" />}
-              </div>
-              {(user.city || user.postcode) && (
-                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
-                  <Building2 className="w-4 h-4" />
-                  <span>{[user.postcode, user.city].filter(Boolean).join(' ')}</span>
-                </div>
-              )}
-              {user.phonePublic && (
-                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
-                  <Phone className="w-4 h-4" />
-                  <span>{user.phonePublic}</span>
-                </div>
-              )}
-              {(user.website || isOwnProfile) && (
-                <div className="profile-contact-row flex items-center gap-2 text-sm text-[#6B7280]">
-                  <Link2 className="w-4 h-4" />
-                  {user.website ? (
-                    <a href={user.website} className="text-[#FF6B4A] hover:underline" target="_blank" rel="noreferrer">
-                      {user.website}
-                    </a>
-                  ) : (
-                    <span>Ajoutez votre site web</span>
+                  <span className="px-3 py-1 rounded-full bg-[#E0F2FE] border border-[#BFDBFE] text-xs text-[#1D4ED8]">
+                    {accountTypeLabel}
+                  </span>
+                  {user.verified && (
+                    <span className="profile-verified-badge">
+                      <Check className="profile-verified-badge__icon" />
+                      Vérifié
+                    </span>
                   )}
                 </div>
-              )}
-              <div className="profile-badges flex items-center gap-2">
-                <span className="px-3 py-1 rounded-full bg-[#FFF1E6] border border-[#FFE0D1] text-xs text-[#B45309]">
-                  {user.role === 'producer' ? 'Producteur' : user.role === 'sharer' ? 'Partageur' : 'Participant'}
-                </span>
-                <span className="px-3 py-1 rounded-full bg-[#E0F2FE] border border-[#BFDBFE] text-xs text-[#1D4ED8]">
-                  {accountTypeLabel}
-                </span>
+                {(shouldShowAddressLine || user.website) && (
+                  <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-[#6B7280] md:justify-start">
+                    {shouldShowAddressLine && (
+                      <div className="profile-contact-row flex items-center gap-2">
+                        <MapPin className="w-4 h-4" />
+                        <span>{addressLine}</span>
+                      </div>
+                    )}
+                    {user.website && (
+                      <div className="profile-contact-row flex items-center gap-2">
+                        <Link2 className="w-4 h-4" />
+                        <a href={user.website} className="text-[#FF6B4A] hover:underline" target="_blank" rel="noreferrer">
+                          {user.website}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {user.phonePublic && (
+                  <div className="profile-contact-row flex items-center justify-center gap-2 text-sm text-[#6B7280] md:justify-start">
+                    <Phone className="w-4 h-4" />
+                    <span>{user.phonePublic}</span>
+                  </div>
+                )}
               </div>
             </div>
+            {!isOwnProfile && (
+              <div className="profile-header-actions w-full flex items-center justify-center gap-3 md:w-auto md:justify-end">
+                <button
+                  type="button"
+                  onClick={handleFollowClick}
+                  className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
+                    following
+                      ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
+                      : 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm hover:bg-[#FF5A39]'
+                  }`}
+                  aria-pressed={following}
+                >
+                  {following ? 'Suivi' : 'Suivre'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleMessageClick}
+                  className="px-4 py-2 rounded-full text-sm font-semibold border border-gray-200 text-[#1F2937] bg-white hover:border-[#FF6B4A] hover:text-[#FF6B4A] transition-colors"
+                >
+                  Message
+                </button>
+              </div>
+            )}
           </div>
-          {!isOwnProfile && (
-            <div className="profile-header-actions flex items-center gap-3 sm:ml-auto">
-              <button
-                type="button"
-                onClick={handleFollowClick}
-                className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
-                  following
-                    ? 'bg-[#E6F6F0] border-[#C8EBDD] text-[#0F5132]'
-                    : 'bg-[#FF6B4A] border-[#FF6B4A] text-white shadow-sm hover:bg-[#FF5A39]'
-                }`}
-                aria-pressed={following}
-              >
-                {following ? 'Suivi' : 'Suivre'}
-              </button>
-              <button
-                type="button"
-                onClick={handleMessageClick}
-                className="px-4 py-2 rounded-full text-sm font-semibold border border-gray-200 text-[#1F2937] bg-white hover:border-[#FF6B4A] hover:text-[#FF6B4A] transition-colors"
-              >
-                Message
-              </button>
+          {profileTagline && (
+            <p className="text-sm text-[#374151] text-left w-full md:w-3/5" style={{ whiteSpace: "pre-line" }}>
+              {profileTagline}
+            </p>
+          )}
+          {(user.freshProductsCertified || user.socialLinks) && (
+            <div className="flex flex-col items-center md:items-start gap-2 text-sm text-[#374151]">
+              {user.freshProductsCertified && (
+                <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#E6F6F0] border border-[#C8EBDD] text-[#0F5132] w-fit">
+                  <Shield className="w-4 h-4" /> Accreditations produits frais
+                </span>
+              )}
+              {user.socialLinks && Object.values(user.socialLinks).some(Boolean) && (
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+                  <span className="text-xs uppercase text-[#6B7280]">R?seaux :</span>
+                  {Object.entries(user.socialLinks)
+                    .filter(([, v]) => Boolean(v))
+                    .map(([key, value]) => (
+                      <a
+                        key={key}
+                        href={value as string}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2 py-1 rounded-full bg-[#F3F4F6] text-[#1F2937] border border-gray-200 text-xs hover:border-[#FF6B4A]"
+                      >
+                        {key}
+                      </a>
+                    ))}
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {(user.freshProductsCertified || user.socialLinks || user.openingHours) && (
-          <div className="flex flex-col gap-2 text-sm text-[#374151]">
-            {user.freshProductsCertified && (
-              <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#E6F6F0] border border-[#C8EBDD] text-[#0F5132] w-fit">
-                <Shield className="w-4 h-4" /> Accreditations produits frais
-              </span>
-            )}
-            {user.socialLinks && Object.values(user.socialLinks).some(Boolean) && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs uppercase text-[#6B7280]">Réseaux :</span>
-                {Object.entries(user.socialLinks)
-                  .filter(([, v]) => Boolean(v))
-                  .map(([key, value]) => (
-                    <a
-                      key={key}
-                      href={value as string}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-2 py-1 rounded-full bg-[#F3F4F6] text-[#1F2937] border border-gray-200 text-xs hover:border-[#FF6B4A]"
-                    >
-                      {key}
-                    </a>
-                  ))}
-              </div>
-            )}
-            {openingHoursEntries.length > 0 && (
-              <div className="flex flex-col gap-1 text-sm text-[#6B7280]">
-                <span className="text-xs uppercase text-[#9CA3AF]">Horaires</span>
-                {openingHoursEntries.map(([day, hours]) => (
-                  <div key={`${day}-${hours}`} className="flex gap-2">
-                    <span className="w-24 font-semibold text-[#374151]">{getOpeningDayLabel(day)}</span>
-                    <span>{hours}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="profile-tabs-wrapper" aria-label="Sections du profil">
           <div className="profile-tabs">
             {tabStats.map((stat) => {
@@ -864,6 +878,12 @@ function ProfileEditPanel({
   const [producerPickupEndTime, setProducerPickupEndTime] = React.useState<string>(
     user.legalEntity?.producerPickupEndTime ?? '17:00'
   );
+  const [sharerCharterChecks, setSharerCharterChecks] = React.useState<Record<string, boolean>>(() =>
+    sharerCharterItems.reduce((acc, item) => {
+      acc[item.id] = false;
+      return acc;
+    }, {} as Record<string, boolean>)
+  );
   const [producerPickupMinWeight, setProducerPickupMinWeight] = React.useState<number>(
     user.legalEntity?.producerPickupMinWeight ?? 0
   );
@@ -975,6 +995,7 @@ function ProfileEditPanel({
     accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
   const hasLegalInfo = Boolean(legalName.trim() && siret.trim());
   const producerEligible = canBeProducer && hasLegalInfo;
+  const sharerCharterAccepted = sharerCharterItems.every((item) => sharerCharterChecks[item.id]);
   const computedRole: User['role'] = producerEligible ? 'producer' : sharerEligible ? 'sharer' : 'participant';
   const structureTabVisible = accountType !== 'individual';
   const producerSettingsVisible = accountType !== 'individual' && accountType !== 'auto_entrepreneur';
@@ -1327,7 +1348,7 @@ function ProfileEditPanel({
   const renderEditTabContent = () => {
     if (editTab === 'general') {
       return (
-        <>
+        <div className="space-y-6">
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Identité et visibilité</h3>
@@ -1385,12 +1406,9 @@ function ProfileEditPanel({
                       onClick={() => setProfileVisibility('private')}
                     />
                   </div>
-                  <p className="text-xs text-[#9CA3AF]">Le mode privé limite la visibilité de votre profil et de vos informations.</p>
-                  {!user.verified && (
-                    <button className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors">
-                      Verifier mon identité
-                    </button>
-                  )}
+                  <p className="text-xs text-[#9CA3AF]">
+                    Le mode privé limite la visibilité de votre profil et de vos informations.
+                  </p>
                 </div>
               </div>
               <div className="space-y-3 rounded-xl bg-[#F9FAFB] p-4 border border-gray-200">
@@ -1409,63 +1427,12 @@ function ProfileEditPanel({
             </div>
           </section>
 
-
-
-          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Type de compte</h3>
-              <p className="text-xs text-[#6B7280]">Le rôle est calculé automatiquement selon vos informations.</p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="block text-sm text-[#6B7280]">Type de compte</label>
-                <select
-                  value={accountType}
-                  onChange={(e) =>
-                    setAccountType(
-                      (e.target.value as
-                        | 'individual'
-                        | 'auto_entrepreneur'
-                        | 'company'
-                        | 'association'
-                        | 'public_institution') ?? 'individual'
-                    )
-                  }
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                >
-                  <option value="individual">Particulier</option>
-                  <option value="auto_entrepreneur">Auto-entreprise</option>
-                  <option value="company">Entreprise</option>
-                  <option value="association">Association</option>
-                  <option value="public_institution">Autre</option>
-                </select>
-              </div>
-              <div className="rounded-xl border border-[#FBD0B8] bg-white p-3 text-xs text-[#6B7280] space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[#9CA3AF]">Rôle calculé</span>
-                  <span className="px-2 py-0.5 rounded-full bg-[#FF6B4A]/10 text-[#FF6B4A] font-semibold">
-                    {computedRole === 'producer'
-                      ? 'Producteur'
-                      : computedRole === 'sharer'
-                        ? 'Partageur'
-                        : 'Participant'}
-                  </span>
-                </div>
-                <p>
-                  Identité vérifiée + adresse complète =&gt; partageur. Informations légales complètes + type de compte
-                  éligible =&gt; producteur.
-                </p>
-              </div>
-            </div>
-          </section>
-
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Coordonnées obligatoires</h3>
+              <h3 className="text-[#1F2937] font-semibold">Coordonnées</h3>
               <p className="text-xs text-[#6B7280]">Pour sécuriser le fonctionnement de la plateforme.</p>
             </div>
             <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-              <p className="text-sm font-semibold text-[#1F2937]">Confirmez vos coordonnées</p>
               <div className="space-y-3">
                 <label className="block text-sm text-[#6B7280]">Adresse *</label>
                 <div className="flex items-center gap-2">
@@ -1553,7 +1520,63 @@ function ProfileEditPanel({
               </div>
             </div>
           </section>
-        </>
+
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Vérification d'identité</h3>
+              {user.verified && (
+                <span className="px-3 py-1 bg-[#E6F6F0] text-[#0F5132] text-xs rounded-full flex items-center gap-1">
+                  <Shield className="w-3 h-3" />
+                  Compte vérifié
+                </span>
+              )}
+            </div>
+            <div className="space-y-2 text-sm text-[#6B7280]">
+              <p>La vérification est nécessaire pour pouvoir créer des commandes ou accéder au statut de producteur.</p>
+              <p className="text-xs text-[#9CA3AF]">
+                Pour l'instant, la validation est réalisée manuellement par l'équipe : contacter Théo Fera.
+              </p>
+            </div>
+            {!user.verified && (
+              <button
+                type="button"
+                className="w-full py-2 bg-[#28C1A5] text-white rounded-lg hover:bg-[#23A88F] transition-colors"
+              >
+                Demander la vérification
+              </button>
+            )}
+          </section>
+          <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Type de compte</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="block text-sm text-[#6B7280]">Type de compte</label>
+                <select
+                  value={accountType}
+                  onChange={(e) =>
+                    setAccountType(
+                      (e.target.value as
+                        | 'individual'
+                        | 'auto_entrepreneur'
+                        | 'company'
+                        | 'association'
+                        | 'public_institution') ?? 'individual'
+                    )
+                  }
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                >
+                  <option value="individual">Particulier</option>
+                  <option value="auto_entrepreneur">Auto-entreprise</option>
+                  <option value="company">Entreprise</option>
+                  <option value="association">Association</option>
+                  <option value="public_institution">Autre</option>
+                </select>
+              </div>
+            </div>
+          </section>
+        </div>
       );
     }
     if (editTab === 'public') {
@@ -1592,7 +1615,7 @@ function ProfileEditPanel({
                     onChange={(e) => setOffersOnSitePickup(e.target.checked)}
                     className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
                   />
-                  Retrait sur place proposé
+                  Vente à la ferme
                 </label>
               </div>
             </div>
@@ -1725,7 +1748,7 @@ function ProfileEditPanel({
     }
     if (editTab === 'sharer') {
       return (
-        <>
+        <div className="space-y-6">
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Horaire par défaut pour la récupération des produits</h3>
@@ -1758,6 +1781,47 @@ function ProfileEditPanel({
 
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Charte du partageur</h3>
+              {sharerCharterAccepted && (
+                <span className="px-3 py-1 bg-[#E6F6F0] text-[#0F5132] text-xs rounded-full flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  Charte validée
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[#6B7280]">
+              Vous devez valider ces engagements pour créer une commande.
+            </p>
+            <div className="space-y-4">
+              {sharerCharterSections.map((section) => (
+                <div key={section.title} className="space-y-2">
+                  <h4 className="text-sm font-semibold text-[#374151]">{section.title}</h4>
+                  <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+                    {section.items.map((item, index) => (
+                      <label
+                        key={item.id}
+                        className={`flex items-start gap-3 px-4 py-3 text-sm text-[#374151] ${
+                          index > 0 ? 'border-t border-gray-200' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(sharerCharterChecks[item.id])}
+                          onChange={(e) =>
+                            setSharerCharterChecks((prev) => ({ ...prev, [item.id]: e.target.checked }))
+                          }
+                          className="mt-0.5 h-5 w-5 rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Eligibilité créateur de commande</h3>
               <span className="text-xs text-[#6B7280]">Lecture seule.</span>
             </div>
@@ -1766,12 +1830,12 @@ function ProfileEditPanel({
               {renderEligibilityItem('Adresse complète (adresse + code postal + ville)', hasAddress)}
             </div>
           </section>
-        </>
+        </div>
       );
     }
     if (editTab === 'producer_settings') {
       return (
-        <>
+        <div className="space-y-6">
           <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Eligibilité producteur</h3>
@@ -2214,7 +2278,7 @@ function ProfileEditPanel({
             </div>
           </section>
 
-        </>
+        </div>
       );
     }
     return null;

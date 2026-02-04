@@ -6,6 +6,7 @@ export type VatRegime = 'unknown' | 'franchise' | 'assujetti';
 export interface User {
   id: string;
   name: string;
+  email?: string;
   role: UserRole;
   handle?: string;
   accountType?: 'individual' | 'auto_entrepreneur' | 'company' | 'association' | 'public_institution';

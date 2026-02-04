@@ -29,6 +29,7 @@ import {
   type Payment,
   type ProfileSummary,
   type ShareMode,
+  type PickupSlotStatus,
   type InvoiceSerie,
   eurosToCents,
 } from '../types';
@@ -94,6 +95,7 @@ const ensureDemoState = (order: GroupOrder): DemoOrderState => {
     pickupSlotId: null,
     pickupSlotStatus: null,
     pickupSlotRequestedAt: null,
+    pickupSlotTime: null,
     pickupSlotReviewedAt: null,
     pickupSlotReviewedBy: null,
     totalWeightKg: 0,
@@ -171,6 +173,8 @@ const mapOrderRow = (row: DbOrder): Order => ({
   deliveryCity: row.delivery_city,
   deliveryPostcode: row.delivery_postcode,
   deliveryAddress: row.delivery_address,
+  deliveryPhone: row.delivery_phone,
+  deliveryEmail: row.delivery_email,
   deliveryLat: row.delivery_lat ?? null,
   deliveryLng: row.delivery_lng ?? null,
   estimatedDeliveryDate: toDate(row.estimated_delivery_date),
@@ -243,6 +247,7 @@ const mapParticipantRow = (row: DbOrderParticipant): OrderParticipant => ({
   pickupSlotId: row.pickup_slot_id,
   pickupSlotStatus: row.pickup_slot_status,
   pickupSlotRequestedAt: toDate(row.pickup_slot_requested_at),
+  pickupSlotTime: row.pickup_slot_time ?? null,
   pickupSlotReviewedAt: toDate(row.pickup_slot_reviewed_at),
   pickupSlotReviewedBy: row.pickup_slot_reviewed_by,
   totalWeightKg: row.total_weight_kg,
@@ -342,6 +347,8 @@ const mapListingRowToOrderProductInfo = (
     id: row.product_id,
     code: row.product_code,
     slug: row.slug ?? null,
+    activeLotCode: row.active_lot_code ?? null,
+    activeLotId: row.active_lot_id ?? null,
     name: row.name,
     description: row.description ?? null,
     packaging: row.packaging ?? null,
@@ -434,7 +441,7 @@ const fetchProfilesByIds = async (client: SupabaseClient, profileIds: string[]) 
   if (!profileIds.length) return [] as Array<Record<string, unknown>>;
   const { data, error } = await client
     .from('profiles')
-    .select('id, name, handle, avatar_path, avatar_updated_at')
+    .select('id, name, handle, avatar_path, avatar_updated_at, address, address_details, city, postcode, opening_hours')
     .in('id', profileIds);
   if (error) throw error;
   return (data as Array<Record<string, unknown>>) ?? [];
@@ -522,6 +529,8 @@ const buildDemoOrder = (order: GroupOrder): Order => {
     deliveryCity: null,
     deliveryPostcode: null,
     deliveryAddress: null,
+    deliveryPhone: null,
+    deliveryEmail: null,
     deliveryLat: null,
     deliveryLng: null,
     estimatedDeliveryDate: order.estimatedDeliveryDate ?? null,
@@ -587,6 +596,8 @@ const buildDemoProductsOffered = (order: GroupOrder, demoOrder: Order): OrderPro
         id: productId,
         code: product.productCode ?? product.id,
         slug: product.slug ?? null,
+        activeLotCode: product.activeLotCode ?? null,
+        activeLotId: product.activeLotId ?? null,
         name: product.name,
         description: product.description ?? null,
         packaging: product.unit ?? null,
@@ -637,6 +648,8 @@ export type CreateOrderPayload = {
   deliveryCity?: string;
   deliveryPostcode?: string;
   deliveryAddress?: string;
+  deliveryPhone?: string;
+  deliveryEmail?: string;
   deliveryLat?: number | null;
   deliveryLng?: number | null;
   estimatedDeliveryDate?: Date | null;
@@ -704,6 +717,8 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
     delivery_city: payload.deliveryCity ?? null,
     delivery_postcode: payload.deliveryPostcode ?? null,
     delivery_address: payload.deliveryAddress ?? null,
+    delivery_phone: payload.deliveryPhone ?? null,
+    delivery_email: payload.deliveryEmail ?? null,
     delivery_lat: payload.deliveryLat ?? null,
     delivery_lng: payload.deliveryLng ?? null,
     estimated_delivery_date: payload.estimatedDeliveryDate
@@ -944,6 +959,11 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
       handle: (profile.handle as string | null) ?? null,
       avatarPath: (profile.avatar_path as string | null) ?? null,
       avatarUpdatedAt: (profile.avatar_updated_at as string | null) ?? null,
+      address: (profile.address as string | null) ?? null,
+      addressDetails: (profile.address_details as string | null) ?? null,
+      city: (profile.city as string | null) ?? null,
+      postcode: (profile.postcode as string | null) ?? null,
+      openingHours: (profile.opening_hours as Record<string, string> | null) ?? null,
     });
   });
 
@@ -1017,21 +1037,22 @@ export const requestParticipation = async (orderCode: string, profileId: string,
       reviewedBy: null,
       pickupSlotId: null,
       pickupSlotStatus: null,
-    pickupSlotRequestedAt: null,
-    pickupSlotReviewedAt: null,
-    pickupSlotReviewedBy: null,
-    totalWeightKg: 0,
-    totalAmountCents: 0,
-    createdAt: now,
-    updatedAt: now,
-    pickupCode: null,
-    pickupCodeGeneratedAt: null,
-    pickedUpAt: null,
-    profileName: null,
-    profileHandle: null,
-    avatarPath: null,
-    avatarUpdatedAt: null,
-  };
+      pickupSlotRequestedAt: null,
+      pickupSlotTime: null,
+      pickupSlotReviewedAt: null,
+      pickupSlotReviewedBy: null,
+      totalWeightKg: 0,
+      totalAmountCents: 0,
+      createdAt: now,
+      updatedAt: now,
+      pickupCode: null,
+      pickupCodeGeneratedAt: null,
+      pickedUpAt: null,
+      profileName: null,
+      profileHandle: null,
+      avatarPath: null,
+      avatarUpdatedAt: null,
+    };
     state.participants.push(participant);
     return participant;
   }
@@ -1134,6 +1155,7 @@ export const setParticipantPickupSlot = async (params: {
   orderId: string;
   participantId: string;
   pickupSlotId: string;
+  pickupSlotTime?: string | null;
 }) => {
   if (DEMO_MODE) {
     const demoOrder = findDemoOrderById(params.orderId);
@@ -1147,6 +1169,9 @@ export const setParticipantPickupSlot = async (params: {
     participant.pickupSlotId = params.pickupSlotId;
     participant.pickupSlotStatus = autoApprove ? 'accepted' : 'requested';
     participant.pickupSlotRequestedAt = now;
+    participant.pickupSlotTime = params.pickupSlotTime ?? null;
+    participant.pickupSlotReviewedAt = null;
+    participant.pickupSlotReviewedBy = null;
     participant.updatedAt = now;
     return participant;
   }
@@ -1158,6 +1183,43 @@ export const setParticipantPickupSlot = async (params: {
     pickup_slot_id: params.pickupSlotId,
     pickup_slot_status: autoApprove ? 'accepted' : 'requested',
     pickup_slot_requested_at: new Date().toISOString(),
+    pickup_slot_time: params.pickupSlotTime ?? null,
+    pickup_slot_reviewed_at: null,
+    pickup_slot_reviewed_by: null,
+  };
+  const { data, error } = await client
+    .from('order_participants')
+    .update(updatePayload)
+    .eq('id', params.participantId)
+    .select('*')
+    .single();
+  if (error || !data) throw error ?? new Error('Mise a jour du creneau impossible.');
+  return mapParticipantRow(data as DbOrderParticipant);
+};
+
+export const reviewParticipantPickupSlot = async (params: {
+  participantId: string;
+  status: Exclude<PickupSlotStatus, 'requested'>;
+  reviewerId?: string | null;
+}) => {
+  if (DEMO_MODE) {
+    for (const state of demoStateByOrderId.values()) {
+      const participant = state.participants.find((entry) => entry.id === params.participantId);
+      if (!participant) continue;
+      const now = new Date();
+      participant.pickupSlotStatus = params.status;
+      participant.pickupSlotReviewedAt = now;
+      participant.pickupSlotReviewedBy = params.reviewerId ?? null;
+      participant.updatedAt = now;
+      return participant;
+    }
+    throw new Error('Participant introuvable.');
+  }
+  const client = getClient();
+  const updatePayload = {
+    pickup_slot_status: params.status,
+    pickup_slot_reviewed_at: new Date().toISOString(),
+    pickup_slot_reviewed_by: params.reviewerId ?? null,
   };
   const { data, error } = await client
     .from('order_participants')
@@ -1580,6 +1642,16 @@ export const createPlatformInvoiceForOrder = async (orderId: string) => {
   if (DEMO_MODE) return null;
   const client = getClient();
   const { data, error } = await client.rpc('create_platform_invoice_for_order', {
+    p_order_id: orderId,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const createPlatformInvoiceAndSendForOrder = async (orderId: string) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('create_platform_invoice_and_send_for_order', {
     p_order_id: orderId,
   });
   if (error) throw error;

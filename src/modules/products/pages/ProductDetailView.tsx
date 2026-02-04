@@ -65,6 +65,7 @@ interface ProductDetailViewProps {
   onParticipate: () => void;
   onToggleSave?: (next: boolean) => void;
   initialLotId?: string;
+  timelineExtraSteps?: TimelineStep[];
   mode?: 'view' | 'create';
   onCreateProduct?: (payload: CreateProductPayload) => void;
   categoryOptions?: string[];
@@ -223,6 +224,13 @@ const collectLocationParts = (step: TimelineStep) => {
 const formatStepLocationLabel = (step: TimelineStep) => {
   const parts = collectLocationParts(step);
   return parts.length ? parts.join(', ') : 'A preciser';
+};
+
+const formatStepDateLabel = (step: TimelineStep) => {
+  const start = (step.periodStart ?? step.date ?? '').trim();
+  const end = (step.periodEnd ?? '').trim();
+  if (start && end) return `${start} -> ${end}`;
+  return start || end || '';
 };
 
 const buildStepLocationQuery = (step: TimelineStep) => {
@@ -510,6 +518,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onParticipate,
   onToggleSave,
   initialLotId,
+  timelineExtraSteps,
   mode = 'view',
   onCreateProduct,
   categoryOptions,
@@ -954,7 +963,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const baseTimeline =
     detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline;
-  const timelineDisplay = editMode ? localTimeline : timelineOverride ?? baseTimeline;
+  const timelineDisplay = React.useMemo(() => {
+    const base = editMode ? localTimeline : timelineOverride ?? baseTimeline;
+    if (editMode || !(timelineExtraSteps?.length ?? 0)) {
+      return base;
+    }
+    return [...base, ...timelineExtraSteps!];
+  }, [baseTimeline, editMode, localTimeline, timelineExtraSteps, timelineOverride]);
   const lotStepDates = activeLotId ? lotStepDatesByLot[activeLotId] ?? {} : {};
   const lotTimelineDisplay = React.useMemo<TimelineStep[]>(
     () =>
@@ -1052,9 +1067,6 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       const marker = L.marker([point.lat, point.lng], { icon })
         .addTo(layer)
         .bindPopup(`<strong>${point.label}</strong><br />${point.locationLabel}`);
-      if (point.orderIndex === 1) {
-        marker.openPopup();
-      }
       journeyMarkersRef.current.set(point.id, marker);
     });
 
@@ -3303,6 +3315,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     const isOver = dragOverStepIndex === index;
                     const stepImageUrl = step.preuve?.url;
                     const stepImageLabel = step.preuve?.label ?? step.etape ?? 'Etape';
+                    const stepDateLabel = !editMode ? formatStepDateLabel(step) : '';
                     return (
                       <div
                         key={step.localId ?? `${step.etape}-${index}`}
@@ -3312,18 +3325,18 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                         onDragOver={handleTimelineDragOver(index)}
                         onDrop={handleTimelineDrop(index)}
                       >
-                        <div className="pd-timeline__marker" />
+                        <div className="pd-timeline__marker">{index + 1}</div>
                         <div className="pd-timeline__row">
-                          <div className="pd-timeline__body pd-stack pd-stack--sm">
+                          <div className="pd-timeline__body pd-stack pd-stack--xs">
                             <div className="pd-row pd-row--between pd-gap-sm">
                               {editMode ? (
                                 <input
-                                  className="pd-input pd-input--small"
+                                  className="pd-input pd-input--small pd-timeline__title-input"
                                   value={step.etape}
                                   onChange={(e) => updateTimelineStep(index, { etape: e.target.value })}
                                 />
                               ) : (
-                                <p className="pd-text-strong">{step.etape}</p>
+                                <p className="pd-text-strong pd-timeline__title">{step.etape}</p>
                               )}
                               {editMode ? (
                                 <button
@@ -3365,6 +3378,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                                 <p>{formatStepLocationLabel(step)}</p>
                               )}
                             </div>
+                            {!editMode && stepDateLabel ? (
+                              <div className="pd-stack pd-stack--xs">
+                                <p className="pd-label">Date</p>
+                                <p>{stepDateLabel}</p>
+                              </div>
+                            ) : null}
                             {editMode ? (
                               <div className="pd-grid pd-grid--two pd-gap-sm">
                                 <div className="pd-stack pd-stack--xs">

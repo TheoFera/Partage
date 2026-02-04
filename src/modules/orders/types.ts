@@ -45,6 +45,8 @@ export type DbOrder = {
   delivery_city: string | null;
   delivery_postcode: string | null;
   delivery_address: string | null;
+  delivery_phone: string | null;
+  delivery_email: string | null;
   delivery_lat?: number | null;
   delivery_lng?: number | null;
   estimated_delivery_date: string | null;
@@ -118,6 +120,7 @@ export type DbOrderParticipant = {
   pickup_slot_id: string | null;
   pickup_slot_status: PickupSlotStatus | null;
   pickup_slot_requested_at: string | null;
+  pickup_slot_time: string | null;
   pickup_slot_reviewed_at: string | null;
   pickup_slot_reviewed_by: string | null;
   total_weight_kg: number;
@@ -246,6 +249,8 @@ export type Order = {
   deliveryCity: string | null;
   deliveryPostcode: string | null;
   deliveryAddress: string | null;
+  deliveryPhone: string | null;
+  deliveryEmail: string | null;
   deliveryLat?: number | null;
   deliveryLng?: number | null;
   estimatedDeliveryDate: Date | null;
@@ -278,6 +283,8 @@ export type OrderProductInfo = {
   id: string;
   code: string;
   slug?: string | null;
+  activeLotCode?: string | null;
+  activeLotId?: string | null;
   name: string;
   description?: string | null;
   packaging?: string | null;
@@ -333,6 +340,7 @@ export type OrderParticipant = {
   pickupSlotId: string | null;
   pickupSlotStatus: PickupSlotStatus | null;
   pickupSlotRequestedAt: Date | null;
+  pickupSlotTime: string | null;
   pickupSlotReviewedAt: Date | null;
   pickupSlotReviewedBy: string | null;
   totalWeightKg: number;
@@ -353,6 +361,11 @@ export type ProfileSummary = {
   handle?: string | null;
   avatarPath?: string | null;
   avatarUpdatedAt?: string | null;
+  address?: string | null;
+  addressDetails?: string | null;
+  city?: string | null;
+  postcode?: string | null;
+  openingHours?: Record<string, string> | null;
 };
 
 export type OrderItem = {

@@ -12,6 +12,7 @@ import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
 import { DEMO_MODE } from '../../../shared/config/demoMode';
+import './OrderClientView.css';
 
 interface CreateOrderFormProps {
   products: DeckCard[];
@@ -33,13 +34,13 @@ type PickupSlot = {
 };
 
 const defaultSlots: PickupSlot[] = [
-  { day: 'monday', label: 'Lundi', enabled: false, start: '17:00', end: '19:00' },
-  { day: 'tuesday', label: 'Mardi', enabled: false, start: '17:00', end: '19:00' },
-  { day: 'wednesday', label: 'Mercredi', enabled: false, start: '17:00', end: '19:00' },
-  { day: 'thursday', label: 'Jeudi', enabled: false, start: '17:00', end: '19:00' },
+  { day: 'monday', label: 'Lundi', enabled: false, start: '', end: '' },
+  { day: 'tuesday', label: 'Mardi', enabled: false, start: '', end: '' },
+  { day: 'wednesday', label: 'Mercredi', enabled: false, start: '', end: '' },
+  { day: 'thursday', label: 'Jeudi', enabled: false, start: '', end: '' },
   { day: 'friday', label: 'Vendredi', enabled: true, start: '17:30', end: '19:30' },
   { day: 'saturday', label: 'Samedi', enabled: true, start: '10:00', end: '12:00' },
-  { day: 'sunday', label: 'Dimanche', enabled: false, start: '10:00', end: '12:00' },
+  { day: 'sunday', label: 'Dimanche', enabled: false, start: '', end: '' },
 ];
 
 const DEFAULT_PROFILE_AVATAR =
@@ -131,24 +132,109 @@ const buildOpeningHoursByDay = (openingHours?: Record<string, string>) => {
   return result;
 };
 
+const hasTimeRange = (slot: { start?: string; end?: string }) =>
+  Boolean(slot.start?.trim() && slot.end?.trim());
+
+const buildProducerPickupScheduleByDay = (params: {
+  openingHours?: Record<string, string>;
+  pickupDays?: DeliveryDay[];
+  pickupStart?: string;
+  pickupEnd?: string;
+}) => {
+  const fromOpeningHours = buildOpeningHoursByDay(params.openingHours);
+  if (Object.keys(fromOpeningHours).length > 0) return fromOpeningHours;
+  if (!params.pickupDays || params.pickupDays.length === 0) return {};
+  const start = parseTimeSegment(params.pickupStart);
+  const end = parseTimeSegment(params.pickupEnd);
+  if (!hasTimeRange({ start, end })) return {};
+  return params.pickupDays.reduce((acc, day) => {
+    acc[day] = { start, end };
+    return acc;
+  }, {} as Partial<Record<DeliveryDay, OpeningHourSlot>>);
+};
+
 const buildPickupSlotsFromOpeningHours = (openingHours?: Record<string, string>) => {
   const openingByDay = buildOpeningHoursByDay(openingHours);
   const hasOpeningHours = Object.keys(openingByDay).length > 0;
   return defaultSlots.map((slot) => {
-    if (!slot.day) return slot;
+    if (!slot.day) return { ...slot, enabled: hasTimeRange(slot) };
     if (!hasOpeningHours) {
-      return { ...slot, enabled: false };
+      const enabled = hasTimeRange(slot);
+      return { ...slot, enabled };
     }
     const openingSlot = openingByDay[slot.day as DeliveryDay];
     if (!openingSlot) {
-      return { ...slot, enabled: false };
+      return { ...slot, enabled: false, start: '', end: '' };
     }
     return {
       ...slot,
-      enabled: true,
       start: openingSlot.start,
       end: openingSlot.end,
+      enabled: hasTimeRange(openingSlot),
     };
+  });
+};
+
+const WEEKDAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const toDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateValue = (value?: string | Date | null) => {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    return new Date(year, month, day);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+};
+
+const toRange = (start: Date | null, end: Date | null) => {
+  if (!start || !end) return null;
+  const startTime = start.getTime();
+  const endTime = end.getTime();
+  if (Number.isNaN(startTime) || Number.isNaN(endTime)) return null;
+  return startTime <= endTime ? { start, end } : { start: end, end: start };
+};
+
+const isDateInRange = (date: Date, range: { start: Date; end: Date } | null) => {
+  if (!range) return false;
+  const time = date.getTime();
+  return time >= range.start.getTime() && time <= range.end.getTime();
+};
+
+const buildCalendarDays = (month: Date) => {
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+  const firstDay = new Date(year, monthIndex, 1);
+  const lastDay = new Date(year, monthIndex + 1, 0);
+  const offset = (firstDay.getDay() + 6) % 7;
+  const totalDays = lastDay.getDate();
+  const totalCells = Math.ceil((offset + totalDays) / 7) * 7;
+  return Array.from({ length: totalCells }, (_, index) => {
+    const dayNumber = index - offset + 1;
+    if (dayNumber < 1 || dayNumber > totalDays) return null;
+    return new Date(year, monthIndex, dayNumber);
   });
 };
 
@@ -239,6 +325,8 @@ export function CreateOrderForm({
   const [deliveryInfo, setDeliveryInfo] = React.useState('');
   const [deliveryCity, setDeliveryCity] = React.useState('');
   const [deliveryPostcode, setDeliveryPostcode] = React.useState('');
+  const [deliveryPhone, setDeliveryPhone] = React.useState('');
+  const [deliveryEmail, setDeliveryEmail] = React.useState('');
   const [deliveryOption, setDeliveryOption] = React.useState<DeliveryOption>('chronofresh');
   const [pickupDeliveryFee, setPickupDeliveryFee] = React.useState(0);
   const [useSamePickupAddress, setUseSamePickupAddress] = React.useState(true);
@@ -298,6 +386,21 @@ export function CreateOrderForm({
     () => buildOpeningHoursByDay(user?.openingHours),
     [user?.openingHours]
   );
+  const producerPickupScheduleByDay = React.useMemo(
+    () =>
+      buildProducerPickupScheduleByDay({
+        openingHours: producer?.openingHours,
+        pickupDays: producerLegal?.producerPickupDays,
+        pickupStart: producerLegal?.producerPickupStartTime,
+        pickupEnd: producerLegal?.producerPickupEndTime,
+      }),
+    [
+      producer?.openingHours,
+      producerLegal?.producerPickupDays,
+      producerLegal?.producerPickupStartTime,
+      producerLegal?.producerPickupEndTime,
+    ]
+  );
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -352,6 +455,16 @@ export function CreateOrderForm({
     setDeliveryPostcode((prev) => {
       if (prev.trim()) return prev;
       const next = user.postcode?.trim();
+      return next ? next : prev;
+    });
+    setDeliveryPhone((prev) => {
+      if (prev.trim()) return prev;
+      const next = (user.phone ?? user.phonePublic ?? '').trim();
+      return next ? next : prev;
+    });
+    setDeliveryEmail((prev) => {
+      if (prev.trim()) return prev;
+      const next = (user.email ?? user.contactEmailPublic ?? '').trim();
       return next ? next : prev;
     });
   }, [user]);
@@ -559,12 +672,6 @@ export function CreateOrderForm({
     }
     return 'A definir';
   })();
-  const toDateKey = React.useCallback((date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }, []);
   const getOpeningSlotForDate = React.useCallback(
     (date: Date) => {
       const dayKey = deliveryDayIndexToKey[date.getDay()];
@@ -585,22 +692,23 @@ export function CreateOrderForm({
         const key = toDateKey(current);
         const existing = previousByDate.get(key);
         const openingSlot = getOpeningSlotForDate(current);
-        const defaultEnabled = Boolean(openingSlot);
-        const defaultStart = openingSlot ? openingSlot.start : '17:00';
-        const defaultEnd = openingSlot ? openingSlot.end : '19:00';
+        const defaultStart = openingSlot?.start ?? '';
+        const defaultEnd = openingSlot?.end ?? '';
         const shouldKeepExisting = pickupDateSlotsTouchedRef.current && existing;
+        const nextStart = shouldKeepExisting ? existing.start : defaultStart;
+        const nextEnd = shouldKeepExisting ? existing.end : defaultEnd;
         next.push({
           date: key,
           label: current.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' }),
-          enabled: shouldKeepExisting ? existing.enabled : defaultEnabled,
-          start: shouldKeepExisting ? existing.start : defaultStart,
-          end: shouldKeepExisting ? existing.end : defaultEnd,
+          enabled: hasTimeRange({ start: nextStart, end: nextEnd }),
+          start: nextStart,
+          end: nextEnd,
         });
         current.setDate(current.getDate() + 1);
       }
       return next;
     },
-    [getOpeningSlotForDate, toDateKey]
+    [getOpeningSlotForDate]
   );
 
   const totalWeightProducts = selectedProductsData.reduce((sum, p) => sum + (p.weightKg ?? 1), 0);
@@ -682,13 +790,8 @@ export function CreateOrderForm({
 
   const pickupWindowRange = React.useMemo(() => {
     if (!estimatedDeliveryDate) return null;
-    const start = new Date(
-      estimatedDeliveryDate.getFullYear(),
-      estimatedDeliveryDate.getMonth(),
-      estimatedDeliveryDate.getDate()
-    );
-    const end = new Date(start);
-    end.setDate(end.getDate() + pickupWindowWeeks * 7);
+    const start = addDays(estimatedDeliveryDate, 1);
+    const end = addDays(estimatedDeliveryDate, pickupWindowWeeks * 7);
     return { start, end };
   }, [estimatedDeliveryDate, pickupWindowWeeks]);
   const pickupWindowLabel = pickupWindowRange
@@ -696,6 +799,71 @@ export function CreateOrderForm({
     : 'A definir';
   const pickupWindowStart = pickupWindowRange?.start.getTime() ?? null;
   const pickupWindowEnd = pickupWindowRange?.end.getTime() ?? null;
+
+  const today = React.useMemo(() => new Date(), []);
+  const todayKey = toDateKey(today);
+  const createdAtDay = React.useMemo(() => parseDateValue(today), [today]);
+  const deadlineDay = React.useMemo(() => parseDateValue(deadline), [deadline]);
+  const estimatedDeliveryDay = React.useMemo(
+    () => parseDateValue(estimatedDeliveryDate ?? null),
+    [estimatedDeliveryDate]
+  );
+  const pickupStartDay = React.useMemo(
+    () => (estimatedDeliveryDay ? addDays(estimatedDeliveryDay, 1) : null),
+    [estimatedDeliveryDay]
+  );
+  const pickupWindowEndDay = React.useMemo(
+    () => parseDateValue(pickupWindowRange?.end ?? null),
+    [pickupWindowRange?.end]
+  );
+  const explicitPickupDay = React.useMemo(
+    () => (usePickupDate ? parseDateValue(pickupDate) : null),
+    [pickupDate, usePickupDate]
+  );
+  const openRange = toRange(createdAtDay, deadlineDay);
+  const deliveryRange = toRange(deadlineDay, estimatedDeliveryDay);
+  const availabilityRange = explicitPickupDay
+    ? { start: explicitPickupDay, end: explicitPickupDay }
+    : visibility === 'public'
+      ? toRange(pickupStartDay, pickupWindowEndDay)
+      : null;
+  const calendarSeedKey = availabilityRange
+    ? toDateKey(availabilityRange.start)
+    : deliveryRange
+      ? toDateKey(deliveryRange.start)
+      : openRange
+        ? toDateKey(openRange.start)
+        : todayKey;
+  const initialCalendarMonth = React.useMemo(() => {
+    const seed = parseDateValue(calendarSeedKey) ?? new Date();
+    return new Date(seed.getFullYear(), seed.getMonth(), 1);
+  }, [calendarSeedKey]);
+  const [calendarMonth, setCalendarMonth] = React.useState<Date>(() => initialCalendarMonth);
+  const [selectedPickupDateKey, setSelectedPickupDateKey] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setCalendarMonth(initialCalendarMonth);
+  }, [initialCalendarMonth]);
+  const calendarDays = React.useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
+  const calendarMonthLabel = React.useMemo(
+    () => calendarMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+    [calendarMonth]
+  );
+  const pickupDateSlotsByDate = React.useMemo(() => {
+    const map = new Map<string, PickupSlot>();
+    pickupDateSlots.forEach((slot) => {
+      if (slot.date) map.set(slot.date, slot);
+    });
+    return map;
+  }, [pickupDateSlots]);
+  const selectedDateSlot = selectedPickupDateKey ? pickupDateSlotsByDate.get(selectedPickupDateKey) ?? null : null;
+  const selectedDateSlotEnabled = selectedDateSlot ? hasTimeRange(selectedDateSlot) : false;
+  const selectedDateLabel = selectedDateSlot?.label ?? selectedPickupDateKey;
+  React.useEffect(() => {
+    if (!selectedPickupDateKey) return;
+    if (!pickupDateSlotsByDate.has(selectedPickupDateKey)) {
+      setSelectedPickupDateKey(null);
+    }
+  }, [pickupDateSlotsByDate, selectedPickupDateKey]);
 
   const perProductRows = selectedProductsData.map((p) => {
     const hasPrice = hasValidLotPrice(p);
@@ -1000,33 +1168,108 @@ export function CreateOrderForm({
   }, [visibility, usePickupDate]);
 
   React.useEffect(() => {
-    if (visibility !== 'public' || pickupWindowStart === null || pickupWindowEnd === null) return;
+    if (visibility !== 'public') return;
+    if (pickupWindowStart === null || pickupWindowEnd === null) {
+      setPickupDateSlots([]);
+      return;
+    }
     const start = new Date(pickupWindowStart);
     const end = new Date(pickupWindowEnd);
     setPickupDateSlots((prev) => buildPickupDateSlots(start, end, prev));
   }, [buildPickupDateSlots, pickupWindowEnd, pickupWindowStart, visibility]);
 
+  const getDefaultTimesForDay = React.useCallback(
+    (day: string) => {
+      const normalized = normalizeOpeningHoursDayKey(day);
+      const opening = normalized ? openingHoursByDay[normalized] : undefined;
+      if (opening?.start && opening?.end) return { start: opening.start, end: opening.end };
+      const fallback = defaultSlots.find((slot) => slot.day === day);
+      if (fallback?.start && fallback?.end) return { start: fallback.start, end: fallback.end };
+      return { start: '17:00', end: '19:00' };
+    },
+    [openingHoursByDay]
+  );
+
+  const getDefaultTimesForDate = React.useCallback(
+    (date: string) => {
+      const parsed = parseDateValue(date);
+      if (!parsed) return { start: '', end: '' };
+      const opening = getOpeningSlotForDate(parsed);
+      if (opening?.start && opening?.end) return { start: opening.start, end: opening.end };
+      return { start: '17:00', end: '19:00' };
+    },
+    [getOpeningSlotForDate]
+  );
+
   const toggleSlot = (day: string) => {
     pickupSlotsTouchedRef.current = true;
-    setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, enabled: !slot.enabled } : slot)));
+    setPickupSlots((prev) =>
+      prev.map((slot) => {
+        if (slot.day !== day) return slot;
+        if (hasTimeRange(slot)) {
+          return { ...slot, start: '', end: '', enabled: false };
+        }
+        const defaults = getDefaultTimesForDay(day);
+        return {
+          ...slot,
+          start: defaults.start,
+          end: defaults.end,
+          enabled: hasTimeRange(defaults),
+        };
+      })
+    );
   };
 
   const updateSlotTime = (day: string, key: 'start' | 'end', value: string) => {
     pickupSlotsTouchedRef.current = true;
-    setPickupSlots((prev) => prev.map((slot) => (slot.day === day ? { ...slot, [key]: value } : slot)));
+    setPickupSlots((prev) =>
+      prev.map((slot) => {
+        if (slot.day !== day) return slot;
+        const nextStart = key === 'start' ? value : slot.start;
+        const nextEnd = key === 'end' ? value : slot.end;
+        return {
+          ...slot,
+          start: nextStart,
+          end: nextEnd,
+          enabled: hasTimeRange({ start: nextStart, end: nextEnd }),
+        };
+      })
+    );
   };
 
   const toggleDateSlot = (date: string) => {
     pickupDateSlotsTouchedRef.current = true;
     setPickupDateSlots((prev) =>
-      prev.map((slot) => (slot.date === date ? { ...slot, enabled: !slot.enabled } : slot))
+      prev.map((slot) => {
+        if (slot.date !== date) return slot;
+        if (hasTimeRange(slot)) {
+          return { ...slot, start: '', end: '', enabled: false };
+        }
+        const defaults = getDefaultTimesForDate(date);
+        return {
+          ...slot,
+          start: defaults.start,
+          end: defaults.end,
+          enabled: hasTimeRange(defaults),
+        };
+      })
     );
   };
 
   const updateDateSlotTime = (date: string, key: 'start' | 'end', value: string) => {
     pickupDateSlotsTouchedRef.current = true;
     setPickupDateSlots((prev) =>
-      prev.map((slot) => (slot.date === date ? { ...slot, [key]: value } : slot))
+      prev.map((slot) => {
+        if (slot.date !== date) return slot;
+        const nextStart = key === 'start' ? value : slot.start;
+        const nextEnd = key === 'end' ? value : slot.end;
+        return {
+          ...slot,
+          start: nextStart,
+          end: nextEnd,
+          enabled: hasTimeRange({ start: nextStart, end: nextEnd }),
+        };
+      })
     );
   };
 
@@ -1059,8 +1302,8 @@ export function CreateOrderForm({
     const activeSlots: PickupSlot[] = usePickupDate
       ? []
       : visibility === 'public'
-        ? pickupDateSlots.filter((slot) => slot.enabled && slot.date)
-        : pickupSlots.filter((slot) => slot.enabled && slot.day);
+        ? pickupDateSlots.filter((slot) => hasTimeRange(slot) && slot.date)
+        : pickupSlots.filter((slot) => hasTimeRange(slot) && slot.day);
 
     if (!user) {
       toast.info('Connectez-vous pour creer une commande.');
@@ -1094,6 +1337,8 @@ export function CreateOrderForm({
       autoApprovePickupSlots,
       minWeight: normalizedMinWeight,
       maxWeight: normalizedMaxWeight,
+      deliveryPhone,
+      deliveryEmail,
       pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
       pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
       pickupInfo: useSamePickupAddress ? deliveryInfo : pickupInfo,
@@ -1143,6 +1388,8 @@ export function CreateOrderForm({
       deliveryCity,
       deliveryPostcode,
       deliveryAddress,
+      deliveryPhone,
+      deliveryEmail,
       deliveryLat,
       deliveryLng,
       estimatedDeliveryDate,
@@ -1171,7 +1418,7 @@ export function CreateOrderForm({
         day: slot.day,
         slotDate: slot.date,
         label: slot.label,
-        enabled: true,
+        enabled: hasTimeRange(slot),
         startTime: slot.start,
         endTime: slot.end,
       })),
@@ -1210,7 +1457,7 @@ export function CreateOrderForm({
       if (!pickupWindowRange) return 'Date de livraison à définir';
       return `Du ${pickupWindowRange.start.toLocaleDateString('fr-FR')} au ${pickupWindowRange.end.toLocaleDateString('fr-FR')}`;
     }
-    const active = pickupSlots.filter((slot) => slot.enabled);
+    const active = pickupSlots.filter((slot) => hasTimeRange(slot));
     if (active.length === 0) return 'Non precisé';
     return active
       .map((slot) => `${slot.label} ${slot.start || '??'}-${slot.end || '??'}`)
@@ -1220,7 +1467,7 @@ export function CreateOrderForm({
   const hasPickupInfo =
     (usePickupDate && Boolean(pickupDate)) ||
     (visibility === 'public' && Boolean(pickupWindowRange)) ||
-    (visibility !== 'public' && pickupSlots.some((slot) => slot.enabled));
+    (visibility !== 'public' && pickupSlots.some((slot) => hasTimeRange(slot)));
 
   return (
     <form onSubmit={handleSubmit} className="pb-6">
@@ -1453,6 +1700,33 @@ export function CreateOrderForm({
                     required
                   />
                 </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Telephone de livraison</label>
+                <input
+                  type="tel"
+                  value={deliveryPhone}
+                  onChange={(e) => setDeliveryPhone(e.target.value)}
+                  placeholder="Ex. 06 12 34 56 78"
+                  autoComplete="tel"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280] mb-2">Email de livraison</label>
+                <input
+                  type="email"
+                  value={deliveryEmail}
+                  onChange={(e) => setDeliveryEmail(e.target.value)}
+                  placeholder="exemple@email.com"
+                  autoComplete="email"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  required
+                />
               </div>
             </div>
 
@@ -1809,46 +2083,189 @@ export function CreateOrderForm({
                         </span>
                       </p>
                     </div>
-                    {pickupWindowRange ? (
-                      <div className="space-y-3">
-                        {pickupDateSlots.map((slot) => (
-                          <div key={slot.date ?? slot.label} className="flex items-center gap-3 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => slot.date && toggleDateSlot(slot.date)}
-                              className={`px-3 py-1 rounded-full border text-sm ${
-                                slot.enabled
-                                  ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
-                                  : 'border-gray-200 text-[#6B7280]'
-                              }`}
-                            >
-                              {slot.label}
-                            </button>
-                            <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                              <input
-                                type="time"
-                                value={slot.start}
-                                onChange={(e) => slot.date && updateDateSlotTime(slot.date, 'start', e.target.value)}
-                                className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                disabled={!slot.enabled}
-                              />
-                              <span>-</span>
-                              <input
-                                type="time"
-                                value={slot.end}
-                                onChange={(e) => slot.date && updateDateSlotTime(slot.date, 'end', e.target.value)}
-                                className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                disabled={!slot.enabled}
-                              />
-                            </div>
+                    <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-3 shadow-sm order-client-view__calendar-card">
+                      <div className="order-client-view__calendar-header">
+                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
+                          <MapPin className="w-4 h-4 text-[#FF6B4A]" />
+                          Disponibilites de retrait
+                        </div>
+                        <div className="order-client-view__calendar-nav">
+                          <button
+                            type="button"
+                            className="order-client-view__calendar-nav-button"
+                            onClick={() =>
+                              setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+                            }
+                            aria-label="Mois precedent"
+                          >
+                            <ChevronLeft className="w-4 h-4 text-[#4B5563]" />
+                          </button>
+                          <span className="order-client-view__calendar-month">{calendarMonthLabel}</span>
+                          <button
+                            type="button"
+                            className="order-client-view__calendar-nav-button"
+                            onClick={() =>
+                              setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+                            }
+                            aria-label="Mois suivant"
+                          >
+                            <ChevronRight className="w-4 h-4 text-[#4B5563]" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="order-client-view__calendar-legend">
+                        <span className="order-client-view__calendar-legend-item">
+                          <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--open" />
+                          Commande
+                        </span>
+                        <span className="order-client-view__calendar-legend-item">
+                          <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--delivery" />
+                          Livraison
+                        </span>
+                        <span className="order-client-view__calendar-legend-item">
+                          <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--availability" />
+                          Recuperation
+                        </span>
+                      </div>
+                      <div className="order-client-view__calendar-grid">
+                        {WEEKDAY_LABELS.map((label) => (
+                          <div key={label} className="order-client-view__calendar-weekday">
+                            {label}
                           </div>
                         ))}
+                        {calendarDays.map((day, index) => {
+                          if (!day) {
+                            return (
+                              <div
+                                key={`empty-${index}`}
+                                className="order-client-view__calendar-day order-client-view__calendar-day--empty"
+                                aria-hidden="true"
+                              />
+                            );
+                          }
+                          const dateKey = toDateKey(day);
+                          const isInAvailability = availabilityRange ? isDateInRange(day, availabilityRange) : false;
+                          const isInDelivery = deliveryRange ? isDateInRange(day, deliveryRange) : false;
+                          const isInOpen = openRange ? isDateInRange(day, openRange) : false;
+                          const isSelected = selectedPickupDateKey === dateKey;
+                          const isToday = todayKey === dateKey;
+                          const slot = pickupDateSlotsByDate.get(dateKey);
+                          const hasSlot = Boolean(slot && hasTimeRange(slot));
+                          const scheduleKey = deliveryDayIndexToKey[day.getDay()];
+                          const producerSlot =
+                            deliveryOption === 'producer_pickup' ? producerPickupScheduleByDay[scheduleKey] : undefined;
+                          const hasProducerPickupDay = Boolean(producerSlot && hasTimeRange(producerSlot));
+                          const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
+                          const hasCalendarMarker = hasSlot || showProducerPickupIndicator;
+                          const isClickable = Boolean(availabilityRange) && isInAvailability;
+                          const toneClass = isInAvailability
+                            ? 'order-client-view__calendar-day--availability'
+                            : isInDelivery
+                              ? 'order-client-view__calendar-day--delivery'
+                              : isInOpen
+                                ? 'order-client-view__calendar-day--open'
+                                : '';
+                          return (
+                            <button
+                              key={dateKey}
+                              type="button"
+                              className={`order-client-view__calendar-day ${toneClass} ${
+                                isSelected ? 'order-client-view__calendar-day--selected' : ''
+                              } ${isToday ? 'order-client-view__calendar-day--today' : ''} ${
+                                isClickable
+                                  ? 'order-client-view__calendar-day--clickable'
+                                  : 'order-client-view__calendar-day--inactive'
+                              }`}
+                              onClick={() => {
+                                if (!isClickable) return;
+                                setSelectedPickupDateKey(dateKey);
+                              }}
+                              aria-pressed={isSelected}
+                              aria-disabled={!isClickable}
+                              tabIndex={isClickable ? 0 : -1}
+                            >
+                              <span>{day.getDate()}</span>
+                              {hasCalendarMarker && <span className="order-client-view__calendar-day-dot" />}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ) : (
-                      <p className="text-xs text-[#B45309]">
-                        Définissez une date de clôture pour generer les dates de retrait.
-                      </p>
-                    )}
+                      <div className="order-client-view__calendar-slots">
+                        {selectedDateSlot ? (
+                          <>
+                            <div className="order-client-view__calendar-slots-header">
+                              <span className="order-client-view__calendar-slots-title">
+                                Disponibilites le {selectedDateLabel}
+                              </span>
+                              {selectedDateSlot.date && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!selectedDateSlot.date) return;
+                                    toggleDateSlot(selectedDateSlot.date);
+                                  }}
+                                  className={`px-3 py-1 rounded-full border text-xs ${
+                                    selectedDateSlotEnabled
+                                      ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
+                                      : 'border-gray-200 text-[#6B7280]'
+                                  }`}
+                                >
+                                  {selectedDateSlotEnabled ? 'Disponible' : 'Indisponible'}
+                                </button>
+                              )}
+                            </div>
+                            <div className="order-client-view__pickup-slots-grid">
+                              <div
+                                className={`order-client-view__pickup-slot ${
+                                  selectedDateSlotEnabled ? '' : 'order-client-view__pickup-slot--disabled'
+                                }`}
+                              >
+                                <div>
+                                  <p className="order-client-view__pickup-slot-date">
+                                    {selectedDateSlot.start || '--:--'} - {selectedDateSlot.end || '--:--'}
+                                  </p>
+                                  <p className="order-client-view__pickup-slot-time">Plage horaire</p>
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                                  <input
+                                    type="time"
+                                    value={selectedDateSlot.start}
+                                    onChange={(e) => {
+                                      if (!selectedDateSlot.date) return;
+                                      updateDateSlotTime(selectedDateSlot.date, 'start', e.target.value);
+                                    }}
+                                    className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                                    disabled={!selectedDateSlotEnabled}
+                                  />
+                                  <span>-</span>
+                                  <input
+                                    type="time"
+                                    value={selectedDateSlot.end}
+                                    onChange={(e) => {
+                                      if (!selectedDateSlot.date) return;
+                                      updateDateSlotTime(selectedDateSlot.date, 'end', e.target.value);
+                                    }}
+                                    className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                                    disabled={!selectedDateSlotEnabled}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                            <p className="order-client-view__calendar-slots-note">
+                              {selectedDateSlotEnabled
+                                ? 'Ce jour sera propose aux participants.'
+                                : 'Activez ce jour pour le proposer aux participants.'}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="order-client-view__calendar-slots-note">
+                            {pickupWindowRange
+                              ? 'Selectionnez un jour dans la periode de recuperation.'
+                              : 'Definissez une date de cloture pour generer les dates de retrait.'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1876,38 +2293,41 @@ export function CreateOrderForm({
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {pickupSlots.map((slot) => (
-                          <div key={slot.day ?? slot.label} className="flex items-center gap-3">
-                            <button
-                              type="button"
-                              onClick={() => slot.day && toggleSlot(slot.day)}
-                              className={`px-3 py-1 rounded-full border text-sm ${
-                                slot.enabled
-                                  ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
-                                  : 'border-gray-200 text-[#6B7280]'
-                              }`}
-                            >
-                              {slot.label}
-                            </button>
-                            <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                              <input
-                                type="time"
-                                value={slot.start}
-                                onChange={(e) => slot.day && updateSlotTime(slot.day, 'start', e.target.value)}
-                                className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                disabled={!slot.enabled}
-                              />
-                              <span>-</span>
-                              <input
-                                type="time"
-                                value={slot.end}
-                                onChange={(e) => slot.day && updateSlotTime(slot.day, 'end', e.target.value)}
-                                className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                disabled={!slot.enabled}
-                              />
+                        {pickupSlots.map((slot) => {
+                          const isSlotEnabled = hasTimeRange(slot);
+                          return (
+                            <div key={slot.day ?? slot.label} className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => slot.day && toggleSlot(slot.day)}
+                                className={`px-3 py-1 rounded-full border text-sm ${
+                                  isSlotEnabled
+                                    ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
+                                    : 'border-gray-200 text-[#6B7280]'
+                                }`}
+                              >
+                                {slot.label}
+                              </button>
+                              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
+                                <input
+                                  type="time"
+                                  value={slot.start}
+                                  onChange={(e) => slot.day && updateSlotTime(slot.day, 'start', e.target.value)}
+                                  className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                                  disabled={!isSlotEnabled}
+                                />
+                                <span>-</span>
+                                <input
+                                  type="time"
+                                  value={slot.end}
+                                  onChange={(e) => slot.day && updateSlotTime(slot.day, 'end', e.target.value)}
+                                  className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                                  disabled={!isSlotEnabled}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </>
