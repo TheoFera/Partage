@@ -23,13 +23,14 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Upload dist via SFTP
-        uses: appleboy/scp-action@v0.1.7
+      - name: Sync files (FTP)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:
-          host: ${{ secrets.SFTP_HOST }}
-          username: ${{ secrets.SFTP_USER }}
-          password: ${{ secrets.SFTP_PASS }}
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftp
           port: 21
-          source: "dist/*"
-          target: ${{ secrets.SFTP_PATH }}
-          strip_components: 1
+          local-dir: dist/
+          server-dir: public_html/partagetonpanier.fr/
+

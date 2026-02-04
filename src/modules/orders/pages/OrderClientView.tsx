@@ -2624,7 +2624,7 @@ const sharerAvatarUpdatedAt =
               <div className="order-client-view__support-card">
                 <p className="order-client-view__support-title">En cas de problème</p>
                 <p className="order-client-view__support-text">
-                  Envoyez un mail à reclamations@partagetonpanier.fr en précisant :
+                  Envoyez un mail à reclamation@partagetonpanier.fr en précisant :
                 </p>
                 <ul className="order-client-view__support-list">
                   <li>Le n° commande : {order.orderCode}</li>

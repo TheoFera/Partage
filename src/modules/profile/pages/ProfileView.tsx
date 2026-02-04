@@ -2289,7 +2289,7 @@ function ProfileEditPanel({
       <div className="profile-edit-header flex items-center justify-between">
         <div>
           <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
-          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l ancien profil.</p>
+          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l'ancien profil.</p>
         </div>
         <button
           onClick={onClose}
