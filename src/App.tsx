@@ -136,6 +136,7 @@ const POSTCODE_STORAGE_KEY = 'partage:postcode-search:v1';
 const POSTCODE_COORDS_STORAGE_KEY = 'partage:postcode-search-coords:v1';
 const POSTCODE_OVERLAY_DISMISSED_SESSION_KEY = 'partage:postcode-overlay-dismissed:v1';
 const POSTCODE_GEOCODE_DEBOUNCE_MS = 250;
+const POSTCODE_OVERLAY_ALLOWED_PATHS = new Set(['/', '/carte', '/decouvrir']);
 
 const mockNotifications = [
   {
@@ -1655,6 +1656,7 @@ export default function App() {
   const isAuthPage = location.pathname.startsWith('/connexion');
   const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
   const isAddProductView = location.pathname === '/produit/nouveau';
+  const isPostcodeOverlayAllowedRoute = POSTCODE_OVERLAY_ALLOWED_PATHS.has(location.pathname);
   const isProfileSearchTab = activeTab === 'profile' || activeTab === 'messages';
   const readPostcodeCoordsCache = React.useCallback((postcode: string) => {
     return postcodeCoordsCacheRef.current.get(postcode);
@@ -1695,7 +1697,7 @@ export default function App() {
     const nextPostcode = POSTCODE_REGEX.test(storedPostcode) ? storedPostcode : '';
     setGuestStoredPostcode(nextPostcode);
 
-    if (isAuthPage || isRecoveryAuth || user) {
+    if (isAuthPage || isRecoveryAuth || user || !isPostcodeOverlayAllowedRoute) {
       setPostcodeOverlayOpen(false);
       setPostcodeOverlayError(null);
       return;
@@ -1708,13 +1710,13 @@ export default function App() {
 
     const dismissed = window.sessionStorage.getItem(POSTCODE_OVERLAY_DISMISSED_SESSION_KEY) === '1';
     setPostcodeOverlayOpen(!dismissed);
-  }, [isAuthPage, isRecoveryAuth, user]);
+  }, [isAuthPage, isRecoveryAuth, isPostcodeOverlayAllowedRoute, user]);
   React.useEffect(() => {
-    if (isAuthPage || isRecoveryAuth || user) {
+    if (isAuthPage || isRecoveryAuth || user || !isPostcodeOverlayAllowedRoute) {
       setPostcodeOverlayOpen(false);
       setPostcodeOverlayError(null);
     }
-  }, [isAuthPage, isRecoveryAuth, user]);
+  }, [isAuthPage, isRecoveryAuth, isPostcodeOverlayAllowedRoute, user]);
   const handlePostcodeOverlayClose = React.useCallback(() => {
     setPostcodeOverlayOpen(false);
     setPostcodeOverlayError(null);
@@ -4889,7 +4891,7 @@ export default function App() {
         supabaseClient={supabaseClient}
       />
       <PostcodeOverlay
-        open={postcodeOverlayOpen}
+        open={postcodeOverlayOpen && isPostcodeOverlayAllowedRoute}
         initialValue={searchPostcode ?? ''}
         loading={postcodeSearch.status === 'loading'}
         error={postcodeOverlayError}

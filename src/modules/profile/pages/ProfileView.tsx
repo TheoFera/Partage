@@ -451,7 +451,12 @@ React.useEffect(() => {
   const tabOptions = React.useMemo(
     () =>
       [
-        { id: 'products' as TabKey, label: 'Produits', icon: Apple, visible: isOwnProfile || productCount > 0 },
+        {
+          id: 'products' as TabKey,
+          label: 'Produits',
+          icon: Apple,
+          visible: user.role === 'producer' && (isOwnProfile || productCount > 0),
+        },
         {
           id: 'orders' as TabKey,
           label: 'Commandes',
@@ -465,7 +470,7 @@ React.useEffect(() => {
           visible: isOwnProfile || selectionCount > 0,
         },
       ].filter((tab) => tab.visible),
-    [isOwnProfile, productCount, ordersCount, selectionCount]
+    [user.role, isOwnProfile, productCount, ordersCount, selectionCount]
   );
 
   React.useEffect(() => {

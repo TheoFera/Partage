@@ -38,6 +38,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [showResetPasswordConfirm, setShowResetPasswordConfirm] = React.useState(false);
   const [fullName, setFullName] = React.useState('');
   const [handleValue, setHandleValue] = React.useState('');
+  const [isHandleEdited, setIsHandleEdited] = React.useState(false);
   const [phone, setPhone] = React.useState('');
   const [city, setCity] = React.useState(locationState?.signupPrefill?.city ?? '');
   const [postcode, setPostcode] = React.useState(locationState?.signupPrefill?.postcode ?? '');
@@ -78,8 +79,6 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     } catch {}
   }, []);
 
-  const supabaseIsReady = Boolean(supabaseClient);
-
   const passwordPolicyLabel =
     '8 caracteres minimum, avec une minuscule, une majuscule, un chiffre et un symbole.';
   const isPasswordCompliant = (value: string) => {
@@ -98,6 +97,50 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       .replace(/[^a-z0-9]+/g, '')
       .slice(0, 20);
   };
+
+  const resolveUniqueHandle = React.useCallback(
+    async (source: string) => {
+      const baseHandle = sanitizeHandle(source) || 'profil';
+      if (!supabaseClient) return baseHandle;
+      const withHandleSuffix = (base: string, suffix: number) => {
+        const suffixValue = `${suffix}`;
+        const baseMaxLength = Math.max(1, 20 - suffixValue.length);
+        return `${base.slice(0, baseMaxLength)}${suffixValue}`;
+      };
+
+      const { data, error } = await supabaseClient
+        .from('profiles')
+        .select('handle')
+        .ilike('handle', `${baseHandle}%`)
+        .limit(500);
+
+      if (error) {
+        throw new Error('Impossible de verifier le tag pour le moment.');
+      }
+
+      const takenHandles = new Set(
+        ((data ?? []) as Array<{ handle: string | null }>)
+          .map((row) => (row.handle ?? '').toLowerCase())
+          .filter(Boolean)
+      );
+
+      if (!takenHandles.has(baseHandle)) {
+        return baseHandle;
+      }
+
+      let suffix = 1;
+      while (suffix < 10000) {
+        const candidate = withHandleSuffix(baseHandle, suffix);
+        if (!takenHandles.has(candidate)) {
+          return candidate;
+        }
+        suffix += 1;
+      }
+
+      throw new Error('Impossible de generer un tag unique.');
+    },
+    [supabaseClient]
+  );
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -123,25 +166,19 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.error(`Le mot de passe doit respecter : ${passwordPolicyLabel}`);
           return;
         }
-        const safeHandle = sanitizeHandle(handleValue || email);
+        const requestedHandle = sanitizeHandle(handleValue || fullName || email);
+        if (!requestedHandle) {
+          toast.error('Choisissez un tag valide (lettres et chiffres, sans espace).');
+          return;
+        }
+        const safeHandle = await resolveUniqueHandle(requestedHandle);
         if (!safeHandle) {
           toast.error('Choisissez un tag valide (lettres et chiffres, sans espace).');
           return;
         }
-        if (supabaseIsReady) {
-          const { data: existing, error: existingError } = await supabaseClient
-            .from('profiles')
-            .select('id')
-            .eq('handle', safeHandle)
-            .maybeSingle();
-          if (existingError) {
-            toast.error('Impossible de vérifier le tag pour le moment.');
-            return;
-          }
-          if (existing) {
-            toast.error('Ce tag est déjà utilisé. Merci d en choisir un autre.');
-            return;
-          }
+        if (safeHandle !== requestedHandle) {
+          setHandleValue(safeHandle);
+          toast.info(`Tag deja pris. Proposition appliquee: @${safeHandle}`);
         }
 
         const displayName = fullName.trim() || email.trim().split('@')[0] || 'Utilisateur';
@@ -223,6 +260,35 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   }, [activeMode]);
 
   React.useEffect(() => {
+    if (activeMode !== 'signup') return;
+    setIsHandleEdited(false);
+  }, [activeMode]);
+
+  React.useEffect(() => {
+    if (activeMode !== 'signup' || isHandleEdited) return;
+    const sourceValue = fullName.trim() || email.trim().split('@')[0] || '';
+    const fallbackHandle = sanitizeHandle(sourceValue || 'profil');
+
+    let active = true;
+    const timeoutId = setTimeout(() => {
+      resolveUniqueHandle(fallbackHandle)
+        .then((uniqueHandle) => {
+          if (!active) return;
+          setHandleValue(uniqueHandle);
+        })
+        .catch(() => {
+          if (!active) return;
+          setHandleValue(fallbackHandle);
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+    };
+  }, [activeMode, email, fullName, isHandleEdited, resolveUniqueHandle]);
+
+  React.useEffect(() => {
     if (activeMode === 'reset') return;
     setResetPassword('');
     setResetPasswordConfirm('');
@@ -290,7 +356,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       <input
                         type="text"
                         value={handleValue}
-                        onChange={(e) => setHandleValue(sanitizeHandle(e.target.value))}
+                        onChange={(e) => {
+                          setIsHandleEdited(true);
+                          setHandleValue(sanitizeHandle(e.target.value));
+                        }}
                         placeholder="votrenom"
                         className="auth-form__input"
                         autoComplete="off"
@@ -298,8 +367,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       />
                     </div>
                     <p className="auth-form__helper">
-                      Sans espace ni majuscule, ce tag définira l'URL de votre profil (/profil/votretag). Il est
-                      unique.
+                      Proposition auto depuis votre nom, modifiable. Sans espace ni majuscule, ce tag définira l'URL
+                      de votre profil (/profil/votretag) et reste unique.
                     </p>
                   </div>
                 </div>

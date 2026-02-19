@@ -277,6 +277,20 @@ function getProductWeightKg(product: { weightKg?: number; unit?: string; measure
   return 0.25;
 }
 
+const formatProductWeightLabelForSelection = (product: {
+  weightKg?: number;
+  unit?: string;
+  measurement?: 'unit' | 'kg';
+}) => {
+  const weightKg = getProductWeightKg(product);
+  if (!Number.isFinite(weightKg) || weightKg <= 0) return '';
+  if (weightKg < 1) {
+    const gramLabel = formatUnitWeightLabel(weightKg);
+    return gramLabel || `${Math.round(weightKg * 1000)}g`;
+  }
+  return `${weightKg.toFixed(2)} kg`;
+};
+
 const getProductMeasurementLabel = (product: { measurement?: 'unit' | 'kg'; weightKg?: number | null }) => {
   if (product.measurement === 'kg') return 'kg';
   if (product.measurement === 'unit') return formatUnitWeightLabel(product.weightKg);
@@ -765,10 +779,14 @@ export function OrderClientView({
   const orderFullValue = orderFull ?? emptyOrderFull;
   const order = orderFullValue.order;
   const orderItems = orderFullValue.items;
+  const profiles = orderFullValue.profiles ?? {};
   const resolvedOrderCode = order.orderCode || orderCode || null;
   const products = orderFullValue.productsOffered.map((entry) => {
     const info = entry.product;
     const productKey = info?.code ?? entry.productId;
+    const producerProfileId = info?.producerProfileId ?? order.producerProfileId ?? null;
+    const producerProfileName = producerProfileId ? profiles[producerProfileId]?.name?.trim() : '';
+    const resolvedProducerName = producerProfileName || info?.producerName?.trim() || 'Producteur';
     const measurement: Product['measurement'] =
       info?.measurement ?? (entry.unitLabel === 'kg' ? 'kg' : 'unit');
     const unitLabel = entry.unitLabel ?? info?.packaging ?? '';
@@ -789,16 +807,14 @@ export function OrderClientView({
       quantity: 0,
       category: '',
       imageUrl: info?.imageUrl ?? '',
-      producerId: info?.producerProfileId ?? '',
-      producerName: info?.producerName ?? 'Producteur',
+      producerId: producerProfileId ?? '',
+      producerName: resolvedProducerName,
       producerLocation: info?.producerLocation ?? '',
       inStock: true,
       measurement,
       weightKg: unitWeightKg ?? undefined,
     };
   });
-
-const profiles = orderFullValue.profiles ?? {};
 const getProfileMeta = React.useCallback(
   (profileId?: string | null) => (profileId ? profiles[profileId] ?? null : null),
   [profiles]
@@ -925,6 +941,13 @@ const sharerAvatarUpdatedAt =
     },
     [navigate, resolvedOrderCode]
   );
+  const handleOpenProducerFromProduct = (product: Product) => {
+    const producerMeta = getProfileMeta(product.producerId || order.producerProfileId || null);
+    handleAvatarNavigation(
+      producerMeta?.handle ?? producerProfileHandle,
+      producerMeta?.name ?? product.producerName ?? producerName
+    );
+  };
 
   React.useEffect(() => {
     if (!participantsPanelOpen) return;
@@ -1892,26 +1915,49 @@ const sharerAvatarUpdatedAt =
   const availabilityRange = explicitPickupDay
     ? { start: explicitPickupDay, end: explicitPickupDay }
     : toRange(availabilityStart, pickupWindowEndDay ?? slotRangeEnd);
-  const calendarSeedKey = availabilityRange
-    ? toDateKey(availabilityRange.start)
-    : deliveryRange
-      ? toDateKey(deliveryRange.start)
-      : openRange
-        ? toDateKey(openRange.start)
-        : toDateKey(new Date());
-  const initialCalendarMonth = React.useMemo(() => {
-    const seed = parseDateValue(calendarSeedKey) ?? new Date();
-    return new Date(seed.getFullYear(), seed.getMonth(), 1);
-  }, [calendarSeedKey]);
-  const [calendarMonth, setCalendarMonth] = React.useState<Date>(() => initialCalendarMonth);
+  const calendarMonthViews = React.useMemo(() => {
+    const calendarDates = [
+      openRange?.start,
+      openRange?.end,
+      deliveryRange?.start,
+      deliveryRange?.end,
+      availabilityRange?.start,
+      availabilityRange?.end,
+      slotRangeStart,
+      slotRangeEnd,
+    ].filter((value): value is Date => Boolean(value));
+
+    const firstDate = calendarDates.length
+      ? calendarDates.reduce((min, current) => (current.getTime() < min.getTime() ? current : min), calendarDates[0])
+      : new Date();
+    const lastDate = calendarDates.length
+      ? calendarDates.reduce((max, current) => (current.getTime() > max.getTime() ? current : max), calendarDates[0])
+      : firstDate;
+    const firstMonth = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
+    const lastMonth = new Date(lastDate.getFullYear(), lastDate.getMonth(), 1);
+    const months =
+      firstMonth.getFullYear() === lastMonth.getFullYear() && firstMonth.getMonth() === lastMonth.getMonth()
+        ? [firstMonth]
+        : [firstMonth, lastMonth];
+
+    return months.map((month) => ({
+      key: `${month.getFullYear()}-${month.getMonth() + 1}`,
+      monthLabel: month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+      days: buildCalendarDays(month),
+    }));
+  }, [availabilityRange, deliveryRange, openRange, slotRangeEnd, slotRangeStart]);
+  const calendarPeriodLabel = React.useMemo(() => {
+    if (calendarMonthViews.length === 0) return '';
+    if (calendarMonthViews.length === 1) return calendarMonthViews[0].monthLabel;
+    return `${calendarMonthViews[0].monthLabel} - ${calendarMonthViews[1].monthLabel}`;
+  }, [calendarMonthViews]);
   const [selectedPickupDateKey, setSelectedPickupDateKey] = React.useState<string | null>(null);
   const [pickupSlotTimesById, setPickupSlotTimesById] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
     if (!order.id) return;
-    setCalendarMonth(initialCalendarMonth);
     setSelectedPickupDateKey(null);
     setPickupSlotTimesById({});
-  }, [order.id, initialCalendarMonth]);
+  }, [order.id]);
   const myParticipantPickupTime = React.useMemo(
     () => formatPickupSlotTime(myParticipant?.pickupSlotTime ?? null),
     [myParticipant?.pickupSlotTime]
@@ -1929,11 +1975,6 @@ const sharerAvatarUpdatedAt =
       return next;
     });
   }, [myParticipant?.pickupSlotId, myParticipantPickupTime]);
-  const calendarDays = React.useMemo(() => buildCalendarDays(calendarMonth), [calendarMonth]);
-  const calendarMonthLabel = React.useMemo(
-    () => calendarMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
-    [calendarMonth]
-  );
   const now = new Date();
   const todayKey = toDateKey(now);
   const selectedPickupDate = selectedPickupDateKey ? parseDateValue(selectedPickupDateKey) : null;
@@ -2316,9 +2357,13 @@ const sharerAvatarUpdatedAt =
   const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
   const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
   const shouldShowPickupCodeColumn = canShowPickupCodes;
-  const participantsCountLabel = participantsWithTotals.length
-    ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''}`
-    : 'Aucun participant pour le moment';
+  const participantsTitle = !canShowParticipants
+    ? 'Liste des participants à la commande'
+    : participantsWithTotals.length
+      ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''} à la commande`
+      : isOwner
+        ? 'Aucun participant pour le moment à la commande'
+        : 'Liste des participants à la commande';
   const participantsCountFooterLabel = `${participantsWithTotals.length} participant${
     participantsWithTotals.length > 1 ? 's' : ''
   }`;
@@ -2572,29 +2617,7 @@ const sharerAvatarUpdatedAt =
                       <MapPin className="order-client-view__info-icon order-client-view__info-icon--accent" />
                       Retrait : {locationAddress}
                     </div>
-                    <div className="order-client-view__calendar-nav">
-                      <button
-                        type="button"
-                        className="order-client-view__calendar-nav-button"
-                        onClick={() =>
-                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
-                        }
-                        aria-label="Mois precedent"
-                      >
-                        <ChevronLeft className="order-client-view__icon-muted" />
-                      </button>
-                      <span className="order-client-view__calendar-month">{calendarMonthLabel}</span>
-                      <button
-                        type="button"
-                        className="order-client-view__calendar-nav-button"
-                        onClick={() =>
-                          setCalendarMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
-                        }
-                        aria-label="Mois suivant"
-                      >
-                        <ChevronRight className="order-client-view__icon-muted" />
-                      </button>
-                    </div>
+                    <span className="order-client-view__calendar-month">{calendarPeriodLabel}</span>
                   </div>
                   <div className="order-client-view__calendar-legend">
                     <span className="order-client-view__calendar-legend-item">
@@ -2610,101 +2633,112 @@ const sharerAvatarUpdatedAt =
                       Récupération
                     </span>
                   </div>
-                  <div className="order-client-view__calendar-grid">
-                    {WEEKDAY_LABELS.map((label) => (
-                      <div key={label} className="order-client-view__calendar-weekday">
-                        {label}
+                  <div
+                    className={`order-client-view__calendar-months ${
+                      calendarMonthViews.length === 2 ? 'order-client-view__calendar-months--two' : ''
+                    }`}
+                  >
+                    {calendarMonthViews.map((calendarMonth) => (
+                      <div key={calendarMonth.key} className="order-client-view__calendar-month-panel">
+                        <p className="order-client-view__calendar-month-title">{calendarMonth.monthLabel}</p>
+                        <div className="order-client-view__calendar-grid">
+                          {WEEKDAY_LABELS.map((label) => (
+                            <div key={`${calendarMonth.key}-${label}`} className="order-client-view__calendar-weekday">
+                              {label}
+                            </div>
+                          ))}
+                          {calendarMonth.days.map((day, index) => {
+                            if (!day) {
+                              return (
+                                <div
+                                  key={`${calendarMonth.key}-empty-${index}`}
+                                  className="order-client-view__calendar-day order-client-view__calendar-day--empty"
+                                  aria-hidden="true"
+                                />
+                              );
+                            }
+                            const dateKey = toDateKey(day);
+                            const isInAvailability = availabilityRange ? isDateInRange(day, availabilityRange) : false;
+                            const isInDelivery = deliveryRange ? isDateInRange(day, deliveryRange) : false;
+                            const isInOpen = openRange ? isDateInRange(day, openRange) : false;
+                            const isSelected = selectedPickupDateKey === dateKey;
+                            const isToday = todayKey === dateKey;
+                            const isMyPickupDay = Boolean(myPickupSlotDateKey && myPickupSlotDateKey === dateKey);
+                            const isMyPickupDayAccepted = isMyPickupDay && myPickupSlotStatus === 'accepted';
+                            const isMyPickupDayPending = isMyPickupDay && myPickupSlotStatus === 'requested';
+                            const myPickupSymbol = isMyPickupDayAccepted ? 'v' : isMyPickupDayPending ? '...' : null;
+                            const dayScheduleKey = WEEKDAY_KEYS[day.getDay()];
+                            const hasProducerPickupDay = Boolean(
+                              shouldShowProducerPickupDetails && producerOpeningHoursByDay[dayScheduleKey]
+                            );
+                            const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
+                            const hasSlots =
+                              canShowPickupSlotDetails &&
+                              (pickupSlotsByDate.get(dateKey) ?? []).some((slot) => slot.enabled);
+                            const hasCalendarMarker = hasSlots || showProducerPickupIndicator;
+                            const reservationCount = pickupSlotReservationCountsByDate.get(dateKey) ?? 0;
+                            const reservationCountLabel = reservationCount > 9 ? '9+' : String(reservationCount);
+                            const isClickable = Boolean(availabilityRange) && isInAvailability && canShowPickupSlotDetails;
+                            const toneClass = isInAvailability
+                              ? 'order-client-view__calendar-day--availability'
+                              : isInDelivery
+                                ? 'order-client-view__calendar-day--delivery'
+                                : isInOpen
+                                  ? 'order-client-view__calendar-day--open'
+                                  : '';
+                            return (
+                              <button
+                                key={`${calendarMonth.key}-${dateKey}`}
+                                type="button"
+                                className={`order-client-view__calendar-day ${toneClass} ${
+                                  isSelected ? 'order-client-view__calendar-day--selected' : ''
+                                } ${isToday ? 'order-client-view__calendar-day--today' : ''} ${
+                                  isMyPickupDayAccepted ? 'order-client-view__calendar-day--my-pickup' : ''
+                                } ${
+                                  isClickable
+                                    ? 'order-client-view__calendar-day--clickable'
+                                    : 'order-client-view__calendar-day--inactive'
+                                }`}
+                                onClick={() => {
+                                  if (!isClickable) return;
+                                  setSelectedPickupDateKey(dateKey);
+                                }}
+                                aria-pressed={isSelected}
+                                aria-disabled={!isClickable}
+                                tabIndex={isClickable ? 0 : -1}
+                              >
+                                <span>{day.getDate()}</span>
+                                {hasCalendarMarker && <span className="order-client-view__calendar-day-dot" />}
+                                {myPickupSymbol && (
+                                  <span
+                                    className={`order-client-view__calendar-day-pickup ${
+                                      isMyPickupDayPending ? 'order-client-view__calendar-day-pickup--pending' : ''
+                                    }`}
+                                    title={
+                                      isMyPickupDayAccepted
+                                        ? 'Créneau confirmé'
+                                        : isMyPickupDayPending
+                                          ? 'Créneau en attente'
+                                          : 'Votre créneau'
+                                    }
+                                  >
+                                    {myPickupSymbol}
+                                  </span>
+                                )}
+                                {reservationCount > 0 && (
+                                  <span
+                                    className="order-client-view__calendar-day-count"
+                                    title={`${reservationCount} réservation${reservationCount > 1 ? 's' : ''}`}
+                                  >
+                                    {reservationCountLabel}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     ))}
-                    {calendarDays.map((day, index) => {
-                      if (!day) {
-                        return (
-                          <div
-                            key={`empty-${index}`}
-                            className="order-client-view__calendar-day order-client-view__calendar-day--empty"
-                            aria-hidden="true"
-                          />
-                        );
-                      }
-                      const dateKey = toDateKey(day);
-                      const isInAvailability = availabilityRange ? isDateInRange(day, availabilityRange) : false;
-                      const isInDelivery = deliveryRange ? isDateInRange(day, deliveryRange) : false;
-                      const isInOpen = openRange ? isDateInRange(day, openRange) : false;
-                      const isSelected = selectedPickupDateKey === dateKey;
-                      const isToday = todayKey === dateKey;
-                      const isMyPickupDay = Boolean(myPickupSlotDateKey && myPickupSlotDateKey === dateKey);
-                      const isMyPickupDayAccepted = isMyPickupDay && myPickupSlotStatus === 'accepted';
-                      const isMyPickupDayPending = isMyPickupDay && myPickupSlotStatus === 'requested';
-                      const myPickupSymbol = isMyPickupDayAccepted ? '✓' : isMyPickupDayPending ? '…' : null;
-                      const dayScheduleKey = WEEKDAY_KEYS[day.getDay()];
-                      const hasProducerPickupDay = Boolean(
-                        shouldShowProducerPickupDetails && producerOpeningHoursByDay[dayScheduleKey]
-                      );
-                      const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
-                      const hasSlots =
-                        canShowPickupSlotDetails &&
-                        (pickupSlotsByDate.get(dateKey) ?? []).some((slot) => slot.enabled);
-                      const hasCalendarMarker = hasSlots || showProducerPickupIndicator;
-                      const reservationCount = pickupSlotReservationCountsByDate.get(dateKey) ?? 0;
-                      const reservationCountLabel = reservationCount > 9 ? '9+' : String(reservationCount);
-                      const isClickable = Boolean(availabilityRange) && isInAvailability && canShowPickupSlotDetails;
-                      const toneClass = isInAvailability
-                        ? 'order-client-view__calendar-day--availability'
-                        : isInDelivery
-                          ? 'order-client-view__calendar-day--delivery'
-                          : isInOpen
-                            ? 'order-client-view__calendar-day--open'
-                            : '';
-                      return (
-                        <button
-                          key={dateKey}
-                          type="button"
-                          className={`order-client-view__calendar-day ${toneClass} ${
-                            isSelected ? 'order-client-view__calendar-day--selected' : ''
-                          } ${isToday ? 'order-client-view__calendar-day--today' : ''} ${
-                            isMyPickupDayAccepted ? 'order-client-view__calendar-day--my-pickup' : ''
-                          } ${
-                            isClickable
-                              ? 'order-client-view__calendar-day--clickable'
-                              : 'order-client-view__calendar-day--inactive'
-                          }`}
-                          onClick={() => {
-                            if (!isClickable) return;
-                            setSelectedPickupDateKey(dateKey);
-                          }}
-                          aria-pressed={isSelected}
-                          aria-disabled={!isClickable}
-                          tabIndex={isClickable ? 0 : -1}
-                        >
-                          <span>{day.getDate()}</span>
-                          {hasCalendarMarker && <span className="order-client-view__calendar-day-dot" />}
-                          {myPickupSymbol && (
-                            <span
-                              className={`order-client-view__calendar-day-pickup ${
-                                isMyPickupDayPending ? 'order-client-view__calendar-day-pickup--pending' : ''
-                              }`}
-                              title={
-                                isMyPickupDayAccepted
-                                  ? 'Créneau confirmé'
-                                  : isMyPickupDayPending
-                                    ? 'Créneau en attente'
-                                    : 'Votre créneau'
-                              }
-                            >
-                              {myPickupSymbol}
-                            </span>
-                          )}
-                          {reservationCount > 0 && (
-                            <span
-                              className="order-client-view__calendar-day-count"
-                              title={`${reservationCount} réservation${reservationCount > 1 ? 's' : ''}`}
-                            >
-                              {reservationCountLabel}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
                   </div>
                   {canShowPickupSlotDetails && (
                     <div className="order-client-view__calendar-slots">
@@ -3053,6 +3087,7 @@ const sharerAvatarUpdatedAt =
                   unitPriceLabelsById={unitPriceLabelsById}
                   isSelectionLocked={!isOrderOpen}
                   onOpenProduct={handleOpenProduct}
+                  onOpenProducer={handleOpenProducerFromProduct}
                 />
               )}
             </div>
@@ -3230,7 +3265,7 @@ const sharerAvatarUpdatedAt =
       <div className="order-client-view__participants">
             <div className="order-client-view__participants-header">
               <div>
-                <p className="order-client-view__participants-title">{participantsCountLabel} à la commande</p>
+                <p className="order-client-view__participants-title">{participantsTitle}</p>
               </div>
               {isOwner && (
                 <div className="order-client-view__participants-controls">
@@ -3367,7 +3402,9 @@ const sharerAvatarUpdatedAt =
                   : 'Liste des participants masquée par le créateur de la commande'}
               </div>
             ) : participantsWithTotals.length === 0 ? (
-              <div className="order-client-view__participants-empty">Aucun participant pour le moment</div>
+              <div className="order-client-view__participants-empty">
+                {isOwner ? 'Aucun participant pour le moment' : 'Liste des participants indisponible pour le moment'}
+              </div>
             ) : (
               <>
                 <div className="order-client-view__participants-table-wrapper">
@@ -3600,6 +3637,7 @@ function OrderProductsCarousel({
   unitPriceLabelsById,
   isSelectionLocked,
   onOpenProduct,
+  onOpenProducer,
 }: {
   products: Product[];
   quantities: Record<string, number>;
@@ -3608,6 +3646,7 @@ function OrderProductsCarousel({
   unitPriceLabelsById: Record<string, string>;
   isSelectionLocked: boolean;
   onOpenProduct: (product: Product) => void;
+  onOpenProducer: (product: Product) => void;
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
@@ -3696,7 +3735,7 @@ function OrderProductsCarousel({
                 canSave={false}
                 inDeck={false}
                 onOpen={() => onOpenProduct(product)}
-                onOpenProducer={() => undefined}
+                onOpenProducer={() => onOpenProducer(product)}
                 showSelectionControl={false}
                 cardWidth={ORDER_CARD_WIDTH}
                 compact
@@ -3705,7 +3744,7 @@ function OrderProductsCarousel({
               <div className="w-full space-y-2" style={{ maxWidth: ORDER_CARD_WIDTH }}>
                 {!isSelectionLocked && (
                   <p className="text-[12px] text-[#6B7280] text-center">
-                    {getProductWeightKg(product).toFixed(2)} kg
+                    {formatProductWeightLabelForSelection(product)}
                   </p>
                 )}
                 {!isSelectionLocked && (
@@ -3772,6 +3811,7 @@ function OrderProductsCarousel({
     </div>
   );
 }
+
 
 
 

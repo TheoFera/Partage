@@ -539,13 +539,19 @@
 
 .order-client-view__header-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: 1fr;
   gap: 16px;
 }
 
 .order-client-view__header-grid > * {
   width: min(100%, 520px);
   justify-self: center;
+}
+
+@media (min-width: 1024px) {
+  .order-client-view__header-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .order-client-view__statement-label {
@@ -593,6 +599,13 @@
   flex-direction: column;
   gap: 12px;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.order-client-view__header-grid > .order-client-view__calendar-card {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: none;
+  justify-self: stretch;
 }
 
 .order-client-view__products-section {
@@ -695,6 +708,31 @@
 .order-client-view__calendar-month {
   font-size: 0.85rem;
   font-weight: 600;
+  color: #1f2937;
+  text-transform: capitalize;
+}
+
+.order-client-view__calendar-months {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.order-client-view__calendar-months--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.order-client-view__calendar-month-panel {
+  border: 1px solid #f3f4f6;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.order-client-view__calendar-month-title {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
   color: #1f2937;
   text-transform: capitalize;
 }
@@ -897,6 +935,12 @@
   font-size: 0.75rem;
   color: #6b7280;
   line-height: 1.4;
+}
+
+@media (max-width: 960px) {
+  .order-client-view__calendar-months--two {
+    grid-template-columns: 1fr;
+  }
 }
 
 .order-client-view__pickup-slots {
