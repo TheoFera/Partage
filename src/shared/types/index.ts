@@ -46,6 +46,7 @@ export interface LegalEntity {
   producerCategory?: string;
   iban?: string;
   accountHolderName?: string;
+  canReceiveSharerCash?: boolean;
   deliveryLeadType?: DeliveryLeadType;
   deliveryLeadDays?: number;
   deliveryFixedDay?: DeliveryDay;
@@ -96,12 +97,17 @@ export interface DeckCard extends Product {
 export interface GroupOrder {
   id: string;
   orderCode?: string;
+  createdAt?: Date;
   title: string;
   sharerId: string;
   sharerName: string;
+  sharerAvatarPath?: string | null;
+  sharerAvatarUpdatedAt?: string | null;
   products: Product[];
   producerId: string;
   producerName: string;
+  producerAvatarPath?: string | null;
+  producerAvatarUpdatedAt?: string | null;
   sharerPercentage: number;
   sharerQuantities?: Record<string, number>;
   minWeight: number;
@@ -156,6 +162,12 @@ export interface OrderPurchaseDraft {
   total: number;
   weight: number;
   baseOrderedWeight: number;
+  kind?: 'participant' | 'close';
+  useCoopBalance?: boolean;
+  closeData?: {
+    useCoopBalance: boolean;
+    extraQuantities: Record<string, number>;
+  };
 }
 
 export type ConservationMode = 'frais' | 'ambiant' | 'congele';

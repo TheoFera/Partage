@@ -20,6 +20,15 @@ L'application utilise `react-router-dom` (BrowserRouter). Les routes principales
 
 Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`).
 
+### Billing / factures (runbook)
+
+- Script SQL de fiabilisation: `supabase/billing_close_invoice_fix.sql`.
+- Ce patch garantit la generation de facture partageur a la cloture, meme sans paiement CB, sur la base des lignes produits.
+- L'envoi email/PDF est volontairement non-bloquant: une facture peut etre creee meme si le dispatcher email est mal configure.
+- Pour diagnostiquer la configuration des secrets billing, executer:
+  - `select * from public.billing_email_config_healthcheck();`
+- Si `SUPABASE_SERVICE_ROLE_KEY` n'est pas un JWT valide (`dot_count != 2`), `process-emails-sortants` peut repondre `401 Invalid JWT`.
+
 ## Mode demo
 
 `src/shared/config/demoMode.ts` centralise `DEMO_MODE` (lecture de `VITE_DEMO_MODE`). Les donnees de demo sont dans `src/data/fixtures/`.

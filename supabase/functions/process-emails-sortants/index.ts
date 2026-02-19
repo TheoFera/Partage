@@ -398,21 +398,24 @@ Deno.serve(async (req) => {
       const { data: facture, error: fErr } = await supabase
         .from("factures")
         .select(
-          "id, numero, total_ttc_cents, producer_profile_id, client_profile_id, pdf_path, order_id, issued_at, currency, serie",
+          "id, numero, total_ttc_cents, producer_profile_id, client_profile_id, pdf_path, order_id, issued_at, currency, serie, payment_id",
         )
         .eq("id", job.facture_id)
         .single();
 
       if (fErr || !facture) throw new Error(`Facture introuvable: ${fErr?.message ?? "null"}`);
 
-      let toProfileId: string | null = null;
-
-      if (kind === "FACTURE_CLIENT") {
-        toProfileId = facture.client_profile_id ?? null;
-      } else if (kind === "FACTURE_PLATEFORME" || kind === "RELEVE_REGLEMENT") {
-        toProfileId = facture.producer_profile_id ?? null;
-      } else {
-        throw new Error(`kind inconnu: ${job?.kind}`);
+      let toProfileId: string | null = job?.to_profile_id ?? null;
+      if (!toProfileId) {
+        if (kind === "FACTURE_CLIENT") {
+          toProfileId = facture.client_profile_id ?? null;
+        } else if (kind === "FACTURE_PLATEFORME" || kind === "RELEVE_REGLEMENT") {
+          toProfileId = facture.producer_profile_id ?? null;
+        } else if (kind === "FACTURE_AUTO_SHARER") {
+          toProfileId = facture.client_profile_id ?? null;
+        } else {
+          throw new Error(`kind inconnu: ${job?.kind}`);
+        }
       }
 
       if (!toProfileId) throw new Error(`Destinataire introuvable pour kind=${kind}`);
@@ -446,17 +449,117 @@ Deno.serve(async (req) => {
         .eq("id", facture.order_id)
         .maybeSingle();
 
-      const { data: participantRow } = await supabase
-        .from("order_participants")
-        .select("id, pickup_code")
-        .eq("order_id", facture.order_id)
-        .eq("profile_id", facture.client_profile_id)
-        .maybeSingle();
+      let participantId: string | null = null;
+      let pickupCode: string | null = null;
 
-      const participantId = participantRow?.id ?? null;
+      // 1) Preferred source: payment -> participant_id (most precise for paid invoices).
+      if (facture.payment_id) {
+        const { data: paymentParticipant } = await supabase
+          .from("payments")
+          .select("participant_id")
+          .eq("id", facture.payment_id)
+          .maybeSingle();
+        const paymentParticipantId = paymentParticipant?.participant_id ?? null;
+        if (paymentParticipantId) {
+          const { data: opFromPayment } = await supabase
+            .from("order_participants")
+            .select("id, pickup_code")
+            .eq("id", paymentParticipantId)
+            .maybeSingle();
+          if (opFromPayment) {
+            participantId = opFromPayment.id;
+            pickupCode = opFromPayment.pickup_code ?? null;
+          }
+        }
+      }
 
+      // 2) Fallback source by invoice recipient role.
+      if (!participantId) {
+        if (facture.client_profile_id === orderRow?.sharer_profile_id) {
+          // Sharer invoice: enforce sharer role.
+          const { data: sharerOp } = await supabase
+            .from("order_participants")
+            .select("id, pickup_code")
+            .eq("order_id", facture.order_id)
+            .eq("role", "sharer")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (sharerOp) {
+            participantId = sharerOp.id;
+            pickupCode = sharerOp.pickup_code ?? null;
+          }
+        } else {
+          // Participant invoice: prefer participant role for that profile.
+          const { data: participantOp } = await supabase
+            .from("order_participants")
+            .select("id, pickup_code")
+            .eq("order_id", facture.order_id)
+            .eq("profile_id", facture.client_profile_id)
+            .eq("role", "participant")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (participantOp) {
+            participantId = participantOp.id;
+            pickupCode = participantOp.pickup_code ?? null;
+          }
+        }
+      }
+
+      // 3) Last fallback (legacy behavior).
+      if (!participantId) {
+        const { data: participantRow } = await supabase
+          .from("order_participants")
+          .select("id, pickup_code")
+          .eq("order_id", facture.order_id)
+          .eq("profile_id", facture.client_profile_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (participantRow) {
+          participantId = participantRow.id;
+          pickupCode = participantRow.pickup_code ?? null;
+        }
+      }
+
+      let coopUsedCents = 0;
+      if (kind === "FACTURE_CLIENT" && facture.client_profile_id && facture.order_id) {
+        const { data: coopRows, error: coopErr } = await supabase
+          .from("coop_ledger")
+          .select("delta_cents")
+          .eq("profile_id", facture.client_profile_id)
+          .eq("order_id", facture.order_id)
+          .eq("reason", "consume_order");
+        if (coopErr) throw new Error(`Coop ledger error: ${coopErr.message}`);
+        coopUsedCents = (coopRows ?? []).reduce(
+          (sum, row) => sum + Math.max(0, -Number(row.delta_cents ?? 0)),
+          0
+        );
+      }
+
+      let factureTotalTtcCents = Number(facture.total_ttc_cents ?? 0);
       let itemLines: InvoiceLine[] = [];
-      if (facture.serie === "PROD_CLIENT" && participantId) {
+
+      if (itemLines.length === 0) {
+        const { data: lineRows, error: lineErr } = await supabase
+          .from("facture_lignes")
+          .select("label, quantity, unit_ttc_cents, total_ttc_cents, vat_rate")
+          .eq("facture_id", facture.id);
+        if (lineErr) throw new Error(`Facture lignes error: ${lineErr.message}`);
+        if (lineRows && lineRows.length) {
+          itemLines = lineRows.map((row) => ({
+            label: row.label ?? "Ligne",
+            quantity: Number(row.quantity ?? 0),
+            unitLabel: null,
+            unitTtcCents: Number(row.unit_ttc_cents ?? 0),
+            vatRate: Number(row.vat_rate ?? 0),
+            totalTtcCents: Number(row.total_ttc_cents ?? 0),
+          }));
+        }
+      }
+
+      if (itemLines.length === 0 && facture.serie === "PROD_CLIENT" && participantId) {
         const { data: itemRows, error: itemsErr } = await supabase
           .from("order_items")
           .select("product_id, quantity_units, unit_label, unit_final_price_cents, line_total_cents")
@@ -486,12 +589,12 @@ Deno.serve(async (req) => {
       if (itemLines.length === 0) {
         itemLines = [
           {
-            label: facture.serie === "PLAT_PROD" ? "Commission plateforme" : "Participation commande",
+            label: facture.serie === "PLAT_PROD" ? "Commission de la plateforme" : "Participation commande",
             quantity: 1,
             unitLabel: null,
-            unitTtcCents: facture.total_ttc_cents,
+            unitTtcCents: factureTotalTtcCents,
             vatRate: 0,
-            totalTtcCents: facture.total_ttc_cents,
+            totalTtcCents: factureTotalTtcCents,
           },
         ];
       }
@@ -507,8 +610,8 @@ Deno.serve(async (req) => {
         totalTvaCents += line.totalTtcCents - lineHt;
       });
 
-      if (facture.total_ttc_cents && totalTtcCents !== facture.total_ttc_cents) {
-        totalTtcCents = facture.total_ttc_cents;
+      if (factureTotalTtcCents && totalTtcCents !== factureTotalTtcCents) {
+        totalTtcCents = factureTotalTtcCents;
       }
 
       const invoicePdfPayload: InvoicePdfPayload = {
@@ -533,7 +636,7 @@ Deno.serve(async (req) => {
           postcode: clientProfile?.postcode ?? null,
         },
         orderCode: orderRow?.order_code ?? null,
-        pickupCode: participantRow?.pickup_code ?? null,
+        pickupCode,
         pickupAddress: buildPickupAddress(orderRow ?? undefined),
         lines: itemLines,
         totals: {
@@ -562,13 +665,43 @@ Deno.serve(async (req) => {
         if (updFactErr) throw new Error(`Update factures.pdf_path error: ${updFactErr.message}`);
       }
 
+      const orderNameLabel = orderRow?.title?.trim() || "—";
+      const orderLabel = orderRow?.order_code ?? facture.order_id ?? "";
+      const orderRefFragment = orderLabel ? ` - commande ${orderLabel}` : "";
+      const isProducerDocument = kind === "FACTURE_PLATEFORME" || kind === "RELEVE_REGLEMENT";
       const subject =
         kind === "FACTURE_CLIENT"
-          ? `Confirmation de votre commande – Facture ${facture.numero}`
-          : `Document – ${facture.numero}`;
-
-      const orderLabel = orderRow?.order_code ?? facture.order_id ?? "";
-      const pickupCode = participantRow?.pickup_code ?? "";
+          ? `Confirmation de votre commande - Facture ${facture.numero}`
+          : kind === "FACTURE_AUTO_SHARER"
+            ? `Auto-facture - ${facture.numero}`
+            : kind === "FACTURE_PLATEFORME"
+              ? `Facture de commission plateforme${orderRefFragment} - ${facture.numero}`
+              : kind === "RELEVE_REGLEMENT"
+                ? `Releve de reglement producteur${orderRefFragment} - ${facture.numero}`
+                : `Document - ${facture.numero}`;
+      const titleText =
+        kind === "FACTURE_CLIENT"
+          ? "Merci pour votre achat !"
+          : kind === "FACTURE_AUTO_SHARER"
+            ? "Votre auto-facture est disponible"
+            : kind === "FACTURE_PLATEFORME"
+              ? "Votre facture de commission est disponible"
+              : kind === "RELEVE_REGLEMENT"
+                ? "Votre releve de reglement est disponible"
+                : "Votre document est disponible";
+      const introText =
+        kind === "FACTURE_CLIENT"
+          ? "Bonjour, voici le recapitulatif de votre commande."
+          : kind === "FACTURE_AUTO_SHARER"
+            ? "Bonjour, vous trouverez en piece jointe votre auto-facture."
+            : kind === "FACTURE_PLATEFORME"
+              ? "Bonjour, vous trouverez en piece jointe la facture de commission liee a cette commande producteur."
+              : kind === "RELEVE_REGLEMENT"
+                ? "Bonjour, vous trouverez en piece jointe le releve de reglement de cette commande producteur."
+                : "Bonjour, vous trouverez en piece jointe votre document.";
+      const paymentLabel = isProducerDocument ? "Paiements participants" : "Paiement";
+      const paymentValue = isProducerDocument ? "Carte bancaire / gains de cooperation" : "Carte bancaire";
+      const pickupCodeLabel = pickupCode ?? "";
       const linesHtml = itemLines
         .map((line) => {
           const qty = `${formatQuantity(line.quantity)}${line.unitLabel ? ` ${line.unitLabel}` : ""}`;
@@ -583,6 +716,15 @@ Deno.serve(async (req) => {
         .join("");
 
       const logoSrc = LOGO_PUBLIC_URL || LOGO_PNG_DATA_URI;
+      const coopNoteHtml =
+        coopUsedCents > 0
+          ? `
+            <div style="margin:16px 0 0;padding:12px 14px;background:#f8f8f8;border:1px solid #eee;border-radius:8px;">
+              <div style="font-size:13px;color:#555;">Gain de coopération utilisé</div>
+              <div style="font-size:15px;font-weight:bold;color:#111;">-${formatCurrency(coopUsedCents, facture.currency ?? "EUR")}</div>
+            </div>
+          `
+          : "";
       const html = `
 <!doctype html>
 <html lang="fr">
@@ -594,10 +736,14 @@ Deno.serve(async (req) => {
         <div style="font-size:18px;font-weight:bold;color:#1f1f1f;">Partage</div>
       </div>
       <div style="padding:24px 28px;">
-        <h2 style="margin:0 0 12px;font-size:20px;">Merci pour votre achat !</h2>
-        <p style="margin:0 0 16px;color:#555;">Bonjour, voici le récapitulatif de votre commande.</p>
+        <h2 style="margin:0 0 12px;font-size:20px;">${titleText}</h2>
+        <p style="margin:0 0 16px;color:#555;">${introText}</p>
         <div style="background:#f8f8f8;border:1px solid #eee;padding:14px 16px;margin-bottom:18px;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <tr>
+              <td style="padding:4px 0;color:#666;">Nom de la commande</td>
+              <td style="padding:4px 0;text-align:right;font-weight:bold;">${orderNameLabel}</td>
+            </tr>
             <tr>
               <td style="padding:4px 0;color:#666;">Numéro de commande</td>
               <td style="padding:4px 0;text-align:right;font-weight:bold;">${orderLabel}</td>
@@ -607,10 +753,10 @@ Deno.serve(async (req) => {
               <td style="padding:4px 0;text-align:right;font-weight:bold;">${formatDate(facture.issued_at)}</td>
             </tr>
             ${
-              pickupCode
+              pickupCodeLabel
                 ? `<tr>
                      <td style="padding:4px 0;color:#666;">Code retrait</td>
-                     <td style="padding:4px 0;text-align:right;font-weight:bold;">${pickupCode}</td>
+                     <td style="padding:4px 0;text-align:right;font-weight:bold;">${pickupCodeLabel}</td>
                    </tr>`
                 : ""
             }
@@ -627,10 +773,11 @@ Deno.serve(async (req) => {
               <td style="padding:4px 0;text-align:right;font-weight:bold;">${formatCurrency(totalTtcCents, facture.currency ?? "EUR")}</td>
             </tr>
             <tr>
-              <td style="padding:4px 0;color:#666;">Paiement</td>
-              <td style="padding:4px 0;text-align:right;font-weight:bold;">Carte bancaire</td>
+              <td style="padding:4px 0;color:#666;">${paymentLabel}</td>
+              <td style="padding:4px 0;text-align:right;font-weight:bold;">${paymentValue}</td>
             </tr>
           </table>
+          ${coopNoteHtml}
         </div>
 
         <table style="width:100%;border-collapse:collapse;font-size:14px;">

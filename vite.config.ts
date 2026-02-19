@@ -1,15 +1,29 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react-swc';
+import fs from 'fs';
+import path from 'path';
 
-  import { defineConfig } from 'vite';
-  import react from '@vitejs/plugin-react-swc';
-  import fs from 'fs';
-  import path from 'path';
+const projectRoot = fs.realpathSync(__dirname);
 
-  const projectRoot = fs.realpathSync(__dirname);
+export default defineConfig(async ({ mode }) => {
+  const plugins = [react()];
+  const isHttpsMode = mode === 'https';
 
-  export default defineConfig(({ command }) => ({
+  if (isHttpsMode) {
+    try {
+      const basicSsl = (await import('@vitejs/plugin-basic-ssl')).default;
+      plugins.push(basicSsl());
+    } catch {
+      throw new Error(
+        'Mode HTTPS local non configure: installez @vitejs/plugin-basic-ssl avec "npm i -D @vitejs/plugin-basic-ssl".'
+      );
+    }
+  }
+
+  return {
     base: '/',
     root: projectRoot,
-    plugins: [react()],
+    plugins,
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {
@@ -61,5 +75,7 @@
     server: {
       port: 3000,
       open: true,
+      https: isHttpsMode,
     },
-  }));
+  };
+});

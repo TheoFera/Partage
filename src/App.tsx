@@ -18,8 +18,10 @@ import { MapView } from './modules/products/pages/MapView';
 import { OrderClientView } from './modules/orders/pages/OrderClientView';
 import { OrderPaymentView } from './modules/orders/pages/OrderPaymentView';
 import { OrderShareGainView } from './modules/orders/pages/OrderShareGainView';
+import { OrderCloseView } from './modules/orders/pages/OrderCloseView';
 import { AuthPage } from './modules/auth/pages/AuthPage';
 import { ShareOverlay } from './shared/ui/ShareOverlay';
+import { PostcodeOverlay } from './shared/ui/PostcodeOverlay';
 import { mockProducts, mockUser, mockGroupOrders } from './data/fixtures/mockData';
 import { ProductDetailView } from './modules/products/pages/ProductDetailView';
 import type { OrderFull } from './modules/orders/types';
@@ -38,19 +40,30 @@ import {
   TimelineStep,
 } from './shared/types';
 import { getSupabaseClient } from './shared/lib/supabaseClient';
-import { eurosToCents, formatEurosFromCents } from './shared/lib/money';
+import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
 import { DEMO_MODE } from './shared/config/demoMode';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
   addItem,
+  createLockClosePackage,
   createPaymentStub,
+  deleteParticipantIfNoActivity,
+  fetchCoopBalance,
+  fetchParticipantInvoices,
   getOrderFullByCode,
   getParticipantByProfile,
+  issueParticipantInvoiceWithCoop,
+  issueSharerInvoiceAfterLock,
   listOrdersForUser,
   listPublicOrders,
+  finalizeClosePayment,
   finalizePaymentSimulation,
+  removeItem,
   requestParticipation,
   setDemoOrders,
+  triggerOutgoingEmails,
+  updateOrderItemQuantity,
+  updatePaymentStatus,
 } from './modules/orders/api/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -117,6 +130,12 @@ const producerTagsMap: Record<string, string[]> = {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
+const POSTCODE_REGEX = /^\d{5}$/;
+const POSTCODE_RADIUS_DEFAULT_KM = 20;
+const POSTCODE_STORAGE_KEY = 'partage:postcode-search:v1';
+const POSTCODE_COORDS_STORAGE_KEY = 'partage:postcode-search-coords:v1';
+const POSTCODE_OVERLAY_DISMISSED_SESSION_KEY = 'partage:postcode-overlay-dismissed:v1';
+const POSTCODE_GEOCODE_DEBOUNCE_MS = 250;
 
 const mockNotifications = [
   {
@@ -211,6 +230,7 @@ type StartPaymentPayload = {
   quantities: Record<string, number>;
   total: number;
   weight: number;
+  useCoopBalance: boolean;
 };
 
 type OrderRouteProps = {
@@ -241,6 +261,55 @@ type NotificationItem = {
   orderId?: string | null;
   orderCode?: string | null;
 };
+
+type ShareOverlayDetail = { label: string; value: string };
+
+type ProductShareContext = {
+  product: Product;
+  detail?: ProductDetail | null;
+  ordersWithProduct: GroupOrder[];
+  timelineSteps?: TimelineStep[];
+  sharePath?: string;
+};
+
+type ShareOverlayKind = 'order' | 'product' | 'profile' | 'generic';
+
+type ShareOverlayPayload =
+  | {
+      kind: 'order';
+      link: string;
+      title: string;
+      subtitle?: string;
+      description?: string;
+      details?: ShareOverlayDetail[];
+      orderData: { order: GroupOrder };
+    }
+  | {
+      kind: 'product';
+      link: string;
+      title: string;
+      subtitle?: string;
+      description?: string;
+      details?: ShareOverlayDetail[];
+      productData: ProductShareContext;
+    }
+  | {
+      kind: 'profile';
+      link: string;
+      title: string;
+      subtitle?: string;
+      description?: string;
+      details?: ShareOverlayDetail[];
+      profileData: { profile: User };
+    }
+  | {
+      kind: 'generic';
+      link: string;
+      title: string;
+      subtitle?: string;
+      description?: string;
+      details?: ShareOverlayDetail[];
+    };
 
 const OrderRoute = ({
   groupOrders,
@@ -342,6 +411,24 @@ const parseDistanceKm = (value?: string) => {
   if (!match) return null;
   const parsed = Number(match[1].replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizePostcode = (value?: string | null) => (value ?? '').replace(/\D+/g, '').slice(0, 5);
+
+const extractPostcode = (value?: string | null) => {
+  if (!value) return null;
+  const match = value.match(/\b(\d{5})\b/);
+  return match ? match[1] : null;
+};
+
+const parseSearchQueryParts = (query: string): { text: string; postcode: string | null } => {
+  const trimmed = query.trim();
+  if (!trimmed) return { text: '', postcode: null };
+  const postcodeMatch = trimmed.match(/\b\d{5}\b/);
+  const postcode = postcodeMatch ? postcodeMatch[0] : null;
+  if (!postcode) return { text: trimmed, postcode: null };
+  const text = trimmed.replace(new RegExp(`\\b${postcode}\\b`, 'g'), ' ').replace(/\s+/g, ' ').trim();
+  return { text, postcode };
 };
 
 const formatRelativeTime = (value: string | Date) => {
@@ -509,6 +596,7 @@ type LegalEntityRow = {
   producer_category?: string | null;
   iban?: string | null;
   account_holder_name?: string | null;
+  can_receive_sharer_cash?: boolean | null;
   delivery_lead_type?: string | null;
   delivery_lead_days?: number | null;
   delivery_fixed_day?: string | null;
@@ -532,6 +620,20 @@ type LegalEntityRow = {
 type GeoPoint = {
   lat: number;
   lng: number;
+};
+
+type PostcodeSearchStatus = 'idle' | 'loading' | 'resolved' | 'failed';
+
+type PostcodeSearchState = {
+  postcode: string;
+  status: PostcodeSearchStatus;
+  coords?: GeoPoint;
+};
+
+type ProducerGeoRecord = {
+  postcode?: string;
+  city?: string;
+  coords?: GeoPoint;
 };
 
 const DELIVERY_DAY_VALUES: DeliveryDay[] = [
@@ -573,6 +675,7 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   producerCategory: row.producer_category ?? undefined,
   iban: row.iban ?? undefined,
   accountHolderName: row.account_holder_name ?? undefined,
+  canReceiveSharerCash: row.can_receive_sharer_cash ?? undefined,
   deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
   deliveryLeadDays: toNumberOrUndefined(row.delivery_lead_days),
   deliveryFixedDay: normalizeDeliveryDayValue(row.delivery_fixed_day),
@@ -786,12 +889,13 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   const safeUserOrders = userOrders ?? [];
 
   const producerProductsForProfile = React.useMemo(() => {
-    const byId = profileUser?.producerId
-      ? safeProducts.filter((product) => product.producerId === profileUser.producerId)
+    const producerIds = new Set([profileUser?.id, profileUser?.producerId].filter(Boolean) as string[]);
+    const byId = producerIds.size
+      ? safeProducts.filter((product) => product.producerId && producerIds.has(product.producerId))
       : [];
     if (byId.length) return byId;
     return safeProducts.filter((product) => product.producerName === profileUser?.name);
-  }, [safeProducts, profileUser?.name, profileUser?.producerId]);
+  }, [safeProducts, profileUser?.id, profileUser?.name, profileUser?.producerId]);
 
   const sharerOrdersForProfile = React.useMemo(() => {
     const source = resolvedIsOwn ? safeUserOrders : safeGroupOrders;
@@ -799,12 +903,13 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   }, [safeGroupOrders, profileUser?.id, resolvedIsOwn, safeUserOrders]);
 
   const producerOrdersForProfile = React.useMemo(() => {
-    const byId = profileUser?.producerId
-      ? safeGroupOrders.filter((order) => order.producerId === profileUser.producerId)
+    const producerIds = new Set([profileUser?.id, profileUser?.producerId].filter(Boolean) as string[]);
+    const byId = producerIds.size
+      ? safeGroupOrders.filter((order) => order.producerId && producerIds.has(order.producerId))
       : [];
     if (byId.length) return byId;
     return safeGroupOrders.filter((order) => order.producerName === profileUser?.name);
-  }, [safeGroupOrders, profileUser?.name, profileUser?.producerId]);
+  }, [safeGroupOrders, profileUser?.id, profileUser?.name, profileUser?.producerId]);
 
   const participantOrdersForProfile = React.useMemo(() => {
     if (!resolvedIsOwn || !profileUser) return [];
@@ -910,7 +1015,8 @@ type ProductRouteViewProps = {
   onStartOrderFromProduct: (product: Product) => void;
   onAddToDeck: (product: Product) => void;
   onRemoveFromDeck: (productId: string) => void;
-  onShareProduct: (product: Product) => void;
+  onShareProduct: (product: Product, context?: ProductShareContext) => void;
+  onShareContextChange?: (context: ProductShareContext | null) => void;
   onSearchProductOrders?: (product: Product) => void;
 };
 
@@ -930,6 +1036,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   onAddToDeck,
   onRemoveFromDeck,
   onShareProduct,
+  onShareContextChange,
   onSearchProductOrders,
 }) => {
   const params = useParams<{
@@ -1111,6 +1218,28 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     } as const;
   }, [groupOrders, orderCode, orderContext?.order]);
 
+  const productShareTimeline = React.useMemo(() => {
+    const baseTimeline = detail?.tracabilite?.timeline?.length
+      ? detail.tracabilite.timeline
+      : detail?.tracabilite?.lotTimeline ?? [];
+    if (!orderTimelineStep) return baseTimeline;
+    return [...baseTimeline, orderTimelineStep];
+  }, [detail?.tracabilite?.lotTimeline, detail?.tracabilite?.timeline, orderTimelineStep]);
+
+  const productSharePath = React.useMemo(() => {
+    if (!product) return null;
+    const slug = product.slug ?? slugify(product.name);
+    const productCodeValue = product.productCode ?? product.id;
+    const resolvedLotCode = lotCode ?? activeLotCode ?? product.activeLotCode ?? null;
+    const resolvedOrderCode = (orderContext?.order?.orderCode ?? orderCode)?.trim() || null;
+    if (resolvedLotCode) {
+      const basePath = `/produits/${slug || 'produit'}-${productCodeValue}/lot/${resolvedLotCode}`;
+      if (!resolvedOrderCode) return basePath;
+      return `${basePath}/cmd/${encodeURIComponent(resolvedOrderCode)}`;
+    }
+    return `/produits/${slug || 'produit'}-${productCodeValue}`;
+  }, [activeLotCode, lotCode, orderCode, orderContext?.order?.orderCode, product]);
+
   React.useEffect(() => {
     if (!product || lotCode || !activeLotCode) return;
     navigate(buildLotPath(product, activeLotCode), { replace: true });
@@ -1157,6 +1286,22 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     };
   }, [product?.producerId, supabaseClient]);
 
+  React.useEffect(() => {
+    if (!onShareContextChange) return;
+    if (!product || !detail) {
+      onShareContextChange(null);
+      return;
+    }
+    onShareContextChange({
+      product,
+      detail,
+      ordersWithProduct: ordersForProduct,
+      timelineSteps: productShareTimeline,
+      sharePath: productSharePath ?? undefined,
+    });
+    return () => onShareContextChange(null);
+  }, [detail, onShareContextChange, ordersForProduct, product, productSharePath, productShareTimeline]);
+
   if (isLoading && !product) {
     return <NotFound message="Chargement du produit..." />;
   }
@@ -1182,7 +1327,15 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
         onHeaderActionsChange={onHeaderActionsChange}
         onOpenProducer={onOpenProducer}
         onOpenRelatedProduct={onOpenRelatedProduct}
-      onShare={() => onShareProduct(product)}
+      onShare={() =>
+        onShareProduct(product, {
+          product,
+          detail,
+          ordersWithProduct: ordersForProduct,
+          timelineSteps: productShareTimeline,
+          sharePath: productSharePath ?? undefined,
+        })
+      }
       onCreateOrder={() => onStartOrderFromProduct(product)}
       onParticipate={handleParticipate}
       onToggleSave={canSaveProduct ? handleToggleSave : undefined}
@@ -1265,14 +1418,19 @@ export default function App() {
   const [purchaseDraft, setPurchaseDraft] = React.useState<OrderPurchaseDraft | null>(null);
   const [recentPurchase, setRecentPurchase] = React.useState<OrderPurchaseDraft | null>(null);
   const [productHeaderActions, setProductHeaderActions] = React.useState<React.ReactNode | null>(null);
+  const [productShareContext, setProductShareContext] = React.useState<ProductShareContext | null>(null);
   const [shareOverlay, setShareOverlay] = React.useState<{
     open: boolean;
+    kind: ShareOverlayKind;
     link: string;
     title: string;
     subtitle?: string;
     description?: string;
-    details?: { label: string; value: string }[];
-  }>({ open: false, link: '', title: '' });
+    details?: ShareOverlayDetail[];
+    orderData?: { order: GroupOrder };
+    productData?: ProductShareContext;
+    profileData?: { profile: User };
+  }>({ open: false, kind: 'generic', link: '', title: '' });
   const [profileForShare, setProfileForShare] = React.useState<User | null>(null);
   const [guestLocation, setGuestLocation] = React.useState<GeoPoint | null>(null);
   const [guestLocationStatus, setGuestLocationStatus] = React.useState<
@@ -1363,6 +1521,12 @@ export default function App() {
     const frameId = requestAnimationFrame(updateScrollbarCompensation);
     return () => cancelAnimationFrame(frameId);
   }, [location.pathname, updateScrollbarCompensation]);
+
+  React.useEffect(() => {
+    if (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/')) return;
+    setProductShareContext(null);
+  }, [location.pathname]);
+
   const getAbsoluteLink = React.useCallback((path: string) => {
     if (typeof window === 'undefined') return path;
     return `${window.location.origin}${path}`;
@@ -1377,12 +1541,20 @@ export default function App() {
     return `/produits/${slug || 'produit'}-${code}`;
   }, []);
   const buildProductSharePayload = React.useCallback(
-    (product: Product) => {
+    (product: Product, context?: ProductShareContext | null): ShareOverlayPayload => {
       const hasPrice = Boolean(product.activeLotCode) && product.price > 0;
       const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir';
       const unitLabel = hasPrice ? ` / ${product.unit}` : '';
+      const safeContext: ProductShareContext = {
+        product,
+        detail: context?.detail ?? null,
+        ordersWithProduct: context?.ordersWithProduct ?? [],
+        timelineSteps: context?.timelineSteps ?? [],
+        sharePath: context?.sharePath ?? undefined,
+      };
       return {
-        link: getAbsoluteLink(getProductPath(product)),
+        kind: 'product',
+        link: getAbsoluteLink(context?.sharePath || getProductPath(product)),
         title: product.name,
         subtitle: `${product.producerName} - ${priceLabel}${unitLabel}`,
         description:
@@ -1392,12 +1564,13 @@ export default function App() {
           { label: 'Categorie', value: product.category },
           { label: 'Disponibilite', value: product.inStock ? 'Disponible' : 'Bientot disponible' },
         ],
+        productData: safeContext,
       };
     },
     [getAbsoluteLink, getProductPath]
   );
   const buildOrderSharePayload = React.useCallback(
-    (order: GroupOrder) => {
+    (order: GroupOrder): ShareOverlayPayload => {
       const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);
       const pickup =
         order.pickupAddress ||
@@ -1407,6 +1580,7 @@ export default function App() {
       const suffix = order.products.length > 3 ? ' ...' : '';
       const lineup = productNames ? `${productNames}${suffix}` : `${order.products.length} produits`;
       return {
+        kind: 'order',
         link: getAbsoluteLink(`/cmd/${order.orderCode ?? order.id}`),
         title: `Commande groupee : ${order.title}`,
         subtitle: `Par ${order.sharerName} - ${order.products.length} produit${order.products.length > 1 ? 's' : ''}`,
@@ -1416,12 +1590,13 @@ export default function App() {
           { label: 'Cloture', value: deadlineDate.toLocaleDateString('fr-FR') },
           { label: 'Retrait', value: pickup || 'Lieu partage apres paiement' },
         ],
+        orderData: { order },
       };
     },
     [getAbsoluteLink]
   );
   const buildProfileSharePayload = React.useCallback(
-    (profile: User) => {
+    (profile: User): ShareOverlayPayload => {
       const profileHandle = profile.handle ?? profile.name.toLowerCase().replace(/\s+/g, '');
       const zoneLabel = [profile.city, profile.postcode].filter(Boolean).join(' ') || profile.address || 'Zone locale';
       const profileTagline = profile.tagline ?? '';
@@ -1429,6 +1604,7 @@ export default function App() {
       const profileRoleLabel =
         profile.role === 'producer' ? 'Producteur' : profile.role === 'sharer' ? 'Partageur' : 'Participant';
       return {
+        kind: 'profile',
         link: getAbsoluteLink(`/profil/${profileHandle}`),
         title: `Profil de ${profile.name}`,
         subtitle,
@@ -1446,33 +1622,136 @@ export default function App() {
             value: profile.website || profile.contactEmailPublic || profile.phonePublic || 'Disponible sur Partage',
           },
         ],
+        profileData: { profile },
       };
     },
     [getAbsoluteLink]
   );
-  const openShareOverlay = React.useCallback(
-    (payload: { link: string; title: string; subtitle?: string; description?: string; details?: { label: string; value: string }[] }) => {
-      setShareOverlay({ open: true, ...payload });
-    },
-    []
-  );
+  const openShareOverlay = React.useCallback((payload: ShareOverlayPayload) => {
+    setShareOverlay({ open: true, ...payload });
+  }, []);
   const openProductShare = React.useCallback(
-    (product: Product) => {
-      openShareOverlay(buildProductSharePayload(product));
+    (product: Product, context?: ProductShareContext) => {
+      openShareOverlay(buildProductSharePayload(product, context ?? null));
     },
     [buildProductSharePayload, openShareOverlay]
   );
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [postcodeOverlayOpen, setPostcodeOverlayOpen] = React.useState(false);
+  const [postcodeOverlayError, setPostcodeOverlayError] = React.useState<string | null>(null);
+  const [postcodeSearch, setPostcodeSearch] = React.useState<PostcodeSearchState>({
+    postcode: '',
+    status: 'idle',
+  });
+  const [centerLocation, setCenterLocation] = React.useState<PostcodeSearchState>({
+    postcode: '',
+    status: 'idle',
+  });
+  const [guestStoredPostcode, setGuestStoredPostcode] = React.useState('');
+  const [producerGeoById, setProducerGeoById] = React.useState<Record<string, ProducerGeoRecord>>({});
+  const postcodeCoordsCacheRef = React.useRef<Map<string, GeoPoint>>(new Map());
   const [profileSearchResults, setProfileSearchResults] = React.useState<ProfileSearchResult[]>([]);
   const activeTab = React.useMemo(() => getTabFromPath(location.pathname), [location.pathname]);
   const isAuthPage = location.pathname.startsWith('/connexion');
   const isOrderCreation = location.pathname.startsWith('/commande/nouvelle');
   const isAddProductView = location.pathname === '/produit/nouveau';
   const isProfileSearchTab = activeTab === 'profile' || activeTab === 'messages';
+  const readPostcodeCoordsCache = React.useCallback((postcode: string) => {
+    return postcodeCoordsCacheRef.current.get(postcode);
+  }, []);
+  const writePostcodeCoordsCache = React.useCallback((postcode: string, coords: GeoPoint) => {
+    const cache = postcodeCoordsCacheRef.current;
+    cache.set(postcode, coords);
+    if (cache.size > 60) {
+      const firstKey = cache.keys().next().value;
+      if (firstKey) cache.delete(firstKey);
+    }
+    if (typeof window === 'undefined') return;
+    try {
+      const payload = Object.fromEntries(cache.entries());
+      window.localStorage.setItem(POSTCODE_COORDS_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(POSTCODE_COORDS_STORAGE_KEY);
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as Record<string, GeoPoint>;
+      Object.entries(parsed).forEach(([postcode, coords]) => {
+        if (!POSTCODE_REGEX.test(postcode)) return;
+        if (!Number.isFinite(coords?.lat) || !Number.isFinite(coords?.lng)) return;
+        postcodeCoordsCacheRef.current.set(postcode, { lat: Number(coords.lat), lng: Number(coords.lng) });
+      });
+    } catch {
+      // ignore cache parse errors
+    }
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const storedPostcode = normalizePostcode(window.localStorage.getItem(POSTCODE_STORAGE_KEY));
+    const nextPostcode = POSTCODE_REGEX.test(storedPostcode) ? storedPostcode : '';
+    setGuestStoredPostcode(nextPostcode);
+
+    if (isAuthPage || isRecoveryAuth || user) {
+      setPostcodeOverlayOpen(false);
+      setPostcodeOverlayError(null);
+      return;
+    }
+
+    if (nextPostcode) {
+      setPostcodeOverlayOpen(false);
+      return;
+    }
+
+    const dismissed = window.sessionStorage.getItem(POSTCODE_OVERLAY_DISMISSED_SESSION_KEY) === '1';
+    setPostcodeOverlayOpen(!dismissed);
+  }, [isAuthPage, isRecoveryAuth, user]);
+  React.useEffect(() => {
+    if (isAuthPage || isRecoveryAuth || user) {
+      setPostcodeOverlayOpen(false);
+      setPostcodeOverlayError(null);
+    }
+  }, [isAuthPage, isRecoveryAuth, user]);
+  const handlePostcodeOverlayClose = React.useCallback(() => {
+    setPostcodeOverlayOpen(false);
+    setPostcodeOverlayError(null);
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.setItem(POSTCODE_OVERLAY_DISMISSED_SESSION_KEY, '1');
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  const handlePostcodeOverlaySubmit = React.useCallback(
+    (postcode: string) => {
+      const normalized = normalizePostcode(postcode);
+      if (!POSTCODE_REGEX.test(normalized)) {
+        setPostcodeOverlayError('Veuillez saisir un code postal valide (5 chiffres).');
+        return;
+      }
+      setPostcodeOverlayError(null);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(POSTCODE_STORAGE_KEY, normalized);
+          window.sessionStorage.removeItem(POSTCODE_OVERLAY_DISMISSED_SESSION_KEY);
+        } catch {
+          // ignore storage errors
+        }
+      }
+      setGuestStoredPostcode(normalized);
+      setPostcodeOverlayOpen(false);
+      navigate(tabRoutes.home);
+    },
+    [navigate]
+  );
   const [filterScope, setFilterScope] = React.useState<SearchScope>('combined');
   const [filterCategories, setFilterCategories] = React.useState<string[]>([]);
   const [filterProducerTags, setFilterProducerTags] = React.useState<string[]>([]);
   const [filterAttributes, setFilterAttributes] = React.useState<string[]>([]);
+  const [postcodeRadiusKm, setPostcodeRadiusKm] = React.useState(POSTCODE_RADIUS_DEFAULT_KM);
   const [profileRoleFilters, setProfileRoleFilters] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
@@ -1866,7 +2145,243 @@ export default function App() {
     };
   }, [deck, fetchProfileById, orderBuilderProducts, profileForShare, user]);
 
-  const normalizedSearch = normalizeText(searchQuery.trim());
+  const producerProfileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    products.forEach((product) => {
+      if (isUuid(product.producerId)) ids.add(product.producerId);
+    });
+    return Array.from(ids);
+  }, [products]);
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !producerProfileIds.length) {
+      setProducerGeoById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from('profiles')
+      .select('id, postcode, city, address_lat, address_lng')
+      .in('id', producerProfileIds)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('producer location fetch error', error);
+          setProducerGeoById({});
+          return;
+        }
+        const mapped: Record<string, ProducerGeoRecord> = {};
+        (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+          const id = typeof row.id === 'string' ? row.id : '';
+          if (!id) return;
+          const postcode = normalizePostcode(typeof row.postcode === 'string' ? row.postcode : '');
+          const city = typeof row.city === 'string' ? row.city : undefined;
+          const lat = toNumberOrUndefined(row.address_lat);
+          const lng = toNumberOrUndefined(row.address_lng);
+          mapped[id] = {
+            postcode: POSTCODE_REGEX.test(postcode) ? postcode : undefined,
+            city,
+            coords: Number.isFinite(lat) && Number.isFinite(lng) ? { lat: Number(lat), lng: Number(lng) } : undefined,
+          };
+        });
+        setProducerGeoById(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [producerProfileIds, supabaseClient]);
+
+  const searchParts = React.useMemo(() => parseSearchQueryParts(searchQuery), [searchQuery]);
+  const searchPostcode = searchParts.postcode;
+  const isPostcodeSearch = Boolean(searchPostcode);
+  const trimmedSearchQuery = searchParts.text;
+  const normalizedSearch = normalizeText(trimmedSearchQuery);
+  const applyTextSearch = Boolean(normalizedSearch);
+
+  React.useEffect(() => {
+    if (!isPostcodeSearch || !searchPostcode) {
+      setPostcodeSearch((prev) =>
+        prev.status === 'idle' && !prev.postcode
+          ? prev
+          : {
+              postcode: '',
+              status: 'idle',
+            }
+      );
+      return;
+    }
+
+    if (!user && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(POSTCODE_STORAGE_KEY, searchPostcode);
+        setGuestStoredPostcode(searchPostcode);
+      } catch {
+        // ignore storage errors
+      }
+    }
+
+    const cached = readPostcodeCoordsCache(searchPostcode);
+    if (cached) {
+      setPostcodeSearch({
+        postcode: searchPostcode,
+        status: 'resolved',
+        coords: cached,
+      });
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    setPostcodeSearch({
+      postcode: searchPostcode,
+      status: 'loading',
+    });
+    const timeoutId = setTimeout(() => {
+      fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(searchPostcode)}&limit=1`, {
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error('postcode geocode failed');
+          return response.json() as Promise<{
+            features?: Array<{ geometry?: { coordinates?: [number, number] } }>;
+          }>;
+        })
+        .then((payload) => {
+          if (!active) return;
+          const coords = payload.features?.[0]?.geometry?.coordinates;
+          const lng = Number(coords?.[0]);
+          const lat = Number(coords?.[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const resolved = { lat, lng };
+            setPostcodeSearch({
+              postcode: searchPostcode,
+              status: 'resolved',
+              coords: resolved,
+            });
+            writePostcodeCoordsCache(searchPostcode, resolved);
+            return;
+          }
+          setPostcodeSearch({
+            postcode: searchPostcode,
+            status: 'failed',
+          });
+        })
+        .catch(() => {
+          if (!active) return;
+          setPostcodeSearch({
+            postcode: searchPostcode,
+            status: 'failed',
+          });
+        });
+    }, POSTCODE_GEOCODE_DEBOUNCE_MS);
+
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [isPostcodeSearch, readPostcodeCoordsCache, searchPostcode, user, writePostcodeCoordsCache]);
+
+  const centerPostcode = React.useMemo(() => {
+    if (user) {
+      const fromUser = normalizePostcode(user.postcode);
+      return POSTCODE_REGEX.test(fromUser) ? fromUser : '';
+    }
+    return guestStoredPostcode;
+  }, [guestStoredPostcode, user]);
+
+  React.useEffect(() => {
+    if (!centerPostcode) {
+      setCenterLocation((prev) =>
+        prev.status === 'idle' && !prev.postcode
+          ? prev
+          : {
+              postcode: '',
+              status: 'idle',
+            }
+      );
+      return;
+    }
+
+    if (
+      user &&
+      Number.isFinite(user.addressLat ?? NaN) &&
+      Number.isFinite(user.addressLng ?? NaN)
+    ) {
+      setCenterLocation({
+        postcode: centerPostcode,
+        status: 'resolved',
+        coords: { lat: Number(user.addressLat), lng: Number(user.addressLng) },
+      });
+      return;
+    }
+
+    const cached = readPostcodeCoordsCache(centerPostcode);
+    if (cached) {
+      setCenterLocation({
+        postcode: centerPostcode,
+        status: 'resolved',
+        coords: cached,
+      });
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    setCenterLocation({
+      postcode: centerPostcode,
+      status: 'loading',
+    });
+
+    const timeoutId = setTimeout(() => {
+      fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(centerPostcode)}&limit=1`, {
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error('center geocode failed');
+          return response.json() as Promise<{
+            features?: Array<{ geometry?: { coordinates?: [number, number] } }>;
+          }>;
+        })
+        .then((payload) => {
+          if (!active) return;
+          const coords = payload.features?.[0]?.geometry?.coordinates;
+          const lng = Number(coords?.[0]);
+          const lat = Number(coords?.[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const resolved = { lat, lng };
+            setCenterLocation({
+              postcode: centerPostcode,
+              status: 'resolved',
+              coords: resolved,
+            });
+            writePostcodeCoordsCache(centerPostcode, resolved);
+            return;
+          }
+          setCenterLocation({
+            postcode: centerPostcode,
+            status: 'failed',
+          });
+        })
+        .catch(() => {
+          if (!active) return;
+          setCenterLocation({
+            postcode: centerPostcode,
+            status: 'failed',
+          });
+        });
+    }, POSTCODE_GEOCODE_DEBOUNCE_MS);
+
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [centerPostcode, readPostcodeCoordsCache, user, writePostcodeCoordsCache]);
+
   const applyProductFilters = filterScope !== 'producers';
   const applyProducerFilters = filterScope !== 'products';
   const toggleFilterValue = React.useCallback(
@@ -1893,15 +2408,15 @@ export default function App() {
   );
   const matchesSearch = React.useCallback(
     (product: Product) => {
-      if (!normalizedSearch) return true;
+      if (!applyTextSearch) return true;
       const haystack = normalizeText(`${product.name} ${product.description} ${product.producerName}`);
       return haystack.includes(normalizedSearch);
     },
-    [normalizedSearch]
+    [applyTextSearch, normalizedSearch]
   );
 
   const productSearchSuggestions = React.useMemo<SearchSuggestion[]>(() => {
-    if (!normalizedSearch) return [];
+    if (!applyTextSearch) return [];
 
     const producerMap = new Map<
       string,
@@ -1946,7 +2461,76 @@ export default function App() {
       }));
 
     return [...producerMatches, ...productMatches];
-  }, [matchesSearch, normalizedSearch, products]);
+  }, [applyTextSearch, matchesSearch, normalizedSearch, products]);
+
+  const centerCoords =
+    centerLocation.status === 'resolved' &&
+    Number.isFinite(centerLocation.coords?.lat ?? NaN) &&
+    Number.isFinite(centerLocation.coords?.lng ?? NaN)
+      ? centerLocation.coords
+      : null;
+  const producerDistanceMetersById = React.useMemo(() => {
+    if (!centerCoords) return {};
+    const mapped: Record<string, number> = {};
+    Object.entries(producerGeoById).forEach(([producerId, geo]) => {
+      if (!geo.coords) return;
+      mapped[producerId] = distanceMeters(centerCoords, geo.coords);
+    });
+    return mapped;
+  }, [centerCoords, producerGeoById]);
+  const getOrderDistanceMeters = React.useCallback(
+    (order: GroupOrder) => {
+      if (!centerCoords || !order.mapLocation) return Number.POSITIVE_INFINITY;
+      return distanceMeters(centerCoords, order.mapLocation);
+    },
+    [centerCoords]
+  );
+  const postcodeRadiusMeters = postcodeRadiusKm * 1000;
+
+  const matchesProducerPostcode = React.useCallback(
+    (product: Product) => {
+      if (!isPostcodeSearch || !searchPostcode) return true;
+      const producerGeo = producerGeoById[product.producerId];
+      const producerPostcode =
+        producerGeo?.postcode ??
+        extractPostcode(product.producerLocation) ??
+        extractPostcode(producerGeo?.city) ??
+        null;
+      const shouldUseDistance =
+        postcodeSearch.status === 'resolved' &&
+        postcodeSearch.postcode === searchPostcode &&
+        Number.isFinite(postcodeSearch.coords?.lat ?? NaN) &&
+        Number.isFinite(postcodeSearch.coords?.lng ?? NaN);
+      if (shouldUseDistance && postcodeSearch.coords && producerGeo?.coords) {
+        return distanceMeters(postcodeSearch.coords, producerGeo.coords) <= postcodeRadiusMeters;
+      }
+      return producerPostcode === searchPostcode;
+    },
+    [isPostcodeSearch, postcodeRadiusMeters, postcodeSearch, producerGeoById, searchPostcode]
+  );
+
+  const matchesOrderPostcode = React.useCallback(
+    (order: GroupOrder) => {
+      if (!isPostcodeSearch || !searchPostcode) return true;
+      const shouldUseDistance =
+        postcodeSearch.status === 'resolved' &&
+        postcodeSearch.postcode === searchPostcode &&
+        Number.isFinite(postcodeSearch.coords?.lat ?? NaN) &&
+        Number.isFinite(postcodeSearch.coords?.lng ?? NaN);
+      if (shouldUseDistance && postcodeSearch.coords && order.mapLocation) {
+        return distanceMeters(postcodeSearch.coords, order.mapLocation) <= postcodeRadiusMeters;
+      }
+      const fallbackPostcodes = [
+        order.pickupPostcode,
+        extractPostcode(order.pickupAddress),
+        extractPostcode(order.mapLocation?.areaLabel),
+      ]
+        .map((value) => normalizePostcode(value))
+        .filter(Boolean);
+      return fallbackPostcodes.includes(searchPostcode);
+    },
+    [isPostcodeSearch, postcodeRadiusMeters, postcodeSearch, searchPostcode]
+  );
 
   const matchesProductFilters = React.useCallback(
     (product: Product) => {
@@ -1975,10 +2559,34 @@ export default function App() {
     [applyProductFilters, applyProducerFilters, filterAttributes, filterCategories, filterProducerTags]
   );
 
-  const filteredProducts = React.useMemo(
-    () => (normalizedSearch ? products.filter(matchesSearch) : products),
-    [matchesSearch, normalizedSearch, products]
-  );
+  const filteredProducts = React.useMemo(() => {
+    let results = products;
+    if (applyTextSearch) {
+      results = results.filter(matchesSearch);
+    }
+    if (isPostcodeSearch) {
+      results = results.filter(matchesProducerPostcode);
+    }
+    if (centerCoords) {
+      results = results
+        .slice()
+        .sort((a, b) => {
+          const aDistance = producerDistanceMetersById[a.producerId] ?? Number.POSITIVE_INFINITY;
+          const bDistance = producerDistanceMetersById[b.producerId] ?? Number.POSITIVE_INFINITY;
+          if (aDistance !== bDistance) return aDistance - bDistance;
+          return a.name.localeCompare(b.name);
+        });
+    }
+    return results;
+  }, [
+    applyTextSearch,
+    centerCoords,
+    isPostcodeSearch,
+    matchesProducerPostcode,
+    matchesSearch,
+    producerDistanceMetersById,
+    products,
+  ]);
 
   const filteredProductsWithFilters = React.useMemo(
     () => filteredProducts.filter(matchesProductFilters),
@@ -1986,16 +2594,43 @@ export default function App() {
   );
 
   const filteredMapOrders = React.useMemo(() => {
-    if (!normalizedSearch) return groupOrders;
+    let results: GroupOrder[] = groupOrders;
 
-    return groupOrders
-      .map((order) => {
-        const matchingProducts = order.products.filter(matchesSearch);
-        if (!matchingProducts.length) return null;
-        return { ...order, products: matchingProducts };
-      })
-      .filter((order): order is GroupOrder => Boolean(order));
-  }, [groupOrders, matchesSearch, normalizedSearch]);
+    if (applyTextSearch) {
+      results = groupOrders
+        .map((order) => {
+          const matchingProducts = order.products.filter(matchesSearch);
+          if (!matchingProducts.length) return null;
+          return { ...order, products: matchingProducts };
+        })
+        .filter((order): order is GroupOrder => Boolean(order));
+    }
+
+    if (isPostcodeSearch) {
+      results = results.filter(matchesOrderPostcode);
+    }
+
+    if (centerCoords) {
+      results = results
+        .slice()
+        .sort((a, b) => {
+          const aDistance = getOrderDistanceMeters(a);
+          const bDistance = getOrderDistanceMeters(b);
+          if (aDistance !== bDistance) return aDistance - bDistance;
+          return a.title.localeCompare(b.title);
+        });
+    }
+
+    return results;
+  }, [
+    applyTextSearch,
+    centerCoords,
+    getOrderDistanceMeters,
+    groupOrders,
+    isPostcodeSearch,
+    matchesOrderPostcode,
+    matchesSearch,
+  ]);
 
   const filteredMapOrdersWithFilters = React.useMemo(
     () => filteredMapOrders.filter((order) => order.products.some(matchesProductFilters)),
@@ -2086,12 +2721,37 @@ export default function App() {
     [groupOrders]
   );
 
-  const openProductView = (productId: string) => {
+  const openProductView = (
+    productId: string,
+    context?: { orderCode?: string | null; lotCode?: string | null }
+  ) => {
     const product =
       products.find((item) => (item.productCode ?? item.id) === productId) ??
       products.find((item) => item.id === productId);
+    const requestedOrderCode = context?.orderCode?.trim() || null;
+    const resolvedOrderCode =
+      requestedOrderCode
+        ? groupOrders.find((entry) => entry.orderCode === requestedOrderCode || entry.id === requestedOrderCode)
+            ?.orderCode ?? requestedOrderCode
+        : null;
+    const lotCode = context?.lotCode?.trim() || null;
     if (product) {
-      navigate(getProductPath(product));
+      const basePath = getProductPath(product, lotCode);
+      const hasLotContext = Boolean(lotCode || product.activeLotCode);
+      if (resolvedOrderCode && hasLotContext) {
+        navigate(`${basePath}/cmd/${encodeURIComponent(resolvedOrderCode)}`);
+        return;
+      }
+      navigate(basePath);
+      return;
+    }
+    if (lotCode) {
+      const fallbackPath = `/produits/produit-${productId}/lot/${lotCode}`;
+      if (resolvedOrderCode) {
+        navigate(`${fallbackPath}/cmd/${encodeURIComponent(resolvedOrderCode)}`);
+        return;
+      }
+      navigate(fallbackPath);
       return;
     }
     navigate(`/produits/produit-${productId}`);
@@ -2199,7 +2859,7 @@ export default function App() {
 
   const handleStartPurchase = (
     order: GroupOrder,
-    payload: { quantities: Record<string, number>; total: number; weight: number }
+    payload: StartPaymentPayload
   ) => {
     const total = Number(payload.total) || 0;
     const weight = Number(payload.weight) || 0;
@@ -2209,6 +2869,34 @@ export default function App() {
       total,
       weight,
       baseOrderedWeight: order.orderedWeight ?? 0,
+      kind: 'participant',
+      useCoopBalance: Boolean(payload.useCoopBalance),
+    };
+    setPurchaseDraft(draft);
+    setRecentPurchase(null);
+    if (!isAuthenticated) {
+      redirectToAuth(`/cmd/${resolveOrderCode(order.id)}/paiement`);
+      return;
+    }
+    navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
+  };
+
+  const handleStartClosePayment = (
+    order: GroupOrder,
+    payload: { amountCents: number; useCoopBalance: boolean; extraQuantities: Record<string, number> }
+  ) => {
+    const total = centsToEuros(payload.amountCents);
+    const draft: OrderPurchaseDraft = {
+      orderId: order.id,
+      quantities: {},
+      total,
+      weight: 0,
+      baseOrderedWeight: order.orderedWeight ?? 0,
+      kind: 'close',
+      closeData: {
+        useCoopBalance: payload.useCoopBalance,
+        extraQuantities: payload.extraQuantities,
+      },
     };
     setPurchaseDraft(draft);
     setRecentPurchase(null);
@@ -2254,10 +2942,18 @@ export default function App() {
       return;
     }
 
+    let paidAmountCents = eurosToCents(draft.total);
+    let paymentParticipantId: string | null = null;
+    let createdPaymentId: string | null = null;
+    let participantCreatedInFlow = false;
+    const createdOrderItems: Array<{ id: string }> = [];
+
     try {
       const existingParticipant = await getParticipantByProfile(order.id, user.id);
       const participant =
         existingParticipant ?? (await requestParticipation(order.orderCode ?? order.id, user.id));
+      participantCreatedInFlow = !existingParticipant;
+      paymentParticipantId = participant.id;
       const productsByCode = new Map(order.products.map((product) => [product.id, product]));
 
       for (const [productCode, rawQty] of Object.entries(draft.quantities)) {
@@ -2268,32 +2964,206 @@ export default function App() {
           console.warn('Produit introuvable pour la participation:', productCode);
           continue;
         }
-        await addItem({
+        const item = await addItem({
           orderId: order.id,
           participantId: participant.id,
           productId: product.dbId,
           quantityUnits,
         });
+        createdOrderItems.push({ id: item.id });
       }
 
-      const payment = await createPaymentStub({
-        orderId: order.id,
-        participantId: participant.id,
-        amountCents: eurosToCents(draft.total),
-      });
-      await finalizePaymentSimulation(payment.id);
+      // Reprice this participant's lines using the latest order weight.
+      const withItems = await getOrderFullByCode(order.orderCode ?? order.id);
+      const participantItems = withItems.items.filter((item) => item.participantId === participant.id);
+      for (const item of participantItems) {
+        await updateOrderItemQuantity(item.id, order.id, participant.id, item.quantityUnits);
+      }
+
+      const refreshed = await getOrderFullByCode(order.orderCode ?? order.id);
+      const refreshedParticipant = refreshed.participants.find((entry) => entry.id === participant.id);
+      if (!refreshedParticipant) {
+        throw new Error('Participant introuvable apres recalcul des prix.');
+      }
+      const alreadyPaidCents = refreshed.payments.reduce((sum, payment) => {
+        if (payment.participantId !== refreshedParticipant.id) return sum;
+        if (payment.status !== 'paid' && payment.status !== 'authorized') return sum;
+        return sum + Math.max(0, (payment.amountCents ?? 0) - (payment.refundedAmountCents ?? 0));
+      }, 0);
+      const amountDueCents = Math.max(0, refreshedParticipant.totalAmountCents - alreadyPaidCents);
+      const useCoopBalance = Boolean(draft.useCoopBalance);
+      const coopBalanceCents = await fetchCoopBalance(user.id);
+      const coopToConsumeCents = useCoopBalance ? Math.min(coopBalanceCents, amountDueCents) : 0;
+      paidAmountCents = Math.max(0, amountDueCents - coopToConsumeCents);
+
+      if (paidAmountCents <= 0) {
+        if (coopToConsumeCents > 0) {
+          await issueParticipantInvoiceWithCoop({
+            orderId: order.id,
+            profileId: user.id,
+            coopAppliedCents: coopToConsumeCents,
+          });
+        } else {
+          throw new Error('Aucun montant a payer apres recalcul des prix.');
+        }
+      } else {
+        const payment = await createPaymentStub({
+          orderId: order.id,
+          participantId: participant.id,
+          amountCents: paidAmountCents,
+          raw: {
+            flow_kind: 'participant',
+            use_coop_balance: useCoopBalance,
+          },
+        });
+        createdPaymentId = payment.id;
+        await finalizePaymentSimulation(payment.id);
+      }
     } catch (error) {
+      if (createdPaymentId) {
+        try {
+          await updatePaymentStatus(createdPaymentId, 'failed');
+        } catch (markFailedError) {
+          console.error('Payment mark failed error:', markFailedError);
+        }
+      }
+
+      // Roll back cart side effects when payment did not complete.
+      if (!createdPaymentId && createdOrderItems.length > 0 && paymentParticipantId) {
+        for (const created of createdOrderItems.slice().reverse()) {
+          try {
+            await removeItem(created.id, order.id, paymentParticipantId);
+          } catch (rollbackItemError) {
+            console.error('Rollback order item error:', rollbackItemError);
+          }
+        }
+      }
+
+      if (!createdPaymentId && participantCreatedInFlow && paymentParticipantId) {
+        try {
+          await deleteParticipantIfNoActivity({
+            orderId: order.id,
+            participantId: paymentParticipantId,
+            profileId: user.id,
+          });
+        } catch (rollbackParticipantError) {
+          console.error('Rollback participant error:', rollbackParticipantError);
+        }
+      }
+
       console.error('Payment finalize error:', error);
       const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
       toast.error(message);
       return;
     }
 
-    handlePurchaseOrder(draft.orderId, draft.total, draft.weight);
-    setRecentPurchase(draft);
+    const paidTotalEuros = centsToEuros(paidAmountCents);
+    const finalizedDraft: OrderPurchaseDraft = { ...draft, total: paidTotalEuros };
+    handlePurchaseOrder(draft.orderId, paidTotalEuros, draft.weight);
+    setRecentPurchase(finalizedDraft);
     setPurchaseDraft(null);
     navigate(`/cmd/${resolveOrderCode(draft.orderId)}/partage`);
     toast.success('Paiement confirme (simulation).');
+  };
+
+  const handleConfirmClosePayment = async (draft: OrderPurchaseDraft) => {
+    if (!isAuthenticated) {
+      redirectToAuth(location.pathname);
+      return;
+    }
+    const order = groupOrders.find((entry) => entry.id === draft.orderId);
+    if (!order) {
+      toast.error('Commande introuvable.');
+      return;
+    }
+    if (!user) {
+      toast.error('Utilisateur introuvable.');
+      return;
+    }
+    const closeData = draft.closeData;
+    if (!closeData) {
+      toast.error('Paiement de clôture incomplet.');
+      return;
+    }
+
+    try {
+      const orderFull = await getOrderFullByCode(order.orderCode ?? order.id);
+      const sharerParticipant =
+        orderFull.participants.find((participant) => participant.role === 'sharer') ?? null;
+      if (!sharerParticipant) {
+        toast.error('Partageur introuvable.');
+        return;
+      }
+
+      const items = orderFull.items ?? [];
+      const sharerItems = items.filter((item) => item.participantId === sharerParticipant.id);
+      const currentSharerQuantities = sharerItems.reduce((acc, item) => {
+        acc[item.productId] = (acc[item.productId] ?? 0) + item.quantityUnits;
+        return acc;
+      }, {} as Record<string, number>);
+
+      for (const [productId, rawExtra] of Object.entries(closeData.extraQuantities ?? {})) {
+        const extraQty = Math.max(0, Number(rawExtra) || 0);
+        if (extraQty <= 0) continue;
+        const existingQty = currentSharerQuantities[productId] ?? 0;
+        const targetQty = existingQty + extraQty;
+        const existingItem = sharerItems.find((item) => item.productId === productId);
+        if (existingItem) {
+          await updateOrderItemQuantity(existingItem.id, order.id, sharerParticipant.id, targetQty);
+        } else {
+          await addItem({
+            orderId: order.id,
+            participantId: sharerParticipant.id,
+            productId,
+            quantityUnits: targetQty,
+          });
+        }
+      }
+
+      const payment = await createPaymentStub({
+        orderId: order.id,
+        participantId: sharerParticipant.id,
+        amountCents: eurosToCents(draft.total),
+        raw: {
+          flow_kind: 'close',
+          use_coop_balance: Boolean(closeData.useCoopBalance),
+        },
+      });
+      await finalizeClosePayment(payment.id);
+      await createLockClosePackage(order.id, Boolean(closeData.useCoopBalance));
+    } catch (error) {
+      console.error('Close payment finalize error:', error);
+      const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
+      toast.error(message);
+      return;
+    }
+
+    // Post-close checks are best effort only and must not block UX.
+    try {
+      let sharerInvoices = await fetchParticipantInvoices(order.id, user.id);
+      if (!sharerInvoices.length) {
+        await issueSharerInvoiceAfterLock(order.id);
+        sharerInvoices = await fetchParticipantInvoices(order.id, user.id);
+      }
+      if (!sharerInvoices.length) {
+        toast.warning('Commande clôturée, mais facture partageur non confirmée immédiatement.');
+      }
+    } catch (invoiceCheckError) {
+      console.error('Close payment invoice check error:', invoiceCheckError);
+      toast.warning('Commande clôturée, mais vérification facture indisponible.');
+    }
+
+    try {
+      await triggerOutgoingEmails();
+    } catch (emailError) {
+      console.error('Close payment email trigger error:', emailError);
+      toast.warning('Facture generee, mais envoi email non declenche automatiquement.');
+    }
+
+    setPurchaseDraft(null);
+    setRecentPurchase(null);
+    navigate(`/cmd/${resolveOrderCode(order.id)}`);
+    toast.success('Paiement confirmé et commande clôturée.');
   };
 
   const handleCreateOrder = (orderData: any) => {
@@ -2871,6 +3741,8 @@ export default function App() {
       if (mergedLegalEntity.iban !== undefined) legalPayload.iban = mergedLegalEntity.iban ?? null;
       if (mergedLegalEntity.accountHolderName !== undefined)
         legalPayload.account_holder_name = mergedLegalEntity.accountHolderName ?? null;
+      if (mergedLegalEntity.canReceiveSharerCash !== undefined)
+        legalPayload.can_receive_sharer_cash = mergedLegalEntity.canReceiveSharerCash ?? false;
       if (mergedLegalEntity.deliveryLeadType !== undefined) legalPayload.delivery_lead_type = mergedLegalEntity.deliveryLeadType ?? null;
       if (mergedLegalEntity.deliveryLeadDays !== undefined) legalPayload.delivery_lead_days = mergedLegalEntity.deliveryLeadDays ?? null;
       if (mergedLegalEntity.deliveryFixedDay !== undefined) legalPayload.delivery_fixed_day = mergedLegalEntity.deliveryFixedDay ?? null;
@@ -3142,6 +4014,9 @@ export default function App() {
         onStartOrderFromProduct={handleStartOrderFromProduct}
         filtersOpen={filtersOpen}
         onToggleFilters={() => setFiltersOpen((prev) => !prev)}
+        postcodeRadiusKm={postcodeRadiusKm}
+        onPostcodeRadiusKmChange={setPostcodeRadiusKm}
+        producerDistanceMetersById={producerDistanceMetersById}
       />
     );
   };
@@ -3151,6 +4026,7 @@ export default function App() {
       <MapView
         orders={filteredMapOrdersWithFilters}
         deck={deck}
+        supabaseClient={supabaseClient}
         onAddToDeck={handleAddToDeck}
         onRemoveFromDeck={handleRemoveFromDeck}
         onOpenProduct={openProductView}
@@ -3170,6 +4046,7 @@ export default function App() {
       <ClientSwipeView
         products={discoverProducts}
         orders={discoverOrders}
+        supabaseClient={supabaseClient}
         onSave={handleAddToDeck}
         onOpenProduct={openProductView}
         onOpenProducer={openProducerProfile}
@@ -3204,19 +4081,27 @@ export default function App() {
 
   const pageTitle = getPageTitle();
   const isOrderView = Boolean(selectedOrder && location.pathname.startsWith('/cmd/'));
-  const isOrderFlowStep = /\/cmd\/[^/]+\/(recap|paiement|partage)/.test(location.pathname);
+  const isOrderFlowStep = /\/cmd\/[^/]+\/(recap|paiement|partage|close)/.test(location.pathname);
   const isProductView = Boolean(
     selectedProduct &&
       (location.pathname.startsWith('/produits/') || location.pathname.startsWith('/produit/'))
   );
   const isProfileView = location.pathname.startsWith('/profil');
   const profileShareSource = profileForShare || (isProfileView && user ? user : null);
+  const activeProductShareContext = React.useMemo(() => {
+    if (!selectedProduct || !productShareContext) return null;
+    const selectedKey = selectedProduct.productCode ?? selectedProduct.id;
+    const contextKey = productShareContext.product.productCode ?? productShareContext.product.id;
+    return selectedKey === contextKey ? productShareContext : null;
+  }, [productShareContext, selectedProduct]);
+
   const buildCurrentSharePayload = React.useCallback(() => {
     if (isOrderView && selectedOrder) return buildOrderSharePayload(selectedOrder);
-    if (isProductView && selectedProduct) return buildProductSharePayload(selectedProduct);
+    if (isProductView && selectedProduct) return buildProductSharePayload(selectedProduct, activeProductShareContext);
     if (isProfileView && profileShareSource) return buildProfileSharePayload(profileShareSource);
     return null;
   }, [
+    activeProductShareContext,
     buildOrderSharePayload,
     buildProductSharePayload,
     buildProfileSharePayload,
@@ -3298,6 +4183,7 @@ export default function App() {
       const handleShareClick = () => {
         const fallbackLink = typeof window !== 'undefined' ? window.location.href : '';
         const payload = buildCurrentSharePayload() ?? {
+          kind: 'generic' as const,
           link: fallbackLink,
           title: 'Partager cette page',
           subtitle: pageTitle || undefined,
@@ -3399,6 +4285,54 @@ export default function App() {
   const OrderPaymentRoute = () => {
     const params = useParams<{ orderCode: string }>();
     const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
+    const draft = order && purchaseDraft?.orderId === order.id ? purchaseDraft : null;
+    const isClosePayment = draft?.kind === 'close';
+
+    const [participantStatus, setParticipantStatus] = React.useState<string | null>(null);
+    const [isParticipantLoading, setIsParticipantLoading] = React.useState(true);
+    const [participantError, setParticipantError] = React.useState<string | null>(null);
+
+    React.useEffect(() => {
+      let isActive = true;
+      if (isClosePayment) {
+        setParticipantError(null);
+        setParticipantStatus(null);
+        setIsParticipantLoading(false);
+        return () => {
+          isActive = false;
+        };
+      }
+      if (!order || !user?.id) {
+        setParticipantError(order ? 'Utilisateur introuvable.' : null);
+        setIsParticipantLoading(false);
+        return () => {
+          isActive = false;
+        };
+      }
+      setIsParticipantLoading(true);
+      setParticipantError(null);
+      setParticipantStatus(null);
+      getParticipantByProfile(order.id, user.id)
+        .then((participant) => {
+          if (!isActive) return;
+          setParticipantStatus(participant?.participationStatus ?? null);
+        })
+        .catch((error) => {
+          if (!isActive) return;
+          const message =
+            (error as Error)?.message ?? 'Impossible de recuperer le participant.';
+          setParticipantError(message);
+        })
+        .finally(() => {
+          if (!isActive) return;
+          setIsParticipantLoading(false);
+        });
+
+      return () => {
+        isActive = false;
+      };
+    }, [isClosePayment, order, user?.id]);
+
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
@@ -3409,15 +4343,42 @@ export default function App() {
         />
       );
     }
-    const draft = purchaseDraft?.orderId === order.id ? purchaseDraft : null;
     if (!draft) return <NotFound message="Aucun paiement en cours pour cette commande." />;
+
+    if (!isClosePayment && participantError) {
+      return <NotFound message={participantError} />;
+    }
+    if (!isClosePayment && isParticipantLoading) {
+      return <div className="order-payment-view__loading">Chargement...</div>;
+    }
+    if (
+      !isClosePayment &&
+      participantStatus &&
+      participantStatus !== 'accepted' &&
+      !order.autoApproveParticipationRequests
+    ) {
+      return <NotFound message="Votre participation doit etre acceptee avant de payer." />;
+    }
+    if (!isClosePayment && !participantStatus && !order.autoApproveParticipationRequests) {
+      return (
+        <NotFound message="Votre participation doit etre acceptee avant de payer." />
+      );
+    }
 
     return (
       <OrderPaymentView
         order={order}
         draft={draft}
-        onBack={() => navigate(`/cmd/${order.orderCode ?? order.id}`)}
-        onConfirmPayment={() => handleConfirmPayment(draft)}
+        onBack={() =>
+          navigate(
+            isClosePayment
+              ? `/cmd/${order.orderCode ?? order.id}/close`
+              : `/cmd/${order.orderCode ?? order.id}`
+          )
+        }
+        onConfirmPayment={() =>
+          isClosePayment ? handleConfirmClosePayment(draft) : handleConfirmPayment(draft)
+        }
       />
     );
   };
@@ -3444,6 +4405,26 @@ export default function App() {
         purchase={purchase}
         onShare={() => openShareOverlay(buildOrderSharePayload(order))}
         onClose={closeOrderView}
+      />
+    );
+  };
+
+  const OrderCloseRoute = () => {
+    return (
+      <OrderCloseView
+        currentUser={user}
+        onStartClosePayment={(payload) => {
+          const order = groupOrders.find((entry) => entry.id === payload.orderId);
+          if (!order) {
+            toast.error('Commande introuvable.');
+            return;
+          }
+          handleStartClosePayment(order, {
+            amountCents: payload.amountCents,
+            useCoopBalance: payload.useCoopBalance,
+            extraQuantities: payload.extraQuantities,
+          });
+        }}
       />
     );
   };
@@ -3598,6 +4579,10 @@ export default function App() {
           profileValues={profileRoleFilters}
           onToggleProfile={handleToggleProfileRole}
           mode={showProfileSearch ? 'profiles' : 'products'}
+          distanceKm={postcodeRadiusKm}
+          onDistanceKmChange={setPostcodeRadiusKm}
+          minDistanceKm={1}
+          maxDistanceKm={50}
         />
         <NotificationsPopover
           open={notificationsOpen}
@@ -3778,6 +4763,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
               />
             }
@@ -3801,6 +4787,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
               />
             }
@@ -3824,6 +4811,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
               />
             }
@@ -3847,6 +4835,7 @@ export default function App() {
                 onAddToDeck={handleAddToDeck}
                 onRemoveFromDeck={handleRemoveFromDeck}
                 onShareProduct={openProductShare}
+                onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
               />
             }
@@ -3876,6 +4865,10 @@ export default function App() {
             path="/cmd/:orderCode/partage"
             element={<OrderShareRoute />}
           />
+          <Route
+            path="/cmd/:orderCode/close"
+            element={<OrderCloseRoute />}
+          />
           <Route path="/commandes" element={<OrdersSearchRoute />} />
           <Route path="*" element={<Navigate to={tabRoutes.home} replace />} />
         </Routes>
@@ -3883,18 +4876,32 @@ export default function App() {
 
       <ShareOverlay
         open={shareOverlay.open}
-        onClose={() => setShareOverlay((prev) => ({ ...prev, open: false }))}
+        onClose={() => setShareOverlay((prev) => ({ ...prev, open: false, kind: 'generic' }))}
+        kind={shareOverlay.kind}
         link={shareOverlay.link}
         title={shareOverlay.title}
         subtitle={shareOverlay.subtitle}
         description={shareOverlay.description}
         details={shareOverlay.details}
+        orderData={shareOverlay.orderData}
+        productData={shareOverlay.productData}
+        profileData={shareOverlay.profileData}
+        supabaseClient={supabaseClient}
+      />
+      <PostcodeOverlay
+        open={postcodeOverlayOpen}
+        initialValue={searchPostcode ?? ''}
+        loading={postcodeSearch.status === 'loading'}
+        error={postcodeOverlayError}
+        onClose={handlePostcodeOverlayClose}
+        onSubmit={handlePostcodeOverlaySubmit}
       />
 
       <Navigation activeTab={activeTab} onTabChange={changeTab} userRole={viewer.role} />
     </div>
   );
 }
+
 
 
 

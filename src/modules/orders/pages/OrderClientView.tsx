@@ -29,27 +29,40 @@ import {
   approveParticipation,
   createPlatformInvoiceAndSendForOrder,
   createPaymentStub,
+  deleteParticipantIfNoActivity,
   finalizePaymentSimulation,
+  fetchCoopBalance,
   fetchParticipantInvoices,
+  fetchProducerStatementSources,
   fetchProducerInvoices,
   getInvoiceDownloadUrl,
   getOrderFullByCode,
+  issueParticipantInvoiceWithCoop,
+  removeItem,
   rejectParticipation,
   reviewParticipantPickupSlot,
   requestParticipation,
   setParticipantPickupSlot,
+  updatePaymentStatus,
   updateParticipantsVisibility,
+  updateOrderItemQuantity,
   updateOrderParticipantSettings,
   updateOrderStatus,
   updateOrderVisibility,
 } from '../api/orders';
+import type { ProducerStatementSources } from '../api/orders';
 import { centsToEuros, type Facture, type OrderFull, type OrderStatus, type PickupSlotStatus } from '../types';
 
 interface OrderClientViewProps {
   onClose: () => void;
   currentUser?: User | null;
   onOpenParticipantProfile?: (participantName: string) => void;
-  onStartPayment?: (payload: { quantities: Record<string, number>; total: number; weight: number }) => void;
+  onStartPayment?: (payload: {
+    quantities: Record<string, number>;
+    total: number;
+    weight: number;
+    useCoopBalance: boolean;
+  }) => void;
   supabaseClient?: SupabaseClient | null;
 }
 
@@ -470,6 +483,13 @@ export function OrderClientView({
   const [participantInvoices, setParticipantInvoices] = React.useState<Facture[]>([]);
   const [producerInvoices, setProducerInvoices] = React.useState<Facture[]>([]);
   const [isInvoiceLoading, setIsInvoiceLoading] = React.useState(false);
+  const [producerStatementSources, setProducerStatementSources] = React.useState<ProducerStatementSources | null>(
+    null
+  );
+  const [isProducerStatementLoading, setIsProducerStatementLoading] = React.useState(false);
+  const [platformShareCents, setPlatformShareCents] = React.useState(0);
+  const [coopBalanceCents, setCoopBalanceCents] = React.useState(0);
+  const [useCoopBalance, setUseCoopBalance] = React.useState(true);
 
   const isAuthenticated = Boolean(currentUser);
 
@@ -532,8 +552,219 @@ export function OrderClientView({
     loadOrder();
   }, [loadOrder]);
 
+  React.useEffect(() => {
+    const activeOrder = orderFull?.order;
+    if (!activeOrder || !currentUser?.id) return;
+
+    const isProducerForOrder =
+      Boolean(activeOrder.producerProfileId) &&
+      (currentUser.id === activeOrder.producerProfileId ||
+        currentUser.producerId === activeOrder.producerProfileId);
+
+    const hasPendingParticipantPdf = participantInvoices.some((invoice) => !invoice.pdfPath);
+    const hasPendingProducerPdf = isProducerForOrder && producerInvoices.some((invoice) => !invoice.pdfPath);
+    if (!hasPendingParticipantPdf && !hasPendingProducerPdf) return;
+
+    let cancelled = false;
+    let retries = 0;
+    const maxRetries = 20;
+    const delayMs = 3000;
+
+    const refresh = async () => {
+      if (cancelled) return;
+      retries += 1;
+      try {
+        const [participantData, producerData] = await Promise.all([
+          fetchParticipantInvoices(activeOrder.id, currentUser.id),
+          isProducerForOrder && activeOrder.producerProfileId
+            ? fetchProducerInvoices(activeOrder.id, activeOrder.producerProfileId)
+            : Promise.resolve([]),
+        ]);
+        if (cancelled) return;
+        setParticipantInvoices(participantData);
+        setProducerInvoices(producerData);
+
+        const stillPendingParticipant = participantData.some((invoice) => !invoice.pdfPath);
+        const stillPendingProducer = isProducerForOrder && producerData.some((invoice) => !invoice.pdfPath);
+        if ((stillPendingParticipant || stillPendingProducer) && retries < maxRetries) {
+          setTimeout(refresh, delayMs);
+        }
+      } catch (error) {
+        console.error('Invoice polling error:', error);
+        if (!cancelled && retries < maxRetries) {
+          setTimeout(refresh, delayMs);
+        }
+      }
+    };
+
+    const timer = setTimeout(refresh, delayMs);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    currentUser?.id,
+    currentUser?.producerId,
+    orderFull?.order,
+    participantInvoices,
+    producerInvoices,
+  ]);
+
+  React.useEffect(() => {
+    if (!currentUser?.id) {
+      setCoopBalanceCents(0);
+      return;
+    }
+    let isActive = true;
+    fetchCoopBalance(currentUser.id)
+      .then((balance) => {
+        if (isActive) setCoopBalanceCents(balance);
+      })
+      .catch((error) => {
+        console.error('Coop balance load error:', error);
+        if (isActive) setCoopBalanceCents(0);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [currentUser?.id]);
+
+  React.useEffect(() => {
+    if (!orderFull || !supabaseClient) {
+      setPlatformShareCents(0);
+      return;
+    }
+    let isActive = true;
+
+    const computePlatformShare = async () => {
+      const items = orderFull.items ?? [];
+      if (!items.length) {
+        if (isActive) setPlatformShareCents(0);
+        return;
+      }
+
+      const lotItems = items.filter((item) => item.lotId);
+      const lotIds = Array.from(new Set(lotItems.map((item) => item.lotId).filter(Boolean))) as string[];
+      const lotUnitTotals = lotItems.reduce((acc, item) => {
+        if (!item.lotId) return acc;
+        acc[item.lotId] = (acc[item.lotId] ?? 0) + item.quantityUnits;
+        return acc;
+      }, {} as Record<string, number>);
+      const lotUnitBasePriceCents = lotItems.reduce((acc, item) => {
+        if (!item.lotId) return acc;
+        if (acc[item.lotId] === undefined) {
+          acc[item.lotId] = item.unitBasePriceCents ?? 0;
+        }
+        return acc;
+      }, {} as Record<string, number>);
+
+      let platformFromLots = 0;
+      const lotsWithPlatform = new Set<string>();
+      if (lotIds.length > 0) {
+        const { data, error } = await supabaseClient
+          .from('lot_price_breakdown')
+          .select('lot_id, value_type, value_cents')
+          .in('lot_id', lotIds)
+          .eq('source', 'platform');
+        if (error) {
+          console.error('Platform fee fetch error:', error);
+        } else {
+          (data ?? []).forEach((row) => {
+            const lotId = row.lot_id as string;
+            const units = lotUnitTotals[lotId] ?? 0;
+            if (!units) return;
+            const valueType = row.value_type ?? 'cents';
+            let valuePerUnit = 0;
+            if (valueType === 'percent') {
+              const percent = Number(row.value_cents ?? 0);
+              const baseCents = lotUnitBasePriceCents[lotId] ?? 0;
+              valuePerUnit = Math.round(baseCents * (percent / 100));
+            } else {
+              valuePerUnit = Number(row.value_cents ?? 0);
+            }
+            if (!Number.isFinite(valuePerUnit)) return;
+            platformFromLots += valuePerUnit * units;
+            lotsWithPlatform.add(lotId);
+          });
+        }
+      }
+
+      let fallbackTotal = 0;
+      const fallbackItems = items.filter((item) => !item.lotId || !lotsWithPlatform.has(item.lotId));
+      if (fallbackItems.length) {
+        const productIds = Array.from(
+          new Set(fallbackItems.map((item) => item.productId).filter(Boolean))
+        ) as string[];
+        const [settingsRes, legalRes, productsRes] = await Promise.all([
+          supabaseClient
+            .from('platform_settings')
+            .select('value_numeric')
+            .eq('key', 'platform_fee_percent')
+            .maybeSingle(),
+          orderFull.order.producerProfileId
+            ? supabaseClient
+                .from('legal_entities')
+                .select('producer_delivery_fee')
+                .eq('profile_id', orderFull.order.producerProfileId)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          productIds.length
+            ? supabaseClient.from('products').select('id, platform_fee_percent').in('id', productIds)
+            : Promise.resolve({ data: [], error: null }),
+        ]);
+
+        if (settingsRes.error) {
+          console.error('Platform settings fetch error:', settingsRes.error);
+        }
+        if (legalRes?.error) {
+          console.error('Producer platform fee fetch error:', legalRes.error);
+        }
+        if (productsRes?.error) {
+          console.error('Product platform fee fetch error:', productsRes.error);
+        }
+
+        const platformDefaultRaw = Number(settingsRes.data?.value_numeric ?? NaN);
+        const platformDefaultPercent = Number.isFinite(platformDefaultRaw) ? platformDefaultRaw : null;
+        const producerRaw = Number(legalRes?.data?.producer_delivery_fee ?? NaN);
+        const producerPercent = Number.isFinite(producerRaw) ? producerRaw : null;
+        const productPercentById = new Map<string, number>();
+        ((productsRes?.data as Array<{ id: string; platform_fee_percent?: number | null }> | null) ?? []).forEach(
+          (row) => {
+            const raw = Number(row.platform_fee_percent ?? NaN);
+            if (Number.isFinite(raw)) {
+              productPercentById.set(row.id, raw);
+            }
+          }
+        );
+
+        fallbackItems.forEach((item) => {
+          const percent =
+            platformDefaultPercent ?? producerPercent ?? productPercentById.get(item.productId) ?? 0;
+          if (!percent) return;
+          const baseTotalCents = (item.unitBasePriceCents ?? 0) * (item.quantityUnits ?? 0);
+          if (!Number.isFinite(baseTotalCents) || baseTotalCents <= 0) return;
+          fallbackTotal += Math.round(baseTotalCents * (percent / 100));
+        });
+      }
+
+      if (isActive) {
+        setPlatformShareCents(platformFromLots + fallbackTotal);
+      }
+    };
+
+    computePlatformShare().catch((error) => {
+      console.error('Platform fee fetch error:', error);
+      if (isActive) setPlatformShareCents(0);
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [orderFull, supabaseClient]);
+
   const orderFullValue = orderFull ?? emptyOrderFull;
   const order = orderFullValue.order;
+  const orderItems = orderFullValue.items;
   const resolvedOrderCode = order.orderCode || orderCode || null;
   const products = orderFullValue.productsOffered.map((entry) => {
     const info = entry.product;
@@ -615,6 +846,14 @@ const sharerAvatarUpdatedAt =
   const isVisitor = !isOwner && !isProducer && !myParticipant;
   const participantInvoice = participantInvoices[0] ?? null;
   const producerInvoice = producerInvoices[0] ?? null;
+  const participantInvoiceIdsKey = React.useMemo(
+    () => participantInvoices.map((invoice) => invoice.id).join(','),
+    [participantInvoices]
+  );
+  const producerInvoiceIdsKey = React.useMemo(
+    () => producerInvoices.map((invoice) => invoice.id).join(','),
+    [producerInvoices]
+  );
   const producerProfileMeta =
     order.producerProfileId && order.producerProfileId !== ''
       ? profiles[order.producerProfileId]
@@ -661,7 +900,7 @@ const sharerAvatarUpdatedAt =
     return (
       orderFullValue.productsOffered[0]?.product?.producerLocation ||
       producerProfileMeta?.city ||
-      'Adresse du producteur a confirmer'
+      'Adresse du producteur à confirmer'
     );
   }, [
     orderFullValue.productsOffered,
@@ -734,15 +973,117 @@ const sharerAvatarUpdatedAt =
     'distributed',
     'finished',
   ].includes(order.status);
+  const isLockedOrAfter = order.status === 'locked' || isAfterLocked;
   const shouldRestrictAccess = isVisitor && isAfterLocked;
 
-  const orderEffectiveWeightKg = React.useMemo(
-    () => resolveOrderEffectiveWeightKg(order.orderedWeightKg ?? 0, order.minWeightKg, order.maxWeightKg),
-    [order.maxWeightKg, order.minWeightKg, order.orderedWeightKg]
+  React.useEffect(() => {
+    if (!isProducer || !isLockedOrAfter || !order.id || !order.producerProfileId || !order.sharerProfileId) {
+      setProducerStatementSources(null);
+      setIsProducerStatementLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsProducerStatementLoading(true);
+
+    fetchProducerStatementSources({
+      orderId: order.id,
+      producerProfileId: order.producerProfileId,
+      sharerProfileId: order.sharerProfileId,
+    })
+      .then((data) => {
+        if (!cancelled) {
+          setProducerStatementSources(data);
+        }
+      })
+      .catch((error) => {
+        console.error('Producer statement sources load error:', error);
+        if (!cancelled) {
+          setProducerStatementSources(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsProducerStatementLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLockedOrAfter,
+    isProducer,
+    order.id,
+    order.producerProfileId,
+    order.sharerProfileId,
+    participantInvoiceIdsKey,
+    producerInvoiceIdsKey,
+  ]);
+
+  const alreadyOrderedWeight = order.orderedWeightKg ?? 0;
+  const productWeightById = React.useMemo(
+    () =>
+      products.reduce((acc, product) => {
+        acc[product.id] = getProductWeightKg(product);
+        return acc;
+      }, {} as Record<string, number>),
+    [products]
   );
+  const computeSelectedWeight = React.useCallback(
+    (quantitiesMap: Record<string, number>) =>
+      Object.entries(quantitiesMap).reduce(
+        (sum, [productId, qty]) => sum + (productWeightById[productId] ?? 0) * (Number(qty) || 0),
+        0
+      ),
+    [productWeightById]
+  );
+  const selectedWeight = React.useMemo(
+    () => computeSelectedWeight(quantities),
+    [computeSelectedWeight, quantities]
+  );
+  const totalWeightTowardsGoal = alreadyOrderedWeight + selectedWeight;
+  const baselineEffectiveWeightKg = React.useMemo(() => {
+    const stored = Number.isFinite(order.effectiveWeightKg ?? NaN) ? order.effectiveWeightKg ?? 0 : 0;
+    if (stored > 0) return stored;
+    return resolveOrderEffectiveWeightKg(order.orderedWeightKg ?? 0, order.minWeightKg, order.maxWeightKg);
+  }, [order.effectiveWeightKg, order.maxWeightKg, order.minWeightKg, order.orderedWeightKg]);
+  const maxOrderWeightKg = React.useMemo(
+    () => (typeof order.maxWeightKg === 'number' && order.maxWeightKg > 0 ? order.maxWeightKg : null),
+    [order.maxWeightKg]
+  );
+  const clampQuantityForMax = React.useCallback(
+    (productId: string, candidateQty: number, quantitiesMap: Record<string, number>) => {
+      const currentQty = Number(quantitiesMap[productId] ?? 0);
+      const sanitized = Math.max(0, candidateQty);
+      if (maxOrderWeightKg === null) return sanitized;
+      if (sanitized <= currentQty) return sanitized;
+      const productWeight = productWeightById[productId] ?? 0;
+      if (productWeight <= 0) return sanitized;
+      const totalSelected = computeSelectedWeight(quantitiesMap);
+      const otherWeight = totalSelected - productWeight * currentQty;
+      const availableForProduct = maxOrderWeightKg - alreadyOrderedWeight - otherWeight;
+      if (availableForProduct <= 0) return currentQty;
+      const maxQty = availableForProduct / productWeight;
+      if (!Number.isFinite(maxQty)) return sanitized;
+      const clampedMax = Math.max(0, maxQty);
+      if (clampedMax < currentQty) return currentQty;
+      return sanitized > clampedMax ? clampedMax : sanitized;
+    },
+    [alreadyOrderedWeight, computeSelectedWeight, maxOrderWeightKg, productWeightById]
+  );
+  const pricingWeightKg = React.useMemo(() => {
+    const projected = totalWeightTowardsGoal;
+    const unclamped = Math.max(baselineEffectiveWeightKg, projected);
+    return maxOrderWeightKg ? Math.min(unclamped, maxOrderWeightKg) : unclamped;
+  }, [baselineEffectiveWeightKg, maxOrderWeightKg, totalWeightTowardsGoal]);
+  const pricingDeliveryFeeCents = React.useMemo(() => {
+    const baseFee = Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0;
+    const pickupFee = Number.isFinite(order.pickupDeliveryFeeCents ?? NaN) ? order.pickupDeliveryFeeCents : 0;
+    return order.deliveryOption === 'producer_pickup' ? pickupFee : baseFee;
+  }, [order.deliveryFeeCents, order.deliveryOption, order.pickupDeliveryFeeCents]);
   const unitPriceCentsById = React.useMemo(() => {
-    const deliveryFeeCents = Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0;
-    const feePerKg = orderEffectiveWeightKg > 0 ? deliveryFeeCents / orderEffectiveWeightKg : 0;
+    const feePerKg = pricingWeightKg > 0 ? pricingDeliveryFeeCents / pricingWeightKg : 0;
     const shareFraction =
       order.sharerPercentage > 0 && order.sharerPercentage < 100
         ? order.sharerPercentage / (100 - order.sharerPercentage)
@@ -756,7 +1097,7 @@ const sharerAvatarUpdatedAt =
       acc[product.id] = basePlusDelivery + unitSharerFeeCents;
       return acc;
     }, {} as Record<string, number>);
-  }, [order.deliveryFeeCents, order.sharerPercentage, orderEffectiveWeightKg, products]);
+  }, [order.sharerPercentage, pricingDeliveryFeeCents, pricingWeightKg, products]);
   const unitPriceLabelsById = React.useMemo(() => {
     return products.reduce((acc, product) => {
       const unitPriceCents = unitPriceCentsById[product.id];
@@ -776,28 +1117,28 @@ const sharerAvatarUpdatedAt =
     [products, quantities, unitPriceCentsById]
   );
   const totalPrice = centsToEuros(totalPriceCents);
-  const remainingToPayCents = totalPriceCents;
+  const coopAppliedCents = useCoopBalance ? Math.min(coopBalanceCents, totalPriceCents) : 0;
+  const remainingToPayCents = Math.max(0, totalPriceCents - coopAppliedCents);
+  const shouldShowCoopToggle = coopBalanceCents > 0 && totalCards > 0;
 
-  const alreadyOrderedWeight = order.orderedWeightKg ?? 0;
-
-  const selectedWeight = React.useMemo(
-    () =>
-      products.reduce((sum, product) => {
-        const qty = quantities[product.id] ?? 0;
-        const weightPerUnit = getProductWeightKg(product);
-        return sum + weightPerUnit * qty;
-      }, 0),
-    [products, quantities]
-  );
-
-  const totalWeightTowardsGoal = alreadyOrderedWeight + selectedWeight;
   const basePercent = order.minWeightKg > 0 ? (alreadyOrderedWeight / order.minWeightKg) * 100 : 0;
   const selectionPercent = order.minWeightKg > 0 ? (selectedWeight / order.minWeightKg) * 100 : 0;
   const progressPercent = basePercent + selectionPercent;
   const cappedBase = Math.min(basePercent, 100);
   const cappedSelection = Math.max(Math.min(basePercent + selectionPercent, 100) - cappedBase, 0);
   const extraPercent = Math.max(0, progressPercent - 100);
-  const remainingWeight = Math.max(order.minWeightKg - totalWeightTowardsGoal, 0);
+  const remainingWeightToMin = Math.max(order.minWeightKg - totalWeightTowardsGoal, 0);
+  const remainingWeightToMax =
+    maxOrderWeightKg !== null ? Math.max(maxOrderWeightKg - totalWeightTowardsGoal, 0) : null;
+  const isAboveMinWeight = order.minWeightKg > 0 && totalWeightTowardsGoal > order.minWeightKg;
+  const remainingWeightLabel =
+    maxOrderWeightKg !== null && isAboveMinWeight
+      ? 'Poids restant avant le seuil maximum'
+      : 'Poids restant';
+  const remainingWeightDisplay =
+    maxOrderWeightKg !== null && isAboveMinWeight && remainingWeightToMax !== null
+      ? remainingWeightToMax
+      : remainingWeightToMin;
   const isMinimumReached = order.minWeightKg <= 0 || alreadyOrderedWeight >= order.minWeightKg;
   const participantTotalsCents = React.useMemo(
     () =>
@@ -805,6 +1146,10 @@ const sharerAvatarUpdatedAt =
         (sum, participant) => (participant.role === 'participant' ? sum + participant.totalAmountCents : sum),
         0
       ),
+    [orderFullValue.participants]
+  );
+  const participantsTotalAllCents = React.useMemo(
+    () => orderFullValue.participants.reduce((sum, participant) => sum + participant.totalAmountCents, 0),
     [orderFullValue.participants]
   );
   const participantWeightKg = React.useMemo(
@@ -817,9 +1162,73 @@ const sharerAvatarUpdatedAt =
   );
   const sharerProductsCents = sharerParticipant?.totalAmountCents ?? 0;
   const sharerPercentage = Math.max(order.sharerPercentage ?? 0, 0);
-  const sharerShareCents = Math.max(0, Math.round(participantTotalsCents * (sharerPercentage / 100)));
-  const sharerDeficitCents = Math.max(0, sharerProductsCents - sharerShareCents);
-  const sharerGainCents = Math.max(0, sharerShareCents - sharerProductsCents);
+  const sharerShareFromItemsCents = React.useMemo(() => {
+    if (!orderItems.length) return 0;
+    const sharerId = sharerParticipant?.id ?? null;
+    return orderItems.reduce((sum, item) => {
+      if (sharerId && item.participantId === sharerId) return sum;
+      const qty = Number(item.quantityUnits ?? 0);
+      const unitSharerFee = Number(item.unitSharerFeeCents ?? 0);
+      return sum + unitSharerFee * qty;
+    }, 0);
+  }, [orderItems, sharerParticipant?.id]);
+  const sharerShareCents = React.useMemo(() => {
+    const storedShare = Math.max(0, Number.isFinite(order.sharerShareCents ?? NaN) ? order.sharerShareCents : 0);
+    const percentShare = Math.max(0, Math.round(participantTotalsCents * (sharerPercentage / 100)));
+    const computedShare = sharerShareFromItemsCents > 0 ? sharerShareFromItemsCents : percentShare;
+    if (isLockedOrAfter && storedShare > 0) return storedShare;
+    return storedShare > 0 ? storedShare : computedShare;
+  }, [
+    isLockedOrAfter,
+    order.sharerShareCents,
+    participantTotalsCents,
+    sharerPercentage,
+    sharerShareFromItemsCents,
+  ]);
+  const pickupFeeCents = Math.max(
+    0,
+    Number.isFinite(order.pickupDeliveryFeeCents ?? NaN) ? order.pickupDeliveryFeeCents : 0
+  );
+  const adjustedSharerShareCents =
+    order.deliveryOption === 'producer_pickup' ? sharerShareCents + pickupFeeCents : sharerShareCents;
+  const sharerDeficitCents = Math.max(0, sharerProductsCents - adjustedSharerShareCents);
+  const sharerGainCents = Math.max(0, adjustedSharerShareCents - sharerProductsCents);
+  const paidPayments = React.useMemo(
+    () => orderFullValue.payments.filter((payment) => PAID_PAYMENT_STATUSES.has(payment.status)),
+    [orderFullValue.payments]
+  );
+  const paidTotalCents = React.useMemo(
+    () => paidPayments.reduce((sum, payment) => sum + payment.amountCents, 0),
+    [paidPayments]
+  );
+  const paidPaymentCount = paidPayments.length;
+  const paymentFeeTotals = React.useMemo(() => {
+    return paidPayments.reduce(
+      (acc, payment) => {
+        const fallbackFeeHt = Math.round(payment.amountCents * 0.007 + 15);
+        const feeHt = Number.isFinite(payment.feeCents ?? NaN) ? payment.feeCents : fallbackFeeHt;
+        const feeVat = Number.isFinite(payment.feeVatCents ?? NaN) ? payment.feeVatCents : Math.round(feeHt * 0.2);
+        const feeTtc = feeHt + feeVat;
+        return {
+          feeHt: acc.feeHt + feeHt,
+          feeVat: acc.feeVat + feeVat,
+          feeTtc: acc.feeTtc + feeTtc,
+        };
+      },
+      { feeHt: 0, feeVat: 0, feeTtc: 0 }
+    );
+  }, [paidPayments]);
+  const paymentFeeCents = paymentFeeTotals.feeTtc;
+  const paymentFeeVatCents = paymentFeeTotals.feeVat;
+  const paymentFeeHtCents = paymentFeeTotals.feeHt;
+  const baseDeliveryFeeCents = Math.max(0, Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0);
+  const deliveryFeeToProducerCents = order.deliveryOption === 'producer_delivery' ? baseDeliveryFeeCents : 0;
+  const deliveryFeeToPlatformCents = order.deliveryOption === 'chronofresh' ? baseDeliveryFeeCents : 0;
+  const deliveryFeeToSharerCents = order.deliveryOption === 'producer_pickup' ? pickupFeeCents : 0;
+  const sharerShareProductsCents = Math.max(0, Math.min(adjustedSharerShareCents, sharerProductsCents));
+  const platformShareWithFeesCents = platformShareCents + paymentFeeCents + deliveryFeeToPlatformCents;
+  const remainingToCollectCents = Math.max(0, participantTotalsCents - paidTotalCents);
+  const paymentsReceivedCents = participantsTotalAllCents;
   const sharerWeightKg = sharerParticipant?.totalWeightKg ?? 0;
   const maxWeightKg = typeof order.maxWeightKg === 'number' ? order.maxWeightKg : null;
   const estimatedParticipantValuePerKg =
@@ -828,8 +1237,10 @@ const sharerAvatarUpdatedAt =
     maxWeightKg !== null ? Math.max(maxWeightKg - sharerWeightKg, participantWeightKg, 0) : participantWeightKg;
   const maxParticipantTotalsCents = Math.round(maxParticipantWeightKg * estimatedParticipantValuePerKg);
   const maxSharerShareCents = Math.round(maxParticipantTotalsCents * (sharerPercentage / 100));
+  const maxSharerShareWithPickupCents =
+    order.deliveryOption === 'producer_pickup' ? maxSharerShareCents + pickupFeeCents : maxSharerShareCents;
   const canReachFullCoverage =
-    sharerDeficitCents > 0 && maxWeightKg !== null && maxSharerShareCents >= sharerProductsCents;
+    sharerDeficitCents > 0 && maxWeightKg !== null && maxSharerShareWithPickupCents >= sharerProductsCents;
 
   const baseSegmentStyle: React.CSSProperties = {
     width: `${cappedBase}%`,
@@ -850,7 +1261,9 @@ const sharerAvatarUpdatedAt =
     if (!isOrderOpen) return;
     setQuantities((prev) => {
       const current = prev[productId] ?? 0;
-      const next = Math.max(0, current + delta);
+      const candidate = current + delta;
+      const next = clampQuantityForMax(productId, candidate, prev);
+      if (next === current) return prev;
       return { ...prev, [productId]: next };
     });
   };
@@ -939,17 +1352,7 @@ const sharerAvatarUpdatedAt =
 
   const handleCloseOrder = () => {
     if (!isOwner || isWorking || order.status === 'locked') return;
-    setIsWorking(true);
-    updateOrderStatus(order.id, 'locked')
-      .then((updatedStatus) => {
-        updateOrderLocal({ status: updatedStatus });
-        toast.success('Commande cloturée.');
-      })
-      .catch((error) => {
-        console.error('Order status update error:', error);
-        toast.error('Impossible de cloturer la commande.');
-      })
-      .finally(() => setIsWorking(false));
+    navigate(`/cmd/${order.orderCode ?? order.id}/close`);
   };
 
   const handleStatusUpdate = (nextStatus: OrderStatus, successMessage: string) => {
@@ -1043,15 +1446,12 @@ const sharerAvatarUpdatedAt =
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
-    if (remainingToPayCents <= 0) {
-      toast.info('Rien a payer pour le moment.');
-      return;
-    }
-    if (onStartPayment) {
+    if (remainingToPayCents > 0 && onStartPayment) {
       onStartPayment({
         quantities: { ...quantities },
         total: centsToEuros(remainingToPayCents),
         weight: selectedWeight,
+        useCoopBalance,
       });
       return;
     }
@@ -1061,6 +1461,10 @@ const sharerAvatarUpdatedAt =
     }
 
     setIsWorking(true);
+    let createdPaymentId: string | null = null;
+    let participantCreatedInFlow = false;
+    let participantIdForRollback: string | null = null;
+    const createdOrderItems: Array<{ id: string }> = [];
     try {
       let participant = myParticipant;
       if (!participant) {
@@ -1069,6 +1473,7 @@ const sharerAvatarUpdatedAt =
           return;
         }
         const createdParticipant = await requestParticipation(order.orderCode, currentUser.id);
+        participantCreatedInFlow = true;
         const enrichedParticipant = {
           ...createdParticipant,
           profileName: currentUser.name ?? null,
@@ -1091,16 +1496,25 @@ const sharerAvatarUpdatedAt =
         toast.info('Votre participation doit etre acceptee avant de payer.');
         return;
       }
+      participantIdForRollback = participant.id;
 
       for (const product of products) {
         const qty = quantities[product.id] ?? 0;
         if (qty <= 0 || !product.dbId) continue;
-        await addItem({
+        const item = await addItem({
           orderId: order.id,
           participantId: participant.id,
           productId: product.dbId,
+          lotId: product.activeLotId ?? null,
           quantityUnits: qty,
         });
+        createdOrderItems.push({ id: item.id });
+      }
+
+      const withItems = await getOrderFullByCode(order.orderCode);
+      const participantItems = withItems.items.filter((item) => item.participantId === participant.id);
+      for (const item of participantItems) {
+        await updateOrderItemQuantity(item.id, order.id, participant.id, item.quantityUnits);
       }
 
       const refreshed = await getOrderFullByCode(order.orderCode);
@@ -1108,14 +1522,34 @@ const sharerAvatarUpdatedAt =
       const refreshedParticipant = refreshed.participants.find((p) => p.id === participant.id);
       if (refreshedParticipant) {
         const refreshedPaidCents = sumPaidCentsForParticipant(refreshed.payments, refreshedParticipant.id);
-        const amountCentsToPay = Math.max(0, refreshedParticipant.totalAmountCents - refreshedPaidCents);
+        const coopToConsumeCents =
+          useCoopBalance && coopBalanceCents > 0
+            ? Math.min(coopBalanceCents, refreshedParticipant.totalAmountCents)
+            : 0;
+        const amountCentsToPay = Math.max(
+          0,
+          refreshedParticipant.totalAmountCents - refreshedPaidCents - coopToConsumeCents
+        );
         if (amountCentsToPay > 0) {
           const payment = await createPaymentStub({
             orderId: order.id,
             participantId: refreshedParticipant.id,
             amountCents: amountCentsToPay,
+            raw: {
+              flow_kind: 'participant',
+              use_coop_balance: Boolean(useCoopBalance),
+            },
           });
+          createdPaymentId = payment.id;
           await finalizePaymentSimulation(payment.id);
+        } else if (coopToConsumeCents > 0 && currentUser?.id) {
+          await issueParticipantInvoiceWithCoop({
+            orderId: order.id,
+            profileId: currentUser.id,
+            coopAppliedCents: coopToConsumeCents,
+          });
+          const updatedBalance = await fetchCoopBalance(currentUser.id);
+          setCoopBalanceCents(updatedBalance);
         }
         const updated = await getOrderFullByCode(order.orderCode);
         setOrderFull(updated);
@@ -1123,6 +1557,35 @@ const sharerAvatarUpdatedAt =
       }
       toast.success('Paiement initie (stub).');
     } catch (error) {
+      if (createdPaymentId) {
+        try {
+          await updatePaymentStatus(createdPaymentId, 'failed');
+        } catch (markFailedError) {
+          console.error('Purchase mark failed error:', markFailedError);
+        }
+      }
+
+      if (!createdPaymentId && createdOrderItems.length > 0 && participantIdForRollback) {
+        for (const created of createdOrderItems.slice().reverse()) {
+          try {
+            await removeItem(created.id, order.id, participantIdForRollback);
+          } catch (rollbackItemError) {
+            console.error('Purchase rollback item error:', rollbackItemError);
+          }
+        }
+      }
+
+      if (!createdPaymentId && participantCreatedInFlow && participantIdForRollback && currentUser?.id) {
+        try {
+          await deleteParticipantIfNoActivity({
+            orderId: order.id,
+            participantId: participantIdForRollback,
+            profileId: currentUser.id,
+          });
+        } catch (rollbackParticipantError) {
+          console.error('Purchase rollback participant error:', rollbackParticipantError);
+        }
+      }
       console.error('Purchase error:', error);
       toast.error('Impossible de finaliser la participation.');
     } finally {
@@ -1246,7 +1709,24 @@ const sharerAvatarUpdatedAt =
 
   const handleInvoiceDownload = async (invoice: Facture) => {
     try {
-      const url = await getInvoiceDownloadUrl(invoice);
+      let invoiceToDownload = invoice;
+
+      if (!invoiceToDownload.pdfPath) {
+        const refreshed =
+          invoice.serie === 'PLAT_PROD' && invoice.producerProfileId
+            ? await fetchProducerInvoices(order.id, invoice.producerProfileId)
+            : await fetchParticipantInvoices(order.id, invoice.clientProfileId ?? currentUser?.id ?? '');
+
+        if (invoice.serie === 'PLAT_PROD') {
+          setProducerInvoices(refreshed);
+        } else if ((invoice.clientProfileId ?? null) === (currentUser?.id ?? null)) {
+          setParticipantInvoices(refreshed);
+        }
+
+        invoiceToDownload = refreshed.find((item) => item.id === invoice.id) ?? refreshed[0] ?? invoice;
+      }
+
+      const url = await getInvoiceDownloadUrl(invoiceToDownload);
       if (!url) {
         toast.info('PDF en cours de génération.');
         return;
@@ -1389,7 +1869,7 @@ const sharerAvatarUpdatedAt =
     myParticipant && myParticipant.participationStatus === 'accepted' && myParticipant.role === 'participant'
   );
   const canSelectPickupSlot = isPickupSelectionOpen && isAcceptedParticipant;
-  const shouldHidePickupSlots = isVisitor;
+  const shouldHidePickupSlots = !isAuthenticated;
   const canShowPickupSlotDetails = pickupSlotsByDate.size > 0 && !shouldHidePickupSlots;
   const createdAtDay = parseDateValue(order.createdAt);
   const deadlineDay = parseDateValue(order.deadline);
@@ -1397,6 +1877,11 @@ const sharerAvatarUpdatedAt =
   const pickupStartDay = estimatedDeliveryDay ? addDays(estimatedDeliveryDay, 1) : null;
   const pickupWindowEndDay = parseDateValue(pickupWindowEndDate ?? null);
   const explicitPickupDay = order.usePickupDate ? parseDateValue(order.pickupDate ?? null) : null;
+  const pickupRetrievalDate = explicitPickupDay ?? estimatedDeliveryDate;
+  const pickupRetrievalDateLabel =
+    pickupRetrievalDate && !Number.isNaN(pickupRetrievalDate.getTime())
+      ? pickupRetrievalDate.toLocaleDateString('fr-FR')
+      : null;
   const slotRangeStart = pickupSlotDateKeys.length ? parseDateValue(pickupSlotDateKeys[0]) : null;
   const slotRangeEnd = pickupSlotDateKeys.length
     ? parseDateValue(pickupSlotDateKeys[pickupSlotDateKeys.length - 1])
@@ -1540,10 +2025,9 @@ const sharerAvatarUpdatedAt =
       if (order.deliveryOption === 'producer_pickup') {
         const cityLine = pickupCityLine || deliveryCityLine;
         if (cityLine) lines.push(`Ville de retrait : ${cityLine}`);
-        if (pickupWindowLabel) lines.push(`Fenêtre de retrait : ${pickupWindowLabel}`);
       } else {
         if (deliveryCityLine) lines.push(`Ville de livraison : ${deliveryCityLine}`);
-        if (deliveryDateLabel) lines.push(`Livraison estimée : ${deliveryDateLabel}`);
+        if (deliveryDateLabel) lines.push(`Livraison : ${deliveryDateLabel}`);
       }
       return lines;
     }
@@ -1556,9 +2040,8 @@ const sharerAvatarUpdatedAt =
     if (order.deliveryOption === 'producer_pickup') {
       if (pickupAddress) lines.push(`Adresse de retrait : ${pickupAddress}`);
       if (pickupInfo) lines.push(`Infos retrait : ${pickupInfo}`);
-      if (pickupWindowLabel) lines.push(`Fenêtre de retrait : ${pickupWindowLabel}`);
     } else if (deliveryDateLabel) {
-      lines.push(`Livraison estimée : ${deliveryDateLabel}`);
+      lines.push(`Livraison : ${deliveryDateLabel}`);
     }
     return lines;
   }, [
@@ -1575,19 +2058,160 @@ const sharerAvatarUpdatedAt =
     pickupInfo,
     pickupWindowLabel,
   ]);
+  const producerContactLines = React.useMemo(() => {
+    const lines: string[] = [];
+    if (producerProfileMeta?.contactEmailPublic) {
+      lines.push(`Email : ${producerProfileMeta.contactEmailPublic}`);
+    }
+    if (producerProfileMeta?.phonePublic) {
+      lines.push(`Téléphone : ${producerProfileMeta.phonePublic}`);
+    }
+    if (!lines.length) {
+      lines.push('Coordonnées du producteur : non renseignées');
+    }
+    return lines;
+  }, [producerProfileMeta?.contactEmailPublic, producerProfileMeta?.phonePublic]);
+  const producerStatementData = React.useMemo(() => {
+    const totalOrderedCents = paymentsReceivedCents;
+    const platformCommissionFromSource = producerStatementSources?.platformCommissionCents;
+    const sharerDiscountFromSource = producerStatementSources?.sharerDiscountCents;
+    const coopSurplusFromSource = producerStatementSources?.coopSurplusCents;
+    const participantGainsFromSource = producerStatementSources?.participantGainsCents;
+    const participantCoopUsedFromSource = producerStatementSources?.participantCoopUsedCents;
+
+    const platformCommissionCents =
+      platformCommissionFromSource !== null && platformCommissionFromSource !== undefined
+        ? Math.max(0, platformCommissionFromSource)
+        : Math.max(0, platformShareCents);
+    const sharerDiscountCents =
+      sharerDiscountFromSource !== null && sharerDiscountFromSource !== undefined
+        ? Math.max(0, sharerDiscountFromSource)
+        : Math.max(0, sharerShareProductsCents);
+    const coopSurplusCents =
+      coopSurplusFromSource !== null && coopSurplusFromSource !== undefined
+        ? Math.max(0, coopSurplusFromSource)
+        : Math.max(0, adjustedSharerShareCents - sharerDiscountCents);
+    const participantGainsCents =
+      participantGainsFromSource !== null && participantGainsFromSource !== undefined
+        ? Math.max(0, participantGainsFromSource)
+        : 0;
+    const participantCoopUsedCents =
+      participantCoopUsedFromSource !== null && participantCoopUsedFromSource !== undefined
+        ? Math.max(0, participantCoopUsedFromSource)
+        : 0;
+
+    const isPlatformCommissionEstimated =
+      isProducerStatementLoading || platformCommissionFromSource === null || platformCommissionFromSource === undefined;
+    const isSharerDiscountEstimated =
+      isProducerStatementLoading || sharerDiscountFromSource === null || sharerDiscountFromSource === undefined;
+    const isCoopSurplusEstimated =
+      isProducerStatementLoading || coopSurplusFromSource === null || coopSurplusFromSource === undefined;
+    const isParticipantGainsEstimated =
+      isProducerStatementLoading || participantGainsFromSource === null || participantGainsFromSource === undefined;
+    const isRemainingToCollectEstimated =
+      isProducerStatementLoading || participantCoopUsedFromSource === null || participantCoopUsedFromSource === undefined;
+
+    const totalDeductionsCents =
+      platformCommissionCents + sharerDiscountCents + coopSurplusCents + participantGainsCents;
+    const transferToProducerCents = Math.max(0, totalOrderedCents - totalDeductionsCents);
+    const remainingToCollectAfterCoopCents = isRemainingToCollectEstimated
+      ? 0
+      : Math.max(0, remainingToCollectCents - participantCoopUsedCents);
+    const participantGainsRefs = producerStatementSources?.participantGainsLedgerRefs ?? [];
+    const participantGainsReference =
+      participantGainsRefs.length > 0
+        ? `Ledger ${participantGainsRefs
+            .slice(0, 2)
+            .map((value) => value.slice(0, 8))
+            .join(', ')}${participantGainsRefs.length > 2 ? '...' : ''}`
+        : null;
+
+    return {
+      totalOrderedCents,
+      platformCommissionCents,
+      platformCommissionReference: producerStatementSources?.platformInvoice?.numero
+        ? `Facture ${producerStatementSources.platformInvoice.numero}`
+        : null,
+      platformCommissionEstimated: isPlatformCommissionEstimated,
+      sharerDiscountCents,
+      sharerDiscountReference: producerStatementSources?.sharerInvoice?.numero
+        ? `Facture ${producerStatementSources.sharerInvoice.numero}`
+        : null,
+      sharerDiscountEstimated: isSharerDiscountEstimated,
+      coopSurplusCents,
+      coopSurplusReference: producerStatementSources?.coopSurplusLedgerId
+        ? `Ledger ${producerStatementSources.coopSurplusLedgerId.slice(0, 8)}`
+        : null,
+      coopSurplusEstimated: isCoopSurplusEstimated,
+      participantGainsCents,
+      participantGainsReference,
+      participantGainsEstimated: isParticipantGainsEstimated,
+      paymentFeeTtcCents: paymentFeeCents,
+      deliveryFeeToPlatformCents,
+      transferToProducerCents,
+      remainingToCollectCents: remainingToCollectAfterCoopCents,
+    };
+  }, [
+    deliveryFeeToPlatformCents,
+    isProducerStatementLoading,
+    paymentFeeCents,
+    paymentsReceivedCents,
+    platformShareCents,
+    producerStatementSources,
+    remainingToCollectCents,
+    adjustedSharerShareCents,
+    sharerShareProductsCents,
+  ]);
   const producerPickupDetailLines = React.useMemo(() => {
     if (!shouldShowProducerPickupDetails) return [];
     return [
-      `Adresse producteur : ${producerPickupAddress}`,
-      `Horaires producteur : ${producerPickupHoursLabel}`,
+      `Adresse du producteur : ${producerPickupAddress}`,
+      `Horaires du producteur : ${producerPickupHoursLabel}`,
     ];
   }, [producerPickupAddress, producerPickupHoursLabel, shouldShowProducerPickupDetails]);
+  const deliveryInfoLines = React.useMemo(() => {
+    if (isProducer && order.deliveryOption === 'producer_pickup') {
+      const label = pickupRetrievalDateLabel ?? 'date a confirmer';
+      return [`Le créateur de la commande viendra récuperer ses produits le ${label}`];
+    }
+    const hidePickupAddressLines = isOwner && order.deliveryOption === 'producer_pickup';
+    const filteredDeliveryLines = hidePickupAddressLines
+      ? deliveryDetailLines.filter(
+          (line) =>
+            !line.startsWith('Adresse de livraison :') &&
+            !line.startsWith('Adresse de retrait :') &&
+            !line.startsWith('Fenêtre de retrait :') &&
+            !line.startsWith('Fenêtre de retrait :')
+        )
+      : deliveryDetailLines;
+    const lines = [...filteredDeliveryLines];
+    if (isOwner) {
+      if (order.deliveryOption === 'producer_pickup') {
+        if (producerPickupAddress) lines.push(`Adresse producteur : ${producerPickupAddress}`);
+        if (producerPickupHoursLabel) lines.push(`Horaires producteur : ${producerPickupHoursLabel}`);
+        lines.push(...producerContactLines);
+      }
+      if (order.deliveryOption === 'producer_delivery') {
+        lines.push('Le producteur a reçu vos coordonnées pour la livraison.');
+      }
+    }
+    return lines;
+  }, [
+    deliveryDetailLines,
+    isOwner,
+    isProducer,
+    order.deliveryOption,
+    pickupRetrievalDateLabel,
+    producerContactLines,
+    producerPickupAddress,
+    producerPickupHoursLabel,
+  ]);
   const pickupLine = deliveryDateLabel
-    ? `Livraison estimée : ${deliveryDateLabel}`
+    ? `Livraison : ${deliveryDateLabel}`
     : hasPickupSlots
       ? isPickupSelectionOpen
-        ? 'Choix de créneau disponible'
-        : 'Choix du créneau de récupération disponible après réception'
+        ? 'Choix du rendez-vous de récupération disponible'
+        : 'Choix du rendez-vous de récupération disponible après réception'
       : order.message || 'Voir message de retrait';
   const statusLabel = ORDER_STATUS_LABELS[order.status] ?? getOrderStatusLabel(order.status);
   const statusTone =
@@ -1878,18 +2502,18 @@ const sharerAvatarUpdatedAt =
 
       <div className="order-client-view__layout">
         <div className="order-client-view__main">
-          <div className="relative overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-            <div className="relative p-6 md:p-8 space-y-6">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-2">
-                  <h2 className="text-2xl md:text-3xl font-semibold text-[#1F2937] leading-tight">{order.title}</h2>
-                  <div className="flex flex-col gap-2 text-sm text-[#4B5563] sm:flex-row sm:items-center sm:gap-4">
-                    <div className="flex items-center gap-2">
+          <div className="order-client-view__card">
+            <div className="order-client-view__header">
+              <div className="order-client-view__header-row">
+                <div className="order-client-view__header-title-block">
+                  <h2 className="order-client-view__header-title">{order.title}</h2>
+                  <div className="order-client-view__header-meta">
+                    <div className="order-client-view__header-avatars">
                       <button
                         type="button"
                         onClick={() => handleAvatarNavigation(sharerProfileHandle, sharerName)}
                         aria-label={`Voir le profil de ${sharerName}`}
-                        className="h-10 w-10 rounded-full border border-gray-200 bg-white overflow-hidden p-0 cursor-pointer"
+                        className="order-client-view__header-avatar-button"
                       >
                         <Avatar
                           supabaseClient={supabaseClient ?? null}
@@ -1897,14 +2521,26 @@ const sharerAvatarUpdatedAt =
                           updatedAt={sharerAvatarUpdatedAt}
                           fallbackSrc={DEFAULT_PROFILE_AVATAR}
                           alt={sharerName}
-                          className="w-full h-full object-cover"
+                          className="order-client-view__header-avatar-img"
                         />
                       </button>
+                      <span className="order-client-view__header-arrow" aria-hidden="true">
+                        <svg viewBox="0 0 54 24" role="img" focusable="false">
+                          <path
+                            d="M4 12h44m0 0l-7-7m7 7l-7 7"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="3.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
                       <button
                         type="button"
                         onClick={() => handleAvatarNavigation(producerProfileHandle, producerName)}
                         aria-label={`Voir le profil de ${producerName}`}
-                        className="h-10 w-10 rounded-full border border-gray-200 bg-white overflow-hidden p-0 cursor-pointer"
+                        className="order-client-view__header-avatar-button"
                       >
                         <Avatar
                           supabaseClient={supabaseClient ?? null}
@@ -1912,63 +2548,29 @@ const sharerAvatarUpdatedAt =
                           updatedAt={producerAvatarUpdatedAt}
                           fallbackSrc={DEFAULT_PROFILE_AVATAR}
                           alt={producerName}
-                          className="w-full h-full object-cover"
+                          className="order-client-view__header-avatar-img"
                         />
                       </button>
                     </div>
-                    <p className="leading-snug text-[#4B5563]">
-                      <span className="font-semibold text-[#1F2937]">{sharerName}</span> se procure des produits
-                      chez <span className="font-semibold text-[#1F2937]">{producerName}</span> : participez avec lui
-                      à la commande
+                    <p className="order-client-view__header-description">
+                      <span className="order-client-view__header-emphasis">{sharerName}</span> se procure des produits
+                      chez <span className="order-client-view__header-emphasis">{producerName}</span> : participez à sa commande
                     </p>
                     {order.message && (
-                    <div className="bg-white border border-[#FFDCC4] rounded-2xl p-4 text-sm text-[#92400E] shadow-sm">
-                      <span className="inline-flex items-center gap-2 font-semibold text-[#B45309]">
-                        <Info className="w-4 h-4" />
-                      </span>
-                      <p className="mt-2 leading-relaxed text-[#92400E]">{order.message}</p>
+                    <div className="order-client-view__header-message">
+                      <p>{order.message}</p>
                     </div>
                       )}
-                      {isProducer && (
-                      <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                          <Globe2 className="w-4 h-4 text-[#FF6B4A]" />
-                          Livraison
-                        </div>
-                        <p className="text-[#1F2937] font-semibold text-lg leading-tight">{deliveryModeLabel}</p>
-                        {deliveryDetailLines.map((line, index) => (
-                          <p key={`delivery-${index}`} className="text-xs text-[#6B7280]">
-                            {line}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                      {shouldShowProducerPickupDetails && (
-                      <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-2 shadow-sm">
-                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                          <MapPin className="w-4 h-4 text-[#FF6B4A]" />
-                          Retrait producteur
-                        </div>
-                        <p className="text-[#1F2937] font-semibold text-lg leading-tight">
-                          Retrait chez {producerName}
-                        </p>
-                        {producerPickupDetailLines.map((line, index) => (
-                          <p key={`producer-pickup-${index}`} className="text-xs text-[#6B7280]">
-                            {line}
-                          </p>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
-                <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-3 shadow-sm order-client-view__calendar-card">
+              <div className="order-client-view__header-grid">
+                <div className="order-client-view__calendar-card">
                   <div className="order-client-view__calendar-header">
-                    <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                      <MapPin className="w-4 h-4 text-[#FF6B4A]" />
-                      Retrait {locationAddress}
+                    <div className="order-client-view__info-header">
+                      <MapPin className="order-client-view__info-icon order-client-view__info-icon--accent" />
+                      Retrait : {locationAddress}
                     </div>
                     <div className="order-client-view__calendar-nav">
                       <button
@@ -1979,7 +2581,7 @@ const sharerAvatarUpdatedAt =
                         }
                         aria-label="Mois precedent"
                       >
-                        <ChevronLeft className="w-4 h-4 text-[#4B5563]" />
+                        <ChevronLeft className="order-client-view__icon-muted" />
                       </button>
                       <span className="order-client-view__calendar-month">{calendarMonthLabel}</span>
                       <button
@@ -1990,7 +2592,7 @@ const sharerAvatarUpdatedAt =
                         }
                         aria-label="Mois suivant"
                       >
-                        <ChevronRight className="w-4 h-4 text-[#4B5563]" />
+                        <ChevronRight className="order-client-view__icon-muted" />
                       </button>
                     </div>
                   </div>
@@ -2164,7 +2766,7 @@ const sharerAvatarUpdatedAt =
                                       <div className="order-client-view__pickup-slot-status">
                                         {isSelected && (
                                           <span className="order-client-view__pickup-slot-tag">
-                                            Selectionne{myParticipantPickupTime ? ` à ${myParticipantPickupTime}` : ''}
+                                            Sélectionné{myParticipantPickupTime ? ` à ${myParticipantPickupTime}` : ''}
                                           </span>
                                         )}
                                         {isSelected && myParticipant?.pickupSlotStatus === 'accepted' && (
@@ -2302,23 +2904,137 @@ const sharerAvatarUpdatedAt =
                   )}
                   
                 </div>
-                
+                {(isProducer || isOwner) && (
+                  <div className="order-client-view__info-card">
+                    <div className="order-client-view__info-header">
+                      <Globe2 className="order-client-view__info-icon order-client-view__info-icon--accent" />
+                      Livraison
+                    </div>
+                    <p className="order-client-view__info-title">{deliveryModeLabel}</p>
+                    {deliveryInfoLines.map((line, index) => (
+                      <p key={`delivery-${index}`} className="order-client-view__info-line">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {isProducer && isLockedOrAfter && (
+                  <div className="order-client-view__info-card">
+                    <div className="order-client-view__info-header">
+                      <ShieldCheck className="order-client-view__info-icon order-client-view__info-icon--accent" />
+                      Relevé de règlement
+                    </div>
+                    <div className="order-client-view__statement">
+                      <div className="order-client-view__statement-row">
+                        <span className="order-client-view__statement-label">Total commande</span>
+                        <span className="order-client-view__statement-value order-client-view__statement-value--strong">
+                          {formatEurosFromCents(producerStatementData.totalOrderedCents)}
+                        </span>
+                      </div>
+                      <div className="order-client-view__statement-row">
+                        <span className="order-client-view__statement-label">
+                          Commission de la plateforme
+                          <span className="order-client-view__statement-meta">
+                            {producerStatementData.platformCommissionReference ? (
+                              <span className="order-client-view__statement-ref">
+                                {producerStatementData.platformCommissionReference}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                        <span className="order-client-view__statement-value">
+                          -{formatEurosFromCents(producerStatementData.platformCommissionCents)}
+                        </span>
+                      </div>
+                      <div className="order-client-view__statement-row order-client-view__statement-row--detail">
+                        <span className="order-client-view__statement-label">
+                          dont frais de paiement
+                        </span>
+                        <span className="order-client-view__statement-value">
+                          {formatEurosFromCents(producerStatementData.paymentFeeTtcCents)}
+                        </span>
+                      </div>
+                      <div className="order-client-view__statement-row">
+                        <span className="order-client-view__statement-label">
+                          Remise sur les produits du partageur
+                          <span className="order-client-view__statement-meta">
+                            {producerStatementData.sharerDiscountReference ? (
+                              <span className="order-client-view__statement-ref">
+                                {producerStatementData.sharerDiscountReference}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                        <span className="order-client-view__statement-value">
+                          -{formatEurosFromCents(producerStatementData.sharerDiscountCents)}
+                        </span>
+                      </div>
+                      <div className="order-client-view__statement-row">
+                        <span className="order-client-view__statement-label">
+                          Affectation gains de coopération partageur
+                          <span className="order-client-view__statement-meta">
+                            {producerStatementData.coopSurplusReference ? (
+                              <span className="order-client-view__statement-ref">
+                                {producerStatementData.coopSurplusReference}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                        <span className="order-client-view__statement-value">
+                          -{formatEurosFromCents(producerStatementData.coopSurplusCents)}
+                        </span>
+                      </div>
+                      <div className="order-client-view__statement-row">
+                        <span className="order-client-view__statement-label">
+                          Affectation gains de coopération participants
+                          <span className="order-client-view__statement-meta">
+                            {producerStatementData.participantGainsReference ? (
+                              <span className="order-client-view__statement-ref">
+                                {producerStatementData.participantGainsReference}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                        <span className="order-client-view__statement-value">
+                          -{formatEurosFromCents(producerStatementData.participantGainsCents)}
+                        </span>
+                      </div>
+                      {producerStatementData.deliveryFeeToPlatformCents > 0 && (
+                        <div className="order-client-view__statement-row order-client-view__statement-row--detail">
+                          <span className="order-client-view__statement-label">Frais de livraison plateforme (info)</span>
+                          <span className="order-client-view__statement-value">
+                            {formatEurosFromCents(producerStatementData.deliveryFeeToPlatformCents)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="order-client-view__statement-total">
+                        <span className="order-client-view__statement-label order-client-view__statement-value--strong">
+                          Virement au producteur
+                        </span>
+                        <span className="order-client-view__statement-value order-client-view__statement-value--strong">
+                          {formatEurosFromCents(producerStatementData.transferToProducerCents)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               
             </div>
           </div>
 
           {!isProducer && (
-            <div className="order-client-view__products-section space-y-4 bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-              <div className="h-px bg-gray-100" />
-              <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="order-client-view__products-section">
+              <div className="order-client-view__products-header">
                 <div>
-                  <h3 className="text-lg font-semibold text-[#1F2937]">Choisissez vos produits</h3>
+                  <h3 className="order-client-view__products-title">
+                    {isOrderOpen ? 'Choisissez vos produits' : 'Les produits de la commande'}
+                  </h3>
                 </div>
               </div>
 
               {products.length === 0 ? (
-                <div className="bg-white border border-gray-100 rounded-2xl p-6 text-sm text-[#6B7280] shadow-sm">
+                <div className="order-client-view__empty-card">
                   Aucun produit n'est associé a cette commande pour l'instant.
                 </div>
               ) : (
@@ -2329,7 +3045,9 @@ const sharerAvatarUpdatedAt =
                   onDirectQuantity={(productId, value) =>
                     setQuantities((prev) => {
                       if (!isOrderOpen) return prev;
-                      return { ...prev, [productId]: Math.max(0, value) };
+                      const next = clampQuantityForMax(productId, Math.max(0, value), prev);
+                      if (next === (prev[productId] ?? 0)) return prev;
+                      return { ...prev, [productId]: next };
                     })
                   }
                   unitPriceLabelsById={unitPriceLabelsById}
@@ -2385,9 +3103,6 @@ const sharerAvatarUpdatedAt =
                     ))}
                   </div>
                 )}
-                <p className="text-[11px] text-[#6B7280]">
-                  Étapes : open - locked - confirmed - preparing - prepared - delivered - distributed - finished
-                </p>
               </div>
             )}
 
@@ -2419,24 +3134,18 @@ const sharerAvatarUpdatedAt =
             )}
 
             {!showStatusProgress && (
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-[#FFF9F3] p-2 space-y-1">
-                  <p className="text-xs text-[#B45309] font-semibold">Poids restant</p>
-                  <p className="text-xl font-semibold text-[#1F2937]">{remainingWeight.toFixed(2)} kg</p>
-                </div>
+              <div className="gap-3 text-sm">
+                  <p className="text-[#1F2937] p-2">{remainingWeightLabel} : {remainingWeightDisplay.toFixed(2)} kg</p>
               </div>
             )}
             {isOwner && isOrderOpen && (
               <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                  <span className="text-[#6B7280] font-medium">Part du partageur accumulée :</span>
-                  <span className="text-[#1F2937] font-semibold">{formatEurosFromCents(sharerShareCents)}</span>
-                </div>
-                {sharerProductsCents > sharerShareCents ? (
+                  <span className="text-[#1F2937] p-2 text-sm">Part du partageur accumulée : {formatEurosFromCents(adjustedSharerShareCents)}</span>
+                {sharerProductsCents > adjustedSharerShareCents ? (
                   <>
                     <p className="text-xs text-[#9A3412] bg-[#FFF7ED] border border-[#FFDCC4] rounded-2xl px-3 py-2">
-                      Vous allez devoir compléter {formatEurosFromCents(sharerDeficitCents)} pour clôturer la commande
-                      et obtenir vos produits car votre part gagnée n&apos;est pas suffisante.
+                      Vous allez devoir compléter encore {formatEurosFromCents(sharerDeficitCents)} pour clôturer la commande
+                      et obtenir vos produits car votre part gagnée n&apos;est pas encore suffisante.
                     </p>
                     {canReachFullCoverage && (
                       <p className="text-xs text-[#92400E] bg-[#FFF7ED] border border-[#FFDCC4] rounded-2xl px-3 py-2">
@@ -2466,29 +3175,46 @@ const sharerAvatarUpdatedAt =
 
             {!isProducer && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
-            <div className="text-sm text-[#6B7280] space-y-1">
-              <p>
-                Montant du panier : <span className="text-[#1F2937] font-semibold">{formatPrice(totalPrice)}</span>
-              </p>
+            <div className="order-client-view__payment-summary">
+              <div className="order-client-view__payment-row">
+                <span>Montant du panier</span>
+                <span className="order-client-view__payment-value">{formatPrice(totalPrice)}</span>
+              </div>
+              {shouldShowCoopToggle ? (
+                <>
+                  <div className="order-client-view__payment-row order-client-view__payment-row--toggle">
+                    <label className="order-client-view__toggle">
+                      <input
+                        type="checkbox"
+                        checked={useCoopBalance}
+                        onChange={(event) => setUseCoopBalance(event.target.checked)}
+                      />
+                      <span>Utiliser vos gains de coopération</span>
+                    </label>
+                    <span className="order-client-view__payment-value">
+                      -{formatEurosFromCents(coopAppliedCents)}
+                    </span>
+                  </div>
+                  <div className="order-client-view__payment-row">
+                    <span>Montant à Payer</span>
+                    <span className="order-client-view__payment-value">
+                      {formatEurosFromCents(remainingToPayCents)}
+                    </span>
+                  </div>
+                </>
+              ) : null}
             </div>
-            <div className="h-px bg-gray-100" />
             <div className="flex flex-wrap items-center justify-end gap-3">
               {isOrderOpen ? (
-                remainingToPayCents > 0 ? (
-                  <button
-                    type="button"
-                    onClick={handlePurchase}
-                    disabled={totalCards === 0 || isWorking}
-                    className="order-client-view__purchase-button"
-                  >
-                    <ShoppingCart className="w-4 h-4" />
-                    Payer
-                  </button>
-                ) : (
-                  <div className="text-xs text-[#6B7280] font-semibold">
-                    
-                  </div>
-                )
+                <button
+                  type="button"
+                  onClick={handlePurchase}
+                  disabled={totalCards === 0 || isWorking}
+                  className="order-client-view__purchase-button"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  Payer
+                </button>
               ) : (
                 <div className="text-xs text-[#6B7280] font-semibold">
                   Paiement indisponible pour le moment
@@ -2504,8 +3230,7 @@ const sharerAvatarUpdatedAt =
       <div className="order-client-view__participants">
             <div className="order-client-view__participants-header">
               <div>
-                <p className="order-client-view__participants-title">Participants à la commande</p>
-                <p className="order-client-view__participants-subtitle">{participantsCountLabel}</p>
+                <p className="order-client-view__participants-title">{participantsCountLabel} à la commande</p>
               </div>
               {isOwner && (
                 <div className="order-client-view__participants-controls">
@@ -2571,7 +3296,7 @@ const sharerAvatarUpdatedAt =
                   </p>
                 ) : (
                   <p className="order-client-view__pickup-code-label">
-                    Ton inscription doit être acceptée pour obtenir un code.
+                    Une fois ta participation acceptée et payée tu obtiendras un code de récupération pour tes produits
                   </p>
                 )}
               </div>
@@ -2592,7 +3317,7 @@ const sharerAvatarUpdatedAt =
                   type="button"
                   onClick={() => handleInvoiceDownload(participantInvoice)}
                   className="order-client-view__purchase-button"
-                  disabled={!participantInvoice.pdfPath || isInvoiceLoading}
+                  disabled={isInvoiceLoading}
                 >
                   {participantInvoice.pdfPath ? 'Télecharger (PDF)' : 'PDF en cours de génération'}
                 </button>
@@ -2614,7 +3339,7 @@ const sharerAvatarUpdatedAt =
                   type="button"
                   onClick={() => handleInvoiceDownload(producerInvoice)}
                   className="order-client-view__purchase-button"
-                  disabled={!producerInvoice.pdfPath || isInvoiceLoading}
+                  disabled={isInvoiceLoading}
                 >
                   {producerInvoice.pdfPath ? 'Télecharger (PDF)' : 'PDF en cours de generation'}
                 </button>
@@ -2754,14 +3479,18 @@ const sharerAvatarUpdatedAt =
                           )}
                           {shouldShowInvoiceColumn && (
                             <td className="order-client-view__participants-table-number">
-                              <button
-                                type="button"
-                                onClick={() => handleParticipantInvoiceDownload(participant)}
-                                className="order-client-view__purchase-button"
-                                disabled={isInvoiceLoading}
-                              >
-                                Télécharger
-                              </button>
+                              {participant.role === 'sharer' && !isLockedOrAfter ? (
+                                <span className="order-client-view__participants-table-muted">Après clôture</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleParticipantInvoiceDownload(participant)}
+                                  className="order-client-view__purchase-button"
+                                  disabled={isInvoiceLoading}
+                                >
+                                  Télécharger
+                                </button>
+                              )}
                             </td>
                           )}
                         </tr>
@@ -2807,7 +3536,6 @@ const sharerAvatarUpdatedAt =
                     )}
                   </table>
                 </div>
-                <div className="order-client-view__participants-count">{participantsCountFooterLabel}</div>
                 {canShowPreview && (
                   <div className="order-client-view__participants-preview">
                     <p className="order-client-view__participants-preview-title">
@@ -2975,41 +3703,45 @@ function OrderProductsCarousel({
                 priceLabelOverride={unitPriceLabelsById[product.id]}
               />
               <div className="w-full space-y-2" style={{ maxWidth: ORDER_CARD_WIDTH }}>
-                <p className="text-[12px] text-[#6B7280] text-center">
-                  {getProductWeightKg(product).toFixed(2)} kg
-                </p>
-                <div className="flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onDeltaQuantity(product.id, -1)}
-                    className="order-client-view__quantity-button order-client-view__quantity-button--decrement"
-                    aria-label={`Retirer une carte de ${product.name}`}
-                    disabled={isSelectionLocked}
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    min={0}
-                    value={quantity}
-                    onChange={(e) => {
-                      const value = Math.max(0, Number(e.target.value) || 0);
-                      onDirectQuantity(product.id, value);
-                    }}
-                    className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
-                    aria-label={`Quantite pour ${product.name}`}
-                    disabled={isSelectionLocked}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onDeltaQuantity(product.id, 1)}
-                    className="order-client-view__quantity-button order-client-view__quantity-button--increment"
-                    aria-label={`Ajouter une carte de ${product.name}`}
-                    disabled={isSelectionLocked}
-                  >
-                    +
-                  </button>
-                </div>
+                {!isSelectionLocked && (
+                  <p className="text-[12px] text-[#6B7280] text-center">
+                    {getProductWeightKg(product).toFixed(2)} kg
+                  </p>
+                )}
+                {!isSelectionLocked && (
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onDeltaQuantity(product.id, -1)}
+                      className="order-client-view__quantity-button order-client-view__quantity-button--decrement"
+                      aria-label={`Retirer une carte de ${product.name}`}
+                      disabled={isSelectionLocked}
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={0}
+                      value={quantity}
+                      onChange={(e) => {
+                        const value = Math.max(0, Number(e.target.value) || 0);
+                        onDirectQuantity(product.id, value);
+                      }}
+                      className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
+                      aria-label={`Quantite pour ${product.name}`}
+                      disabled={isSelectionLocked}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onDeltaQuantity(product.id, 1)}
+                      className="order-client-view__quantity-button order-client-view__quantity-button--increment"
+                      aria-label={`Ajouter une carte de ${product.name}`}
+                      disabled={isSelectionLocked}
+                    >
+                      +
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -3040,6 +3772,17 @@ function OrderProductsCarousel({
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

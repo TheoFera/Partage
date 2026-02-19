@@ -180,7 +180,7 @@ export type DbPayment = {
   updated_at: string;
 };
 
-export type InvoiceSerie = 'PROD_CLIENT' | 'PLAT_PROD';
+export type InvoiceSerie = 'PROD_CLIENT' | 'PLAT_PROD' | 'PLAT_SHARER';
 
 export type DbFacture = {
   id: string;
@@ -212,6 +212,7 @@ export type DbFactureLigne = {
   vat_rate: number;
   total_ht_cents: number;
   total_tva_cents: number;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type DbLotReservation = {
@@ -361,6 +362,8 @@ export type ProfileSummary = {
   handle?: string | null;
   avatarPath?: string | null;
   avatarUpdatedAt?: string | null;
+  phonePublic?: string | null;
+  contactEmailPublic?: string | null;
   address?: string | null;
   addressDetails?: string | null;
   city?: string | null;
@@ -439,6 +442,7 @@ export type FactureLigne = {
   vatRate: number;
   totalHtCents: number;
   totalTvaCents: number;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type LotReservation = {

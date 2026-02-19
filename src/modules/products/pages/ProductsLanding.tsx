@@ -25,7 +25,10 @@ interface ProductsLandingProps {
   supabaseClient?: SupabaseClient | null;
   onAddToDeck?: (product: Product) => void;
   onRemoveFromDeck?: (productId: string) => void;
-  onOpenProduct: (productId: string) => void;
+  onOpenProduct: (
+    productId: string,
+    context?: { orderCode?: string | null; lotCode?: string | null }
+  ) => void;
   onOpenProducer?: (product: Product) => void;
   onOpenOrder: (orderId: string) => void;
   onStartOrderFromProduct?: (product: Product) => void;
@@ -33,6 +36,9 @@ interface ProductsLandingProps {
   onSelectProducerCategory?: (tag: string) => void;
   filtersOpen: boolean;
   onToggleFilters: () => void;
+  postcodeRadiusKm?: number;
+  onPostcodeRadiusKmChange?: (value: number) => void;
+  producerDistanceMetersById?: Record<string, number>;
 }
 
 const productFilterOptions = [
@@ -207,6 +213,9 @@ export function ProductsLanding({
   onStartOrderFromProduct,
   filtersOpen,
   onToggleFilters,
+  postcodeRadiusKm,
+  onPostcodeRadiusKmChange,
+  producerDistanceMetersById,
 }: ProductsLandingProps) {
   const [scope, setScope] = React.useState<SearchScope>('combined');
   const [categories, setCategories] = React.useState<string[]>([]);
@@ -326,10 +335,23 @@ export function ProductsLanding({
       ...producer,
       products: producer.products.sort((a, b) => a.name.localeCompare(b.name)),
     }));
-    return rows.sort((a, b) => a.name.localeCompare(b.name));
-  }, [producerResults]);
+    return rows.sort((a, b) => {
+      const aDistance = producerDistanceMetersById?.[a.id];
+      const bDistance = producerDistanceMetersById?.[b.id];
+      const aHasDistance = Number.isFinite(aDistance ?? NaN);
+      const bHasDistance = Number.isFinite(bDistance ?? NaN);
+      if (aHasDistance && bHasDistance && aDistance !== bDistance) {
+        return (aDistance as number) - (bDistance as number);
+      }
+      if (aHasDistance !== bHasDistance) return aHasDistance ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [producerDistanceMetersById, producerResults]);
   const [profileMetaById, setProfileMetaById] = React.useState<
-    Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }>
+    Record<
+      string,
+      { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+    >
   >({});
   const producerProfileIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -361,7 +383,7 @@ export function ProductsLanding({
 
     supabaseClient
       .from('profiles')
-      .select('id, handle, avatar_path, avatar_updated_at')
+      .select('id, handle, avatar_path, avatar_updated_at, name')
       .in('id', profileIds)
       .then(({ data, error }) => {
         if (!active) return;
@@ -370,7 +392,10 @@ export function ProductsLanding({
           setProfileMetaById({});
           return;
         }
-        const mapped: Record<string, { path: string | null; updatedAt: string | null; handle?: string | null }> = {};
+        const mapped: Record<
+          string,
+          { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+        > = {};
         (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
           const id = typeof row.id === 'string' ? row.id : '';
           if (!id) return;
@@ -378,6 +403,7 @@ export function ProductsLanding({
             path: (row.avatar_path as string | null) ?? null,
             updatedAt: (row.avatar_updated_at as string | null) ?? null,
             handle: (row.handle as string | null) ?? null,
+            name: (row.name as string | null) ?? null,
           };
         });
         setProfileMetaById(mapped);
@@ -390,29 +416,45 @@ export function ProductsLanding({
 
   const producerGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return producerProductRows.map((producer) => {
-      const avatar = profileMetaById[producer.id];
+      const profileMeta = profileMetaById[producer.id];
+      const resolvedProducerName = profileMeta?.name?.trim() || producer.name;
+      const resolvedProducts = producer.products.map((product) =>
+        resolvedProducerName && product.producerName !== resolvedProducerName
+          ? { ...product, producerName: resolvedProducerName }
+          : product
+      );
       return {
         id: producer.id,
-        title: producer.name,
+        title: resolvedProducerName,
         location: producer.postcode ? `${producer.location} ${producer.postcode}` : producer.location,
         tags: producer.tags,
-        products: producer.products,
+        products: resolvedProducts,
         variant: 'producer',
-        profileHandle: avatar?.handle ?? undefined,
-        avatarPath: avatar?.path ?? null,
-        avatarUpdatedAt: avatar?.updatedAt ?? null,
+        profileHandle: profileMeta?.handle ?? undefined,
+        avatarPath: profileMeta?.path ?? null,
+        avatarUpdatedAt: profileMeta?.updatedAt ?? null,
       };
     });
   }, [producerProductRows, profileMetaById]);
 
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
+      const producerProfile = profileMetaById[order.producerId];
+      const resolvedProducerName = producerProfile?.name?.trim() || order.producerName;
       const sortedProducts = order.products
         .filter(hasValidLotPrice)
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((product) =>
+          resolvedProducerName && product.producerName !== resolvedProducerName
+            ? { ...product, producerName: resolvedProducerName }
+            : product
+        );
       const sharerAvatar = profileMetaById[order.sharerId];
       const locationFallback =
-        order.pickupAddress || order.mapLocation?.areaLabel || sortedProducts[0]?.producerLocation || order.producerName;
+        order.pickupAddress ||
+        order.mapLocation?.areaLabel ||
+        sortedProducts[0]?.producerLocation ||
+        resolvedProducerName;
       const location = formatCityLabel(order.pickupCity, order.pickupPostcode, locationFallback);
       const locationWithPostcode = order.pickupPostcode
         ? `${location} ${order.pickupPostcode}`
@@ -422,7 +464,7 @@ export function ProductsLanding({
         return {
           id: order.id,
           orderId: order.orderCode ?? order.id,
-          title: order.title || order.producerName,
+          title: order.title || resolvedProducerName,
           location: locationWithPostcode,
           tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
           products: sortedProducts,
@@ -565,6 +607,10 @@ export function ProductsLanding({
         productOptions={productFilterOptions}
         producerOptions={producerFilterOptions}
         attributeOptions={attributeFilterOptions}
+        distanceKm={postcodeRadiusKm}
+        onDistanceKmChange={onPostcodeRadiusKmChange}
+        minDistanceKm={1}
+        maxDistanceKm={50}
       />
       <div
         className="products-landing__hero-wrap"

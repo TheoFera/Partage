@@ -158,6 +158,32 @@
   display: none;
 }
 
+.products-landing__cards-carousel {
+  position: relative;
+}
+
+.products-landing__cards-carousel-viewport {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.products-landing__cards-carousel-track {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: stretch;
+  user-select: none;
+  will-change: transform;
+}
+
+.products-landing__cards-carousel-item {
+  flex: 0 0 auto;
+}
+
 .products-landing__header-overlay-button {
   transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }

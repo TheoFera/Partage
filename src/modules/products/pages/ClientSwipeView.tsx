@@ -1,4 +1,5 @@
 import React from 'react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { GroupOrder, Product } from '../../../shared/types';
 import { Check, X } from 'lucide-react';
 import { ProductGroupContainer, ProductGroupDescriptor } from '../components/ProductGroup';
@@ -7,7 +8,10 @@ interface ClientSwipeViewProps {
   products: Product[];
   orders?: GroupOrder[];
   onSave: (product: Product) => void;
-  onOpenProduct?: (productId: string) => void;
+  onOpenProduct?: (
+    productId: string,
+    context?: { orderCode?: string | null; lotCode?: string | null }
+  ) => void;
   onOpenProducer?: (product: Product) => void;
   onOpenSharer?: (sharerName: string) => void;
   onRequestAuth?: () => void;
@@ -16,7 +20,11 @@ interface ClientSwipeViewProps {
   locationStatus?: 'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported' | 'error';
   onRequestLocation?: () => void;
   onParticipateOrder?: (orderId: string) => void;
+  supabaseClient?: SupabaseClient | null;
 }
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
 
 const formatOrderLocation = (
   order: GroupOrder,
@@ -44,35 +52,102 @@ export function ClientSwipeView({
   locationStatus = 'idle',
   onRequestLocation,
   onParticipateOrder,
+  supabaseClient,
 }: ClientSwipeViewProps) {
   const [index, setIndex] = React.useState(0);
   const [dragOffset, setDragOffset] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
   const [swipeDirection, setSwipeDirection] = React.useState<'left' | 'right' | null>(null);
   const [isAnimating, setIsAnimating] = React.useState(false);
+  const [profileMetaById, setProfileMetaById] = React.useState<
+    Record<string, { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }>
+  >({});
   const dragStartRef = React.useRef<{ x: number; y: number; id: number } | null>(null);
   const swipeTimeoutRef = React.useRef<number | null>(null);
   const isSwipeLocked = Boolean(swipeLocked);
   const SWIPE_ANIMATION_MS = 320;
   const SWIPE_TRIGGER_PX = 120;
 
+  const profileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    orders.forEach((order) => {
+      if (isUuid(order.sharerId)) ids.add(order.sharerId);
+      if (isUuid(order.producerId)) ids.add(order.producerId);
+    });
+    products.forEach((product) => {
+      if (isUuid(product.producerId)) ids.add(product.producerId);
+    });
+    return Array.from(ids);
+  }, [orders, products]);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !profileIds.length) {
+      setProfileMetaById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from('profiles')
+      .select('id, handle, avatar_path, avatar_updated_at, name')
+      .in('id', profileIds)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('Client swipe profile avatars load error:', error);
+          setProfileMetaById({});
+          return;
+        }
+        const mapped: Record<
+          string,
+          { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+        > = {};
+        (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+          const id = typeof row.id === 'string' ? row.id : '';
+          if (!id) return;
+          mapped[id] = {
+            path: (row.avatar_path as string | null) ?? null,
+            updatedAt: (row.avatar_updated_at as string | null) ?? null,
+            handle: (row.handle as string | null) ?? null,
+            name: (row.name as string | null) ?? null,
+          };
+        });
+        setProfileMetaById(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [profileIds, supabaseClient]);
+
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return orders
       .filter((order) => order.products.length > 0)
       .map((order) => {
-        const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
+        const producerMeta = profileMetaById[order.producerId];
+        const sharerMeta = profileMetaById[order.sharerId];
+        const resolvedProducerName = producerMeta?.name?.trim() || order.producerName;
+        const sortedProducts = [...order.products]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((product) =>
+            resolvedProducerName && product.producerName !== resolvedProducerName
+              ? { ...product, producerName: resolvedProducerName }
+              : product
+          );
         const fallback =
           order.mapLocation?.areaLabel ||
           order.pickupAddress ||
           sortedProducts[0]?.producerLocation ||
-          order.producerName;
+          resolvedProducerName;
         const location = formatOrderLocation(order, fallback, locationLabel);
         const productCountLabel =
           sortedProducts.length > 1 ? `${sortedProducts.length} produits` : '1 produit';
         return {
           id: order.id,
           orderId: order.orderCode ?? order.id,
-          title: order.title || order.producerName,
+          title: order.title || resolvedProducerName,
           location,
           tags: [order.sharerName, productCountLabel].filter(Boolean) as string[],
           products: sortedProducts,
@@ -85,10 +160,13 @@ export function ClientSwipeView({
           orderedWeight: order.orderedWeight,
           deliveryFeeCents: order.deliveryFeeCents,
           deadline: order.deadline,
+          profileHandle: sharerMeta?.handle ?? undefined,
+          avatarPath: sharerMeta?.path ?? null,
+          avatarUpdatedAt: sharerMeta?.updatedAt ?? null,
           avatarUrl: sortedProducts[0]?.imageUrl,
         };
       });
-  }, [locationLabel, orders]);
+  }, [locationLabel, orders, profileMetaById]);
 
   const producerGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     const grouped = new Map<string, Product[]>();
@@ -99,17 +177,27 @@ export function ClientSwipeView({
     });
     return Array.from(grouped.entries()).map(([key, list]) => {
       const first = list[0];
+      const producerMeta = profileMetaById[key];
+      const resolvedProducerName = producerMeta?.name?.trim() || first?.producerName || 'Producteur';
+      const resolvedProducts = list.map((product) =>
+        resolvedProducerName && product.producerName !== resolvedProducerName
+          ? { ...product, producerName: resolvedProducerName }
+          : product
+      );
       return {
         id: key,
-        title: first?.producerName || 'Producteur',
+        title: resolvedProducerName,
         location: first?.producerLocation || locationLabel || 'Proche de vous',
         tags: [],
-        products: list,
+        products: resolvedProducts,
         variant: 'producer',
+        profileHandle: producerMeta?.handle ?? undefined,
+        avatarPath: producerMeta?.path ?? null,
+        avatarUpdatedAt: producerMeta?.updatedAt ?? null,
         avatarUrl: first?.imageUrl,
       };
     });
-  }, [products, locationLabel]);
+  }, [products, locationLabel, profileMetaById]);
 
   const groups = orderGroups.length ? orderGroups : producerGroups;
 
@@ -300,11 +388,12 @@ export function ClientSwipeView({
             group={currentGroup}
             canSave={false}
             deckIds={emptyDeck}
+            supabaseClient={supabaseClient}
             onSave={undefined}
             onRemoveFromDeck={undefined}
             onToggleSelection={undefined}
             onCreateOrder={undefined}
-            onOpenProduct={(productId) => onOpenProduct?.(productId)}
+            onOpenProduct={(productId, context) => onOpenProduct?.(productId, context)}
             onOpenProducer={(product) => onOpenProducer?.(product)}
             onOpenSharer={(sharerName) => onOpenSharer?.(sharerName)}
             onSelectProducerCategory={() => {}}

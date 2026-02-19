@@ -8,7 +8,7 @@ import { Avatar } from '../../../shared/ui/Avatar';
 import { ImageWithFallback } from '../../../shared/ui/ImageWithFallback';
 import { ProductResultCard } from '../../products/components/ProductGroup';
 import { formatUnitWeightLabel } from '../../products/utils/weight';
-import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
+import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
 import { DEMO_MODE } from '../../../shared/config/demoMode';
@@ -58,18 +58,18 @@ type DeliveryOption = 'chronofresh' | 'producer_delivery' | 'producer_pickup';
 const deliveryOptions: Array<{ id: DeliveryOption; title: string; description: string }> = [
   {
     id: 'chronofresh',
-    title: 'Option 1 - Expedition Chronofresh',
-    description: "Le site gère l'expedition via chronofresh. Pratique si le producteur est loin.",
+    title: 'Expédition Chronofresh',
+    description: "Le site gère l'expédition via chronofresh. Pratique si le producteur est loin.",
   },
   {
     id: 'producer_delivery',
-    title: 'Option 2 - Livraison par le producteur',
+    title: 'Livraison par le producteur',
     description: 'Si cette option vous est proposée, le producteur livre dans votre zone.',
   },
   {
     id: 'producer_pickup',
-    title: 'Option 3 - Collecter vous-même les produits',
-    description: 'Vous allez chercher les produits chez le producteur (pas de frais de livraison).',
+    title: 'Collecter soi-même les produits',
+    description: 'Vous devrez aller chercher vous-même la commande chez le producteur une fois la commande clôturée.',
   },
 ];
 
@@ -183,6 +183,15 @@ const addDays = (date: Date, days: number) => {
   return next;
 };
 
+const addMonths = (date: Date, months: number) => {
+  const targetYear = date.getFullYear();
+  const targetMonth = date.getMonth() + months;
+  const targetDay = date.getDate();
+  const monthStart = new Date(targetYear, targetMonth, 1);
+  const monthLastDay = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+  return new Date(monthStart.getFullYear(), monthStart.getMonth(), Math.min(targetDay, monthLastDay));
+};
+
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -265,6 +274,8 @@ const deliveryDayIndexToKey: Record<number, DeliveryDay> = {
 const DELIVERY_GEOCODE_CACHE_KEY = 'delivery-geocode-cache';
 const DELIVERY_GEOCODE_CACHE_LIMIT = 50;
 const DELIVERY_GEOCODE_DEBOUNCE_MS = 650;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
 
 function getProductWeightKg(product: DeckCard) {
   if (product.weightKg) return product.weightKg;
@@ -341,6 +352,9 @@ export function CreateOrderForm({
   );
   const [pickupWindowWeeks, setPickupWindowWeeks] = React.useState(2);
   const [pickupDateSlots, setPickupDateSlots] = React.useState<PickupSlot[]>([]);
+  const [producerProfileMetaById, setProducerProfileMetaById] = React.useState<
+    Record<string, { name?: string | null }>
+  >({});
   const [deliveryGeoStatus, setDeliveryGeoStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -401,6 +415,14 @@ export function CreateOrderForm({
       producerLegal?.producerPickupEndTime,
     ]
   );
+  const producerProfileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    products.forEach((product) => {
+      if (isUuid(product.producerId)) ids.add(product.producerId);
+    });
+    if (producer?.id && isUuid(producer.id)) ids.add(producer.id);
+    return Array.from(ids);
+  }, [products, producer?.id]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -417,6 +439,42 @@ export function CreateOrderForm({
       // ignore cache parse errors
     }
   }, []);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || producerProfileIds.length === 0) {
+      setProducerProfileMetaById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from('profiles')
+      .select('id, name')
+      .in('id', producerProfileIds)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('[CreateOrderForm] producer profile names load error:', error);
+          setProducerProfileMetaById({});
+          return;
+        }
+        const mapped: Record<string, { name?: string | null }> = {};
+        (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+          const id = typeof row.id === 'string' ? row.id : '';
+          if (!id) return;
+          mapped[id] = {
+            name: (row.name as string | null) ?? null,
+          };
+        });
+        setProducerProfileMetaById(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [producerProfileIds, supabaseClient]);
 
   const readGeocodeCache = React.useCallback((key: string) => geocodeCacheRef.current.get(key), []);
   const writeGeocodeCache = React.useCallback((key: string, coords: GeoPoint) => {
@@ -582,7 +640,7 @@ export function CreateOrderForm({
       let eligible = authorized;
       let reason: string | undefined;
       if (!authorized) {
-        reason = 'Non propose par le producteur.';
+        reason = 'Non proposé par le producteur.';
       } else {
         const weightCheck = resolveWeightMatch(optionConfig?.minWeight, optionConfig?.maxWeight);
         if (!weightCheck.ok) {
@@ -652,6 +710,13 @@ export function CreateOrderForm({
     producerLegal?.producerPickupStartTime && producerLegal?.producerPickupEndTime
       ? `${producerLegal.producerPickupStartTime} - ${producerLegal.producerPickupEndTime}`
       : 'Horaires à définir';
+  const producerPickupAddressLabel = React.useMemo(() => {
+    const street = producer?.address?.trim() ?? '';
+    const cityLine = [producer?.postcode?.trim(), producer?.city?.trim()].filter(Boolean).join(' ');
+    const parts = [street, cityLine].filter(Boolean);
+    if (parts.length > 0) return parts.join(', ');
+    return producer?.city?.trim() || 'Adresse du producteur a confirmer';
+  }, [producer?.address, producer?.city, producer?.postcode]);
   const deliveryRuleLabel = (() => {
     if (deliveryOption === 'producer_delivery') {
       return producerLegal?.producerDeliveryDays?.length
@@ -719,16 +784,20 @@ export function CreateOrderForm({
       ? Math.min(Math.max(totalWeightProducts, safeMinWeight), safeMaxWeight)
       : Math.max(totalWeightProducts, safeMinWeight);
   const completeWeight = safeMaxWeight > 0 ? safeMaxWeight : effectiveWeight;
-  const pricePerKgCandidates = selectedProductsData
+  const pricePerKgCandidatesCents = selectedProductsData
     .map((p) => {
-      if (p.measurement === 'kg') return p.price;
+      const basePriceCents = eurosToCents(p.price);
+      if (p.measurement === 'kg') return basePriceCents;
       const unitWeight = p.weightKg ?? 1;
-      return unitWeight > 0 ? p.price / unitWeight : p.price;
+      return unitWeight > 0 ? basePriceCents / unitWeight : basePriceCents;
     })
-    .filter((price) => Number.isFinite(price) && price > 0);
-  const minPricePerKg = pricePerKgCandidates.length > 0 ? Math.min(...pricePerKgCandidates) : 0;
-  const maxPricePerKg = pricePerKgCandidates.length > 0 ? Math.max(...pricePerKgCandidates) : 0;
+    .filter((priceCents) => Number.isFinite(priceCents) && priceCents > 0);
+  const minPricePerKgCents =
+    pricePerKgCandidatesCents.length > 0 ? Math.min(...pricePerKgCandidatesCents) : 0;
+  const maxPricePerKgCents =
+    pricePerKgCandidatesCents.length > 0 ? Math.max(...pricePerKgCandidatesCents) : 0;
   const shareFraction = Math.min(Math.max(sharerPercentage / 100, 0), 0.8);
+  const shareFeeFraction = shareFraction > 0 && shareFraction < 1 ? shareFraction / (1 - shareFraction) : 0;
 
   const logisticCostByWeight = (weightKg: number) => {
     if (!weightKg || weightKg <= 0) return 0;
@@ -746,13 +815,17 @@ export function CreateOrderForm({
     return logisticCostByWeight(weightKg);
   };
 
-  const logTotal = effectiveWeight > 0 ? resolveDeliveryFee(effectiveWeight) : 0;
-  const logPerKg = effectiveWeight > 0 ? logTotal / effectiveWeight : 0;
-  const logPerKgComplete = completeWeight > 0 ? resolveDeliveryFee(completeWeight) / completeWeight : 0;
+  const logTotalCents = effectiveWeight > 0 ? eurosToCents(resolveDeliveryFee(effectiveWeight)) : 0;
+  const logPerKgCents = effectiveWeight > 0 ? logTotalCents / effectiveWeight : 0;
+  const logPerKgCompleteCents =
+    completeWeight > 0 ? eurosToCents(resolveDeliveryFee(completeWeight)) / completeWeight : 0;
   const minShareWeight = safeMinWeight > 0 ? safeMinWeight : effectiveWeight;
   const maxShareWeight = safeMaxWeight > 0 ? safeMaxWeight : completeWeight;
-  const logPerKgAtMin = minShareWeight > 0 ? resolveDeliveryFee(minShareWeight) / minShareWeight : 0;
-  const logPerKgAtMax = maxShareWeight > 0 ? resolveDeliveryFee(maxShareWeight) / maxShareWeight : 0;
+  const logPerKgAtMinCents =
+    minShareWeight > 0 ? eurosToCents(resolveDeliveryFee(minShareWeight)) / minShareWeight : 0;
+  const logPerKgAtMaxCents =
+    maxShareWeight > 0 ? eurosToCents(resolveDeliveryFee(maxShareWeight)) / maxShareWeight : 0;
+  const logTotal = centsToEuros(logTotalCents);
   const estimatedDeliveryDate = React.useMemo(() => {
     if (!deadline) return null;
     const baseDate = new Date(deadline);
@@ -803,6 +876,8 @@ export function CreateOrderForm({
   const today = React.useMemo(() => new Date(), []);
   const todayKey = toDateKey(today);
   const createdAtDay = React.useMemo(() => parseDateValue(today), [today]);
+  const deadlineMinDate = React.useMemo(() => toDateKey(today), [today]);
+  const deadlineMaxDate = React.useMemo(() => toDateKey(addMonths(today, 1)), [today]);
   const deadlineDay = React.useMemo(() => parseDateValue(deadline), [deadline]);
   const estimatedDeliveryDay = React.useMemo(
     () => parseDateValue(estimatedDeliveryDate ?? null),
@@ -867,18 +942,20 @@ export function CreateOrderForm({
 
   const perProductRows = selectedProductsData.map((p) => {
     const hasPrice = hasValidLotPrice(p);
-    const weight = p.weightKg ?? 1;
-    const logPerUnit = logPerKg * weight;
-    const basePlusLog = p.price + logPerUnit;
-    const participantPrice = basePlusLog * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
-    const sharePerUnit = participantPrice - basePlusLog;
-    const logPerUnitAtMin = logPerKgAtMin * weight;
-    const basePlusLogAtMin = p.price + logPerUnitAtMin;
-    const participantPriceAtMin = basePlusLogAtMin * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
-    const logPerUnitComplete = logPerKgComplete * weight;
-    const basePlusLogComplete = p.price + logPerUnitComplete;
-    const participantPriceComplete =
-      basePlusLogComplete * (shareFraction > 0 ? 1 / (1 - shareFraction) : 1);
+    const unitWeightKg = p.weightKg ?? 1;
+    const basePriceCents = eurosToCents(p.price);
+    const unitDeliveryCents = Math.round(logPerKgCents * unitWeightKg);
+    const basePlusDeliveryCents = basePriceCents + unitDeliveryCents;
+    const unitSharerFeeCents = Math.round(basePlusDeliveryCents * shareFeeFraction);
+    const participantPriceCents = basePlusDeliveryCents + unitSharerFeeCents;
+    const unitDeliveryAtMinCents = Math.round(logPerKgAtMinCents * unitWeightKg);
+    const basePlusDeliveryAtMinCents = basePriceCents + unitDeliveryAtMinCents;
+    const unitSharerFeeAtMinCents = Math.round(basePlusDeliveryAtMinCents * shareFeeFraction);
+    const participantPriceAtMinCents = basePlusDeliveryAtMinCents + unitSharerFeeAtMinCents;
+    const unitDeliveryCompleteCents = Math.round(logPerKgCompleteCents * unitWeightKg);
+    const basePlusDeliveryCompleteCents = basePriceCents + unitDeliveryCompleteCents;
+    const unitSharerFeeCompleteCents = Math.round(basePlusDeliveryCompleteCents * shareFeeFraction);
+    const participantPriceCompleteCents = basePlusDeliveryCompleteCents + unitSharerFeeCompleteCents;
     const measurementLabel = p.measurement === 'kg' ? '/ Kg' : '/ unité';
     const sanitizedUnitLabel = (p.unit || '').trim();
     const unitWeightLabel =
@@ -902,12 +979,12 @@ export function CreateOrderForm({
     return {
       id: p.id,
       name: p.name,
-      basePrice: p.price,
-      logPerUnit,
-      sharePerUnit,
-      participantPrice,
-      participantPriceAtMin,
-      participantPriceComplete,
+      basePriceCents,
+      logPerUnitCents: unitDeliveryCents,
+      sharePerUnitCents: unitSharerFeeCents,
+      participantPriceCents,
+      participantPriceAtMinCents,
+      participantPriceCompleteCents,
       priceType,
       hasPrice,
     };
@@ -915,23 +992,32 @@ export function CreateOrderForm({
 
   const sharePriceLabels = perProductRows.reduce((acc, row) => {
     if (!row.hasPrice) return acc;
-    acc[row.id] = formatEurosFromCents(eurosToCents(row.participantPriceAtMin));
+    acc[row.id] = formatEurosFromCents(row.participantPriceAtMinCents);
     return acc;
   }, {} as Record<string, string>);
-  const shareTotalValue = perProductRows.reduce((sum, row) => {
+  const shareTotalCents = perProductRows.reduce((sum, row) => {
     const qty = shareQuantities[row.id] ?? 0;
-    return sum + row.participantPriceAtMin * qty;
+    return sum + row.participantPriceAtMinCents * qty;
   }, 0);
-  const shareTotalLabel = formatEurosFromCents(eurosToCents(shareTotalValue));
+  const shareTotalLabel = formatEurosFromCents(shareTotalCents);
 
-  const totalShareBase = perProductRows.reduce((sum, r) => sum + r.sharePerUnit, 0);
+  const totalShareBaseCents = perProductRows.reduce((sum, r) => sum + r.sharePerUnitCents, 0);
   const weightScale = totalWeightProducts > 0 ? effectiveWeight / totalWeightProducts : 1;
-  const totalShareEffective = totalShareBase * weightScale;
-  const shareMultiplier = shareFraction > 0 ? shareFraction / (1 - shareFraction) : 0;
-  const minShareAtThreshold =
-    minShareWeight > 0 ? (minPricePerKg + logPerKgAtMin) * shareMultiplier * minShareWeight : 0;
-  const maxShareAtThreshold =
-    maxShareWeight > 0 ? (maxPricePerKg + logPerKgAtMax) * shareMultiplier * maxShareWeight : 0;
+  const pickupShareBonusCents =
+    deliveryOption === 'producer_pickup' ? eurosToCents(normalizedPickupDeliveryFee) : 0;
+  const totalShareEffectiveCents = Math.round(totalShareBaseCents * weightScale) + pickupShareBonusCents;
+  const minShareAtThresholdCents =
+    minShareWeight > 0
+      ? Math.round((minPricePerKgCents + logPerKgAtMinCents) * shareFeeFraction * minShareWeight) +
+        pickupShareBonusCents
+      : pickupShareBonusCents;
+  const maxShareAtThresholdCents =
+    maxShareWeight > 0
+      ? Math.round((maxPricePerKgCents + logPerKgAtMaxCents) * shareFeeFraction * maxShareWeight) +
+        pickupShareBonusCents
+      : pickupShareBonusCents;
+  const minShareAtThreshold = centsToEuros(minShareAtThresholdCents);
+  const maxShareAtThreshold = centsToEuros(maxShareAtThresholdCents);
   const summaryRows = [
     {
       key: 'priceType',
@@ -944,35 +1030,35 @@ export function CreateOrderForm({
       label: 'Prix de base',
       className: 'is-right',
       render: (row: (typeof perProductRows)[number]) =>
-        formatEurosFromCents(eurosToCents(row.basePrice)),
+        formatEurosFromCents(row.basePriceCents),
     },
     {
       key: 'logPerUnit',
       label: 'Livraison',
       className: 'is-right',
       render: (row: (typeof perProductRows)[number]) =>
-        formatEurosFromCents(eurosToCents(row.logPerUnit)),
+        formatEurosFromCents(row.logPerUnitCents),
     },
     {
       key: 'sharePerUnit',
       label: 'Partageur',
       className: 'is-right',
       render: (row: (typeof perProductRows)[number]) =>
-        formatEurosFromCents(eurosToCents(row.sharePerUnit)),
+        formatEurosFromCents(row.sharePerUnitCents),
     },
       {
         key: 'participantPrice',
         label: 'Prix final au poids minimum',
         className: 'is-right',
         render: (row: (typeof perProductRows)[number]) =>
-          formatEurosFromCents(eurosToCents(row.participantPriceAtMin)),
+          formatEurosFromCents(row.participantPriceAtMinCents),
       },
     {
       key: 'participantPriceComplete',
       label: 'Prix final au poids maximum',
       className: 'is-right',
       render: (row: (typeof perProductRows)[number]) =>
-        formatEurosFromCents(eurosToCents(row.participantPriceComplete)),
+        formatEurosFromCents(row.participantPriceCompleteCents),
     },
   ];
 
@@ -1006,8 +1092,11 @@ export function CreateOrderForm({
   }, {} as Record<string, { producerName: string; products: DeckCard[] }>);
 
   const groupedByProducerEntries = Object.entries(groupedByProducer);
-  const primaryProducerName =
+  const primaryProducerId = groupedByProducerEntries[0]?.[0] ?? producer?.id ?? '';
+  const primaryProducerFallbackName =
     groupedByProducerEntries[0]?.[1]?.producerName ?? producer?.name ?? '';
+  const primaryProducerName =
+    producerProfileMetaById[primaryProducerId]?.name?.trim() || primaryProducerFallbackName;
   const producerProfileHandle = producer?.handle ?? null;
   const producerAvatarPath = producer?.avatarPath ?? null;
   const producerAvatarUpdatedAt = producer?.avatarUpdatedAt ?? null;
@@ -1022,7 +1111,12 @@ export function CreateOrderForm({
     navigate(`/profil/${encodeURIComponent(target)}`);
   }, [navigate, primaryProducerName, producerProfileHandle]);
 
-  const canReceiveCashShare = user?.accountType ? user.accountType !== 'individual' : false;
+  const canReceiveCashShare = Boolean(
+    user?.accountType &&
+      user.accountType !== 'individual' &&
+      user.legalEntity?.canReceiveSharerCash
+  );
+  const cashShareDisabledReason = 'Disponible uniquement pour les structures validées.';
 
   const participantOptionBaseClass =
     'flex-1 min-w-[160px] px-4 py-2 rounded-full border-2 text-sm font-semibold transition-colors';
@@ -1299,6 +1393,21 @@ export function CreateOrderForm({
       return;
     }
 
+    const creationDay = parseDateValue(new Date());
+    const parsedDeadline = parseDateValue(deadline);
+    const maxDeadline = creationDay ? addMonths(creationDay, 1) : null;
+    if (
+      parsedDeadline &&
+      creationDay &&
+      maxDeadline &&
+      (parsedDeadline.getTime() < creationDay.getTime() || parsedDeadline.getTime() > maxDeadline.getTime())
+    ) {
+      alert(
+        `La date de cloture doit etre comprise entre le ${creationDay.toLocaleDateString('fr-FR')} et le ${maxDeadline.toLocaleDateString('fr-FR')}.`
+      );
+      return;
+    }
+
     const activeSlots: PickupSlot[] = usePickupDate
       ? []
       : visibility === 'public'
@@ -1306,7 +1415,12 @@ export function CreateOrderForm({
         : pickupSlots.filter((slot) => hasTimeRange(slot) && slot.day);
 
     if (!user) {
-      toast.info('Connectez-vous pour creer une commande.');
+      toast.info('Connectez-vous pour créer une commande.');
+      return;
+    }
+
+    if (shareMode === 'cash' && !canReceiveCashShare) {
+      toast.error('Option indisponible: structure non validée pour recevoir la part en argent.');
       return;
     }
 
@@ -1322,8 +1436,9 @@ export function CreateOrderForm({
       return sum + getProductWeightKg(product) * qty;
     }, 0);
 
-    const baseTotal = perProductRows.reduce((sum, r) => sum + r.basePrice, 0);
-    const participantTotal = perProductRows.reduce((sum, r) => sum + r.participantPrice, 0);
+    const baseTotalCents = perProductRows.reduce((sum, r) => sum + r.basePriceCents, 0);
+    const participantTotalCents = perProductRows.reduce((sum, r) => sum + r.participantPriceCents, 0);
+    const participantTotal = centsToEuros(participantTotalCents);
 
     const orderDraft = {
       products: selectedProductsData,
@@ -1407,10 +1522,10 @@ export function CreateOrderForm({
       sharerPercentage,
       shareMode,
       sharerQuantities: shareQuantities,
-      baseTotalCents: eurosToCents(baseTotal),
-      deliveryFeeCents: eurosToCents(logTotal),
-      participantTotalCents: eurosToCents(participantTotal),
-      sharerShareCents: eurosToCents(totalShareEffective),
+      baseTotalCents,
+      deliveryFeeCents: logTotalCents,
+      participantTotalCents,
+      sharerShareCents: totalShareEffectiveCents,
       effectiveWeightKg: effectiveWeight,
       participantsVisibility: participantVisibility,
       slots: activeSlots.map((slot) => ({
@@ -1424,12 +1539,12 @@ export function CreateOrderForm({
       })),
     })
       .then((orderCode) => {
-        toast.success('Commande creee avec succes.');
+        toast.success('Commande créée avec succés.');
         navigate(`/cmd/${orderCode}`);
       })
       .catch((error) => {
         console.error('Order creation error:', error);
-        toast.error('Impossible de creer la commande.');
+        toast.error('Impossible de créer la commande.');
       })
       .finally(() => setIsSubmitting(false));
   };
@@ -1454,7 +1569,7 @@ export function CreateOrderForm({
       return new Date(pickupDate).toLocaleDateString('fr-FR');
     }
     if (visibility === 'public') {
-      if (!pickupWindowRange) return 'Date de livraison à définir';
+      if (!pickupWindowRange) return 'Date de récupération à définir';
       return `Du ${pickupWindowRange.start.toLocaleDateString('fr-FR')} au ${pickupWindowRange.end.toLocaleDateString('fr-FR')}`;
     }
     const active = pickupSlots.filter((slot) => hasTimeRange(slot));
@@ -1546,7 +1661,11 @@ export function CreateOrderForm({
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Ex : Foie gras - Quartier centre"
+                  placeholder={
+                    primaryProducerName
+                      ? `Commande chez ${primaryProducerName}`
+                      : 'Commande chez le producteur'
+                  }
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   required
                 />
@@ -1787,17 +1906,20 @@ export function CreateOrderForm({
                       <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{option.description}</div>
                       <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
                         {(option.id === 'producer_delivery' || option.id === 'producer_pickup') && (
-                          <div>Jours : {formatDaysList(optionConfig?.days)}</div>
+                          <div>Jours de la semaine possibles : {formatDaysList(optionConfig?.days)}</div>
                         )}
+                        {option.id === 'producer_pickup' && <div>Horaires : {pickupHoursLabel}</div>}
                         {option.id === 'chronofresh' && (
                           <div>
-                            Delai :{' '}
+                            Délai :{' '}
                             {fallbackLeadType === 'fixed_day'
                               ? `Jour fixe ${deliveryDayLabels[fallbackLeadFixedDay]}`
                               : `J+${fallbackLeadDays}`}
                           </div>
                         )}
-                        {option.id === 'producer_pickup' && <div>Horaires : {pickupHoursLabel}</div>}
+                        {option.id === 'producer_pickup' && (
+                          <div>Adresse de récupération : {producerPickupAddressLabel}</div>
+                        )}
                         <div>Seuils : {formatWeightRange(optionConfig?.minWeight, optionConfig?.maxWeight)}</div>
                       </div>
                       {!isEnabled && optionState?.reason ? (
@@ -1843,6 +1965,8 @@ export function CreateOrderForm({
                     type="date"
                     value={deadline}
                     onChange={(e) => setDeadline(e.target.value)}
+                    min={deadlineMinDate}
+                    max={deadlineMaxDate}
                     className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                   />
                 </div>
@@ -1871,7 +1995,7 @@ export function CreateOrderForm({
                 </div>
 
                 <div className="bg-[#F9FAFB] rounded-xl border border-gray-200 p-4 text-sm text-[#6B7280] space-y-2">
-                  <p className="text-[#1F2937] font-semibold">Date de livraison estimée</p>
+                  <p className="text-[#1F2937] font-semibold">Date de récupération estimée</p>
                   <p>
                     {estimatedDeliveryDate
                       ? estimatedDeliveryDate.toLocaleDateString('fr-FR')
@@ -1897,6 +2021,7 @@ export function CreateOrderForm({
                 className={`flex items-center gap-2 text-sm ${
                   canReceiveCashShare ? 'text-[#1F2937]' : 'text-[#9CA3AF]'
                 }`}
+                title={!canReceiveCashShare ? cashShareDisabledReason : undefined}
               >
                 <input
                   type="checkbox"
@@ -1904,8 +2029,11 @@ export function CreateOrderForm({
                   onChange={(e) => setShareMode(e.target.checked ? 'cash' : 'products')}
                   disabled={!canReceiveCashShare}
                 />
-                Recevoir la totalité de la part du partageur en argent. (option indisponible pour les profils de particuliers.)
+                Recevoir la totalité de la part du partageur en argent.
               </label>
+              {!canReceiveCashShare && (
+                <p className="mt-1 text-xs text-[#9CA3AF]">{cashShareDisabledReason}</p>
+              )}
             </div>
 
             {shareMode === 'products' && (
@@ -1972,9 +2100,6 @@ export function CreateOrderForm({
                 <p className="text-sm text-[#6B7280]">
                   Choisissez l'adresse de retrait et la période de disponibilité des produits.
                 </p>
-              </div>
-              <div className="text-sm text-[#6B7280]">
-                Disponibilité : <span className="text-[#FF6B4A] font-semibold">{renderPickupLine()}</span>
               </div>
             </div>
 
@@ -2065,7 +2190,7 @@ export function CreateOrderForm({
                 {visibility === 'public' ? (
                   <>
                     <div>
-                      <label className="block text-sm text-[#6B7280] mb-2">Durée de recupération</label>
+                      <label className="block text-sm text-[#6B7280] mb-2">Durée de la période de recupération</label>
                       <select
                         value={pickupWindowWeeks}
                         onChange={(e) => setPickupWindowWeeks(Number(e.target.value))}
@@ -2079,16 +2204,12 @@ export function CreateOrderForm({
                       <p className="text-xs text-[#6B7280] mt-2">
                         Date limite de retrait :{' '}
                         <span className="text-[#1F2937] font-semibold">
-                          {pickupWindowRange ? pickupWindowRange.end.toLocaleDateString('fr-FR') : 'A definir'}
+                          {pickupWindowRange ? pickupWindowRange.end.toLocaleDateString('fr-FR') : 'A définir'}
                         </span>
                       </p>
                     </div>
                     <div className="bg-white/70 border border-gray-100 rounded-2xl p-4 space-y-3 shadow-sm order-client-view__calendar-card">
                       <div className="order-client-view__calendar-header">
-                        <div className="flex items-center gap-2 text-xs uppercase text-[#6B7280] tracking-wide">
-                          <MapPin className="w-4 h-4 text-[#FF6B4A]" />
-                          Disponibilites de retrait
-                        </div>
                         <div className="order-client-view__calendar-nav">
                           <button
                             type="button"
@@ -2124,7 +2245,7 @@ export function CreateOrderForm({
                         </span>
                         <span className="order-client-view__calendar-legend-item">
                           <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--availability" />
-                          Recuperation
+                          Récuperation
                         </span>
                       </div>
                       <div className="order-client-view__calendar-grid">
@@ -2195,7 +2316,7 @@ export function CreateOrderForm({
                           <>
                             <div className="order-client-view__calendar-slots-header">
                               <span className="order-client-view__calendar-slots-title">
-                                Disponibilites le {selectedDateLabel}
+                                Disponibilités le {selectedDateLabel}
                               </span>
                               {selectedDateSlot.date && (
                                 <button
@@ -2253,15 +2374,15 @@ export function CreateOrderForm({
                             </div>
                             <p className="order-client-view__calendar-slots-note">
                               {selectedDateSlotEnabled
-                                ? 'Ce jour sera propose aux participants.'
+                                ? 'Ce jour sera proposé aux participants.'
                                 : 'Activez ce jour pour le proposer aux participants.'}
                             </p>
                           </>
                         ) : (
                           <p className="order-client-view__calendar-slots-note">
                             {pickupWindowRange
-                              ? 'Selectionnez un jour dans la periode de recuperation.'
-                              : 'Definissez une date de cloture pour generer les dates de retrait.'}
+                              ? 'Définissez les jours et heures de récuperation des produits.'
+                              : 'Définissez une date de clôture pour visualiser la période de récupération du produit.'}
                           </p>
                         )}
                       </div>
@@ -2276,7 +2397,7 @@ export function CreateOrderForm({
                           checked={usePickupDate}
                           onChange={(e) => setUsePickupDate(e.target.checked)}
                         />
-                        Choisir une date precise (valable pour les commandes privees uniquement)
+                        Choisir une date précise (valable pour les commandes privées uniquement)
                       </label>
                     )}
 
@@ -2338,25 +2459,22 @@ export function CreateOrderForm({
                   <>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
-                      <span>Définissez la duree pour calculer la date limite de retrait.</span>
+                      <span>1) Définissez la durée qu'ont les participants pour venir récupérer leurs produits après réception.</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
-                      <span>Indiquez vos disponibilites pour chaque jour de la plage.</span>
+                      <span>2) Indiquez vos disponibilités pour chaque jour de la plage. Sur ces plages de disponibilités les participants pourront faire des demandes de rendez-vous de récupération pour venir chercher leurs produits</span>
                     </div>
-                    {pickupWindowRange && (
-                      <div className="text-xs text-[#6B7280]">Plage : {pickupWindowLabel}</div>
-                    )}
                   </>
                 ) : usePickupDate ? (
                   <>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
-                      <span>Choisissez une date unique pour le retrait (commande privee).</span>
+                      <span>Choisissez une date unique pour le retrait (possible pour les commandes privées uniquement).</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
-                      <span>La date precise sera communiquee aux participants.</span>
+                      <span>La date précise sera communiquée aux participants.</span>
                     </div>
                   </>
                 ) : (
@@ -2367,7 +2485,7 @@ export function CreateOrderForm({
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
-                      <span>Precisez une plage horaire par jour pour eviter les confusions.</span>
+                      <span>Précisez une plage horaire par jour pour éviter les confusions.</span>
                     </div>
                   </>
                 )}
@@ -2393,9 +2511,7 @@ export function CreateOrderForm({
                     <span style={{ fontWeight: 600 }}>
                       {selectedDeliveryOption?.title ?? 'Non precise'}
                     </span>
-                  </p>
-                  <p>
-                    Coût livraison total : <span style={{ fontWeight: 600 }}>{logTotal.toFixed(2)} €</span>
+                    {' '}(Frais : <span style={{ fontWeight: 600 }}>{logTotal.toFixed(2)} €</span>)
                   </p>
                   <p>
                     Part partageur :{' '}
@@ -2411,7 +2527,7 @@ export function CreateOrderForm({
                   </p>
                   {hasEstimatedDeliveryDate && (
                     <p>
-                      Date de livraison estimée :{' '}
+                      Date de récupération estimée :{' '}
                       <span style={{ fontWeight: 600 }}>
                         {estimatedDeliveryDate?.toLocaleDateString('fr-FR')}
                       </span>

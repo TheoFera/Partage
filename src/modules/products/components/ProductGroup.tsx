@@ -44,6 +44,11 @@ export interface ProductGroupDescriptor {
   avatarUpdatedAt?: string | null;
 }
 
+export type ProductOpenContext = {
+  orderCode?: string | null;
+  lotCode?: string | null;
+};
+
 const productFilterOptions = [
   { id: 'fruits-legumes', label: 'Fruits & Légumes' },
   { id: 'poissons-fruits-de-mer', label: 'Poissons & Fruits de mer' },
@@ -447,7 +452,7 @@ export function ProductGroupContainer({
   onRemoveFromDeck?: (productId: string) => void;
   onToggleSelection?: (product: Product, isSelected: boolean) => void;
   onCreateOrder?: (product: Product) => void;
-  onOpenProduct: (productId: string) => void;
+  onOpenProduct: (productId: string, context?: ProductOpenContext) => void;
   onOpenOrder?: (orderId: string) => void;
   onOpenProducer?: (product: Product) => void;
   onOpenSharer?: (sharerName: string) => void;
@@ -462,12 +467,14 @@ export function ProductGroupContainer({
   const [headerHover, setHeaderHover] = React.useState(false);
   const [bodyHover, setBodyHover] = React.useState(false);
   const [supportsHover, setSupportsHover] = React.useState(true);
+  const [prefersReducedMotion, setPrefersReducedMotion] = React.useState(false);
   const [overlayOpen, setOverlayOpen] = React.useState(false);
   const isOrder = group.variant === 'order';
   const firstProduct = group.products[0];
   const orderAvatarFallback = DEFAULT_PROFILE_AVATAR;
   const hasAvatar = true;
   const orderActionText = orderActionLabel ?? 'Participer';
+  const orderCodeContext = isOrder ? group.orderId ?? null : null;
 
   // Index de départ des produits visibles dans le carrousel
   const [startIndex, setStartIndex] = React.useState(0);
@@ -498,16 +505,23 @@ export function ProductGroupContainer({
     flex: '0 0 auto',
     paddingInline: CONTAINER_SIDE_PADDING,
   };
+  const bodyPaddingStyle: React.CSSProperties = useCarousel
+    ? { paddingBlock: CONTAINER_SIDE_PADDING, paddingInline: 0 }
+    : { padding: CONTAINER_SIDE_PADDING };
 
   const hostLabel = isOrder
     ? group.sharerName || firstProduct?.producerName || group.title
     : getProducerCategoryLabel(group.tags);
   const shouldShowHostLabel = Boolean(hostLabel);
 
-  // Produits effectivement affichés
-  const productsToShow = useCarousel
-    ? group.products.slice(startIndex, startIndex + MAX_VISIBLE_CARDS)
-    : group.products;
+  const carouselGapPx = 8;
+  const carouselStep = CARD_WIDTH + carouselGapPx;
+  const carouselOffsetPx = useCarousel ? startIndex * carouselStep : 0;
+  const carouselViewportMaxWidth =
+    MAX_VISIBLE_CARDS * CARD_WIDTH + (MAX_VISIBLE_CARDS - 1) * carouselGapPx;
+  const carouselTrackTransition = prefersReducedMotion
+    ? 'none'
+    : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)';
 
   const orderPriceLabels = React.useMemo(() => {
     if (!isOrder) return null;
@@ -554,6 +568,20 @@ export function ProductGroupContainer({
     if (!canScrollRight) return;
     setStartIndex((prev) => Math.min(prev + 1, maxIndex));
   };
+
+  React.useEffect(() => {
+    setStartIndex((prev) => Math.min(prev, maxIndex));
+  }, [maxIndex]);
+
+  const handleOpenProduct = React.useCallback(
+    (product: Product, productId: string) => {
+      onOpenProduct(productId, {
+        orderCode: orderCodeContext,
+        lotCode: product.activeLotCode ?? null,
+      });
+    },
+    [onOpenProduct, orderCodeContext]
+  );
 
   const orderProgress = React.useMemo(() => {
     if (group.variant !== 'order') return null;
@@ -704,6 +732,19 @@ export function ProductGroupContainer({
     if (typeof window === 'undefined') return;
     const media = window.matchMedia('(hover: hover) and (pointer: fine)');
     const update = () => setSupportsHover(media.matches);
+    update();
+    if (media.addEventListener) {
+      media.addEventListener('change', update);
+      return () => media.removeEventListener('change', update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setPrefersReducedMotion(media.matches);
     update();
     if (media.addEventListener) {
       media.addEventListener('change', update);
@@ -1045,7 +1086,7 @@ export function ProductGroupContainer({
       {/* Corps : carrousel logique ou liste simple */}
       <div
         className="p-3 sm:p-4 flex-1 flex products-landing__group-body"
-        style={{ padding: CONTAINER_SIDE_PADDING }}
+        style={bodyPaddingStyle}
         onMouseEnter={() => {
           setBodyHover(true);
           setHeaderHover(true);
@@ -1063,7 +1104,7 @@ export function ProductGroupContainer({
       >
         {useCarousel ? (
           <div
-            className="relative w-full"
+            className="products-landing__cards-carousel relative w-full"
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
             onTouchCancel={handleTouchCancel}
@@ -1073,37 +1114,47 @@ export function ProductGroupContainer({
             onWheel={handleWheel}
             onMouseEnter={() => setBodyHover(true)}
             onMouseLeave={() => setBodyHover(false)}
-            >
+          >
             <div
-              className="flex gap-2 w-full justify-center"
-              style={{ alignItems: 'stretch', userSelect: 'none' }}
+              className="products-landing__cards-carousel-viewport"
+              style={{ maxWidth: `${carouselViewportMaxWidth}px` }}
             >
-              {productsToShow.map((product) => (
-                <div
-                  key={product.id}
-                  style={{
-                    width: `${CARD_WIDTH}px`,
-                    minWidth: `${CARD_WIDTH}px`,
-                    flex: `0 0 ${CARD_WIDTH}px`,
-                  }}
-                >
-                <ProductResultCard
-                  product={product}
-                  related={[]}
-                  canSave={canSave}
-                  inDeck={deckIds.has(product.id)}
-                  onSave={onSave}
-                  onRemove={onRemoveFromDeck}
-                  onToggleSelection={onToggleSelection}
-                  onOpenProducer={onOpenProducer}
-                  onOpen={onOpenProduct}
-                  showSelectionControl={showSelectionControl}
-                  compact
-                  cardWidth={CARD_WIDTH}
-                  priceLabelOverride={orderPriceLabels?.[product.id]}
-                />
-            </div>
-              ))}
+              <div
+                className="products-landing__cards-carousel-track"
+                style={{
+                  transform: `translate3d(${-carouselOffsetPx}px, 0, 0)`,
+                  transition: carouselTrackTransition,
+                  gap: `${carouselGapPx}px`,
+                }}
+              >
+                {group.products.map((product) => (
+                  <div
+                    key={product.id}
+                    className="products-landing__cards-carousel-item"
+                    style={{
+                      width: `${CARD_WIDTH}px`,
+                      minWidth: `${CARD_WIDTH}px`,
+                      flex: `0 0 ${CARD_WIDTH}px`,
+                    }}
+                  >
+                    <ProductResultCard
+                      product={product}
+                      related={[]}
+                      canSave={canSave}
+                      inDeck={deckIds.has(product.id)}
+                      onSave={onSave}
+                      onRemove={onRemoveFromDeck}
+                      onToggleSelection={onToggleSelection}
+                      onOpenProducer={onOpenProducer}
+                      onOpen={(productId) => handleOpenProduct(product, productId)}
+                      showSelectionControl={showSelectionControl}
+                      compact
+                      cardWidth={CARD_WIDTH}
+                      priceLabelOverride={orderPriceLabels?.[product.id]}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Flèches */}
@@ -1183,7 +1234,7 @@ export function ProductGroupContainer({
                   onRemove={onRemoveFromDeck}
                   onToggleSelection={onToggleSelection}
                   onOpenProducer={onOpenProducer}
-                  onOpen={onOpenProduct}
+                  onOpen={(productId) => handleOpenProduct(product, productId)}
                   showSelectionControl={showSelectionControl}
                   compact
                   cardWidth={CARD_WIDTH}

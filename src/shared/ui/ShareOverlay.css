@@ -1,0 +1,1166 @@
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(4px);
+}
+
+.share-overlay__card {
+  width: min(1080px, 100%);
+  max-height: min(92vh, 1100px);
+  overflow: auto;
+  border-radius: 28px;
+  border: 1px solid #f1e8d7;
+  background: #fffdfa;
+  box-shadow: 0 28px 56px -24px rgba(15, 23, 42, 0.45);
+}
+
+.share-overlay__header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f1e8d7;
+  background: rgba(255, 253, 250, 0.97);
+  backdrop-filter: blur(4px);
+}
+
+.share-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-overlay__action-button,
+.share-overlay__close-button,
+.share-overlay__copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid #ffd8c8;
+  background: #ffffff;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.share-overlay__close-button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.share-overlay__action-button:hover,
+.share-overlay__close-button:hover,
+.share-overlay__copy-button:hover {
+  transform: translateY(-1px);
+  border-color: #ff6b4a;
+  background: #fff3ec;
+}
+
+.share-overlay__copy-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.share-overlay__body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+}
+
+.share-overlay__section {
+  border: 1px solid #f1e8d7;
+  border-radius: 20px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 14px 24px -22px rgba(15, 23, 42, 0.35);
+}
+
+.share-overlay__hero {
+  text-align: center;
+}
+
+.share-overlay__hero-product {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.share-overlay__hero-product-media {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid #f1e8d7;
+  background: #f9fafb;
+  min-height: 180px;
+}
+
+.share-overlay__hero-product-image {
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  object-fit: cover;
+}
+
+.share-overlay__hero-profile {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.share-overlay__profile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-overlay__profile-avatar-frame {
+  width: 92px;
+  height: 92px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid #ffe1d4;
+  background: linear-gradient(135deg, #ff6b4a 0%, #ffd166 100%);
+  padding: 3px;
+  flex-shrink: 0;
+}
+
+.share-overlay__title {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 36px);
+  line-height: 1.12;
+  color: #1f2937;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.share-overlay__subtitle {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.45;
+  font-size: 15px;
+}
+
+.share-overlay__body-text {
+  margin: 0;
+  color: #374151;
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.share-overlay__body-text--multiline {
+  white-space: pre-line;
+}
+
+.share-overlay__price {
+  margin: 0;
+  color: #b45309;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.share-overlay__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #ffd8c8;
+  background: #fff4ed;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.share-overlay__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-overlay__chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.share-overlay__chip--warm {
+  border-color: #ffd8c8;
+  background: #fff4ed;
+  color: #b45309;
+}
+
+.share-overlay__chip--cool {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.share-overlay__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.share-overlay__section-head h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #1f2937;
+}
+
+.share-overlay__section-head span {
+  font-size: 11px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+.share-overlay__avatars-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.share-overlay__avatar-frame {
+  width: 62px;
+  height: 62px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid #ffe1d4;
+  background: #ffffff;
+}
+
+.share-overlay__avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.share-overlay__avatar-arrow {
+  font-size: 18px;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.share-overlay__callout {
+  border-color: #ffd8c8;
+  background: #fff7f2;
+}
+
+.share-overlay__section-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  font-weight: 700;
+}
+
+.share-overlay__product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.share-overlay__product-card {
+  border: 1px solid #f1e8d7;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fffdfa;
+}
+
+.share-overlay__product-image {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+}
+
+.share-overlay__product-content {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.share-overlay__product-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.share-overlay__product-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.share-overlay__product-price {
+  margin: 0;
+  font-size: 13px;
+  color: #b45309;
+  font-weight: 700;
+}
+
+.share-overlay__order-product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 145px));
+  justify-content: center;
+  gap: 10px;
+}
+
+.share-overlay__order-products-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  text-align: left;
+}
+
+.share-overlay__order-products-head::before {
+  content: '';
+  grid-column: 1;
+}
+
+.share-overlay__order-products-head h3 {
+  grid-column: 2;
+  text-align: center;
+}
+
+.share-overlay__order-products-count {
+  grid-column: 3;
+  justify-self: end;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.share-overlay__order-product-card {
+  border: 1px solid #f1e8d7;
+  border-radius: 14px;
+  background: #fffdfa;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 105px 1fr;
+  min-height: 220px;
+  height: 220px;
+}
+
+.share-overlay__order-product-image-wrap {
+  background: #f9fafb;
+}
+
+.share-overlay__order-product-image {
+  width: 100%;
+  height: 105px;
+  object-fit: cover;
+}
+
+.share-overlay__order-product-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
+  min-width: 0;
+}
+
+.share-overlay__order-product-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.share-overlay__order-product-producer {
+  margin: 0;
+  font-size: 10px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-overlay__order-product-category {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #ffe1d4;
+  background: #fff4ed;
+  color: #b45309;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.share-overlay__order-product-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1.15;
+  min-height: 30px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.share-overlay__order-product-pricing {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.share-overlay__order-product-price-main {
+  margin: 0;
+  font-size: 14px;
+  color: #b45309;
+  font-weight: 700;
+}
+
+.share-overlay__order-product-unit {
+  margin: 0;
+  font-size: 9px;
+  color: #374151;
+  line-height: 1.2;
+}
+
+.share-overlay__order-product-location {
+  margin: auto 0 0;
+  font-size: 10px;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-overlay__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-overlay__timeline-item {
+  display: flex;
+  gap: 10px;
+}
+
+.share-overlay__timeline-index {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ff6b4a;
+  margin-top: 5px;
+  box-shadow: 0 0 0 5px #fff1e6;
+  flex-shrink: 0;
+}
+
+.share-overlay__timeline-title {
+  margin: 0;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.share-overlay__timeline-meta {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.share-overlay__breakdown-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.share-overlay__breakdown-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #f1e8d7;
+  border-radius: 12px;
+  background: #fffdfa;
+  padding: 8px 10px;
+  color: #374151;
+  font-size: 14px;
+}
+
+.share-overlay__breakdown-item strong {
+  color: #1f2937;
+}
+
+.share-overlay__pie-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 250px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.share-overlay__pie-chart {
+  width: min(240px, 100%);
+  aspect-ratio: 1 / 1;
+  border-radius: 999px;
+  margin: 0 auto;
+  position: relative;
+  border: 1px solid #f1e8d7;
+}
+
+.share-overlay__pie-center {
+  position: absolute;
+  inset: 26%;
+  border-radius: 999px;
+  background: #fffdfa;
+  border: 1px solid #f1e8d7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.share-overlay__pie-center span {
+  color: #6b7280;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+
+.share-overlay__pie-center strong {
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.share-overlay__pie-legend {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+}
+
+.share-overlay__pie-legend-row {
+  border: 1px solid #f1e8d7;
+  border-radius: 12px;
+  background: #fffdfa;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.share-overlay__pie-legend-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #374151;
+}
+
+.share-overlay__pie-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.share-overlay__pie-legend-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: #6b7280;
+}
+
+.share-overlay__pie-legend-value strong {
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.share-overlay__calendar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.share-overlay__calendar-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #4b5563;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.share-overlay__calendar-legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.share-overlay__calendar-legend-swatch--deadline {
+  background: #dbeafe;
+  border-color: #bfdbfe;
+}
+
+.share-overlay__calendar-legend-swatch--delivery {
+  background: #fee2e2;
+  border-color: #fecaca;
+}
+
+.share-overlay__calendar-legend-swatch--pickup {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+}
+
+.share-overlay__calendar-address {
+  margin: 0 0 10px;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.share-overlay__calendar-address p {
+  margin: 0;
+}
+
+.share-overlay__calendar-address p + p {
+  margin-top: 2px;
+}
+
+.share-overlay__calendar-address strong {
+  color: #1f2937;
+}
+
+.share-overlay__calendar-months {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.share-overlay__calendar-months--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.share-overlay__calendar-month {
+  border: 1px solid #f1e8d7;
+  background: #fffdfa;
+  border-radius: 14px;
+  padding: 10px;
+}
+
+.share-overlay__calendar-month-title {
+  margin: 0 0 8px;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.share-overlay__calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.share-overlay__calendar-weekday {
+  text-align: center;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.share-overlay__calendar-day {
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.share-overlay__calendar-day--empty {
+  border-style: dashed;
+  background: #f9fafb;
+}
+
+.share-overlay__calendar-day--open-window {
+  background: #dbeafe;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.share-overlay__calendar-day--delivery-window {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.share-overlay__calendar-day--pickup-window {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.share-overlay__calendar-day--marker-deadline {
+  box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.25);
+}
+
+.share-overlay__calendar-day--marker-delivery {
+  box-shadow: inset 0 0 0 1px rgba(185, 28, 28, 0.25);
+}
+
+.share-overlay__calendar-day--marker-pickup {
+  box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.25);
+}
+
+.share-overlay__calendar-day-number {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.share-overlay__calendar-day-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.share-overlay__calendar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.share-overlay__calendar-dot--deadline {
+  background: #1d4ed8;
+}
+
+.share-overlay__calendar-dot--delivery {
+  background: #b91c1c;
+}
+
+.share-overlay__calendar-dot--pickup {
+  background: #166534;
+}
+
+.share-overlay__calendar-week-slots {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-overlay__calendar-week-slot-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #d1fae5;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.share-overlay__contact-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: #374151;
+  font-size: 14px;
+}
+
+.share-overlay__details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.share-overlay__detail-card {
+  border: 1px solid #f1e8d7;
+  border-radius: 12px;
+  background: #fffdfa;
+  padding: 10px;
+}
+
+.share-overlay__detail-label {
+  margin: 0;
+  color: #6b7280;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+.share-overlay__detail-value {
+  margin: 4px 0 0;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.share-overlay__qr-section {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.share-overlay__qr-box {
+  border: 1px dashed #ffcfbc;
+  background: #fff4ed;
+  border-radius: 16px;
+  padding: 10px;
+}
+
+.share-overlay__qr-box img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.share-overlay__link-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-overlay__link-value {
+  margin: 0;
+  border: 1px solid #f1e8d7;
+  border-radius: 12px;
+  background: #f9fafb;
+  padding: 10px;
+  font-size: 13px;
+  color: #1f2937;
+  word-break: break-all;
+}
+
+.share-overlay__filter {
+  position: relative;
+}
+
+.share-overlay__filter-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 220px;
+  border-radius: 14px;
+  border: 1px solid #f1e8d7;
+  background: #ffffff;
+  box-shadow: 0 24px 38px -24px rgba(15, 23, 42, 0.4);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 15;
+}
+
+.share-overlay__filter-title {
+  margin: 0 0 4px;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.share-overlay__filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #374151;
+  font-size: 12px;
+}
+
+.share-overlay__filter-row input {
+  accent-color: #ff6b4a;
+}
+
+@media (max-width: 900px) {
+  .share-overlay {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .share-overlay__card {
+    max-height: calc(100vh - 24px);
+  }
+
+  .share-overlay__hero-product {
+    grid-template-columns: 1fr;
+  }
+
+  .share-overlay__hero-product-media {
+    min-height: 150px;
+  }
+
+  .share-overlay__hero-product-image {
+    min-height: 150px;
+  }
+
+  .share-overlay__qr-section {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .share-overlay__qr-box {
+    width: min(220px, 100%);
+  }
+
+  .share-overlay__link-box {
+    width: 100%;
+  }
+
+  .share-overlay__pie-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .share-overlay__order-product-grid {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 130px));
+  }
+
+  .share-overlay__calendar-months--two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .share-overlay__header {
+    padding: 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .share-overlay__actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .share-overlay__body {
+    padding: 12px;
+  }
+
+  .share-overlay__section {
+    padding: 12px;
+  }
+
+  .share-overlay__hero-profile {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .share-overlay__title {
+    font-size: 26px;
+  }
+
+  .share-overlay__calendar-day {
+    min-height: 40px;
+    padding: 4px;
+  }
+
+  .share-overlay__calendar-day-number {
+    font-size: 11px;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  .share-overlay,
+  .share-overlay * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.share-overlay--printing > *:not(.share-overlay) {
+    display: none !important;
+  }
+
+  .share-overlay {
+    position: static !important;
+    inset: auto !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+  }
+
+  .share-overlay__card {
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border-radius: 0 !important;
+    border: 1px solid #d1d5db !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    width: 190mm !important;
+    max-width: 190mm !important;
+    height: 277mm !important;
+    max-height: 277mm !important;
+    overflow: hidden !important;
+    page-break-inside: avoid !important;
+  }
+
+  .share-overlay__print-canvas {
+    transform-origin: top left !important;
+    transform: scale(var(--share-print-scale, 1)) !important;
+    width: calc(100% * var(--share-print-inverse-scale, 1)) !important;
+  }
+
+  .share-overlay__header {
+    position: static !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+  }
+
+  .share-overlay__hide-print {
+    display: none !important;
+  }
+
+  .share-overlay__section {
+    break-inside: avoid;
+    box-shadow: none !important;
+    border-color: #e5e7eb !important;
+    background: #ffffff !important;
+  }
+
+  .share-overlay__qr-box {
+    border-style: solid;
+    background: #ffffff;
+  }
+
+  .share-overlay__calendar-day {
+    min-height: 36px;
+    position: relative;
+    border: 1px solid #6b7280 !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    border-left-width: 5px !important;
+  }
+
+  .share-overlay__calendar-day--open-window {
+    border-left-color: #1d4ed8 !important;
+    border-left-style: solid !important;
+    box-shadow: none !important;
+  }
+
+  .share-overlay__calendar-day--delivery-window {
+    border-left-color: #b91c1c !important;
+    border-left-style: solid !important;
+    box-shadow: none !important;
+  }
+
+  .share-overlay__calendar-day--pickup-window {
+    border-left-color: #166534 !important;
+    border-left-style: solid !important;
+    box-shadow: none !important;
+  }
+
+  .share-overlay__calendar-day--open-window .share-overlay__calendar-day-number {
+    color: #1d4ed8 !important;
+    font-weight: 800 !important;
+  }
+
+  .share-overlay__calendar-day--delivery-window .share-overlay__calendar-day-number {
+    color: #b91c1c !important;
+    font-weight: 800 !important;
+  }
+
+  .share-overlay__calendar-day--pickup-window .share-overlay__calendar-day-number {
+    color: #166534 !important;
+    font-weight: 800 !important;
+  }
+
+  .share-overlay__calendar-day--marker-deadline {
+    border-width: 2px !important;
+    border-color: #111827 !important;
+  }
+
+  .share-overlay__calendar-day--marker-delivery {
+    border-width: 2px !important;
+    border-style: dashed !important;
+    border-color: #374151 !important;
+  }
+
+  .share-overlay__calendar-day--marker-pickup {
+    border-width: 2px !important;
+    border-style: solid !important;
+    border-color: #6b7280 !important;
+  }
+
+  .share-overlay__calendar-dot--deadline {
+    background: #1d4ed8 !important;
+  }
+
+  .share-overlay__calendar-dot--delivery {
+    background: #b91c1c !important;
+  }
+
+  .share-overlay__calendar-dot--pickup {
+    background: #166534 !important;
+    border: 1px solid #111827 !important;
+  }
+
+  .share-overlay__calendar-legend-swatch--deadline {
+    background: transparent !important;
+    border: 2px solid #1d4ed8 !important;
+  }
+
+  .share-overlay__calendar-legend-swatch--delivery {
+    background: transparent !important;
+    border: 2px solid #b91c1c !important;
+  }
+
+  .share-overlay__calendar-legend-swatch--pickup {
+    background: transparent !important;
+    border: 2px solid #166534 !important;
+  }
+}

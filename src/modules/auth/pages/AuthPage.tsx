@@ -102,7 +102,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!supabaseClient) {
-      toast.error('Supabase n est pas configure. Utilisez le mode demo pour tester.');
+      toast.error('Supabase n est pas configuré. Utilisez le mode démo pour tester.');
       return;
     }
     setLoading(true);
@@ -113,10 +113,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         if (data.user) {
           onAuthSuccess(data.user);
           clearStoredRedirect();
-          toast.success('Connexion reussie');
+          toast.success('Connexion réussie');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.info('Verifiez vos emails pour confirmer votre connexion.');
+          toast.info('Vérifiez vos emails pour confirmer votre connexion.');
         }
       } else if (activeMode === 'signup') {
         if (!isPasswordCompliant(password)) {
@@ -135,11 +135,11 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
             .eq('handle', safeHandle)
             .maybeSingle();
           if (existingError) {
-            toast.error('Impossible de verifier le tag pour le moment.');
+            toast.error('Impossible de vérifier le tag pour le moment.');
             return;
           }
           if (existing) {
-            toast.error('Ce tag est deja utilise. Merci d en choisir un autre.');
+            toast.error('Ce tag est déjà utilisé. Merci d en choisir un autre.');
             return;
           }
         }
@@ -170,7 +170,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.success('Compte cree et connecte');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.success('Compte cree. Consultez vos emails pour activer votre acces.');
+          toast.success('Compte crée. Consultez vos emails pour activer votre accès.');
         }
       } else if (activeMode === 'forgot') {
         const trimmedEmail = email.trim();
@@ -184,7 +184,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         );
         if (error) throw error;
         setResetEmailSent(true);
-        toast.success('Email envoye. Consultez votre boite pour reinitialiser votre mot de passe.');
+        toast.success('Email envoyé. Consultez votre boite pour réinitialiser votre mot de passe.');
       } else {
         if (!isPasswordCompliant(resetPassword)) {
           toast.error(`Le mot de passe doit respecter : ${passwordPolicyLabel}`);
@@ -243,7 +243,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       ? 'Créer un compte'
       : activeMode === 'forgot'
       ? 'Envoyer le lien'
-      : 'Mettre a jour le mot de passe';
+      : 'Mettre à jour le mot de passe';
 
   return (
     <div className="auth-page">
@@ -499,7 +499,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               <>
                 <div className="auth-form__col auth-form__col_single">
                   <p className="auth-form__helper">
-                    Saisissez votre email pour recevoir un lien de reinitialisation.
+                    Saisissez votre email pour recevoir un lien de réinitialisation.
                   </p>
                   <label className="auth-form__label">Email</label>
                   <div className="auth-form__input-wrapper">
@@ -516,7 +516,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                   </div>
                       {resetEmailSent ? (
                         <p className="auth-form__helper auth-form__helper--valid">
-                          Lien envoye. Pensez a verifier vos spams.
+                          Lien envoyé. Pensez a vérifier vos spams.
                         </p>
                       ) : null}
                 </div>
@@ -593,7 +593,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               {activeMode === 'login' || activeMode === 'signup' ? (
                 <>
                   <span className="auth-form__helper">
-                    {activeMode === 'login' ? 'Pas encore de compte ?' : 'Deja inscrit ?'}
+                    {activeMode === 'login' ? 'Pas encore de compte ?' : 'Déjà inscrit ?'}
                   </span>
                   <button
                     type="button"
@@ -605,7 +605,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                 </>
               ) : activeMode === 'forgot' ? (
                 <>
-                  <span className="auth-form__helper">Vous avez deja un compte ?</span>
+                  <span className="auth-form__helper">Vous avez déjà un compte ?</span>
                   <button type="button" onClick={() => setMode('login')} className="auth-link-button">
                     Retour à la connexion
                   </button>

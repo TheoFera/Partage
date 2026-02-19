@@ -15,3 +15,8 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/finalize-payment/deno.json"
 entrypoint = "./functions/finalize-payment/index.ts"
+
+[functions.generate_legal_document_pdf]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/generate_legal_document_pdf/index.ts"

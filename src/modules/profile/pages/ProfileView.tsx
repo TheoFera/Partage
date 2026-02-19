@@ -38,6 +38,60 @@ import {
 
 type TabKey = 'products' | 'orders' | 'selection';
 type EditTabKey = 'general' | 'public' | 'structure' | 'sharer' | 'producer_settings';
+type LegalDocumentType =
+  | 'producer_mandat'
+  | 'sharer_autofacturation';
+type LegalDocumentStatus = 'draft' | 'uploaded' | 'pending_review' | 'approved' | 'rejected';
+
+type LegalDocumentRow = {
+  id: string;
+  profile_id: string;
+  legal_entity_id: string | null;
+  doc_type: LegalDocumentType;
+  status: LegalDocumentStatus;
+  template_version: string;
+  generated_pdf_path: string | null;
+  signed_pdf_path: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  reviewer_profile_id: string | null;
+  rejection_reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const LEGAL_DOCUMENT_TEMPLATE_VERSION = 'v1';
+const PRODUCER_DOC_TYPES: LegalDocumentType[] = [
+  'producer_mandat',
+];
+
+const isLegalDocumentType = (value: string): value is LegalDocumentType =>
+  value === 'producer_mandat' ||
+  value === 'sharer_autofacturation';
+
+const getLegalDocumentStatusLabel = (status?: LegalDocumentStatus) => {
+  if (!status || status === 'draft') return 'A faire';
+  if (status === 'uploaded' || status === 'pending_review') return 'En attente';
+  if (status === 'approved') return 'Valide';
+  return 'Refuse';
+};
+
+const getLegalDocumentStatusClassName = (status?: LegalDocumentStatus) => {
+  if (!status || status === 'draft') return 'bg-gray-100 text-[#6B7280]';
+  if (status === 'uploaded' || status === 'pending_review') return 'bg-[#FFF7ED] text-[#B45309]';
+  if (status === 'approved') return 'bg-[#E6F6F0] text-[#0F5132]';
+  return 'bg-[#FEE2E2] text-[#B91C1C]';
+};
+
+const getSignedDocumentPath = (docType: LegalDocumentType, profileId: string, docId: string) => {
+  if (docType === 'producer_mandat') {
+    return `producers/${profileId}/mandat/${docId}.pdf`;
+  }
+  return `sharers/${profileId}/autofacturation/${docId}.pdf`;
+};
+
+const isPdfFile = (file: File) =>
+  file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 
 const deliveryDayOptions: Array<{ id: DeliveryDay; label: string }> = [
   { id: 'monday', label: 'Lundi' },
@@ -890,6 +944,11 @@ function ProfileEditPanel({
   const [producerPickupMaxWeight, setProducerPickupMaxWeight] = React.useState<number>(
     user.legalEntity?.producerPickupMaxWeight ?? 0
   );
+  const [legalEntityDbId, setLegalEntityDbId] = React.useState<string | null>(null);
+  const [legalDocumentsByType, setLegalDocumentsByType] = React.useState<Partial<Record<LegalDocumentType, LegalDocumentRow>>>({});
+  const [legalDocumentsLoading, setLegalDocumentsLoading] = React.useState(false);
+  const [downloadingDocType, setDownloadingDocType] = React.useState<LegalDocumentType | null>(null);
+  const [uploadingDocType, setUploadingDocType] = React.useState<LegalDocumentType | null>(null);
   const deliveryAddressQuery = React.useMemo(() => {
     const trimmedPostcode = postcode.trim();
     const trimmedCity = city.trim();
@@ -990,16 +1049,111 @@ function ProfileEditPanel({
   };
 
   const hasAddress = Boolean(address.trim() && city.trim() && postcode.trim());
-  const sharerEligible = Boolean(user.verified && hasAddress);
   const canBeProducer =
     accountType === 'company' || accountType === 'association' || accountType === 'public_institution';
+  const canRequestSharerAutofacturation = accountType !== 'individual';
   const hasLegalInfo = Boolean(legalName.trim() && siret.trim());
   const producerEligible = canBeProducer && hasLegalInfo;
   const sharerCharterAccepted = sharerCharterItems.every((item) => sharerCharterChecks[item.id]);
-  const computedRole: User['role'] = producerEligible ? 'producer' : sharerEligible ? 'sharer' : 'participant';
+  const computedRole: User['role'] = user.role;
   const structureTabVisible = accountType !== 'individual';
   const producerSettingsVisible = accountType !== 'individual' && accountType !== 'auto_entrepreneur';
   const producerSettingsDisabled = !producerEligible;
+  const requestedLegalDocumentTypes = React.useMemo(() => {
+    const types: LegalDocumentType[] = [];
+    if (canBeProducer) {
+      types.push(...PRODUCER_DOC_TYPES);
+    }
+    if (canRequestSharerAutofacturation) {
+      types.push('sharer_autofacturation');
+    }
+    return types;
+  }, [canBeProducer, canRequestSharerAutofacturation]);
+  const structureDocumentCards = React.useMemo(
+    () =>
+      [
+        canBeProducer
+          ? {
+              docType: 'producer_mandat' as LegalDocumentType,
+              title: 'Mandat producteur (facturation + encaissement)',
+              downloadLabel: 'Télécharger le mandat producteur (PDF pré-rempli)',
+            }
+          : null,
+        canRequestSharerAutofacturation
+          ? {
+              docType: 'sharer_autofacturation' as LegalDocumentType,
+              title: 'Autofacturation partageur pro',
+              downloadLabel: 'Télécharger l\'accord d\'autofacturation (PDF pré-rempli)',
+            }
+          : null,
+      ].filter((card): card is { docType: LegalDocumentType; title: string; downloadLabel: string } => card !== null),
+    [canBeProducer, canRequestSharerAutofacturation]
+  );
+  const producerDocsApproved = canBeProducer
+    ? PRODUCER_DOC_TYPES.every((docType) => legalDocumentsByType[docType]?.status === 'approved')
+    : false;
+  const producerDocsPendingReview = canBeProducer
+    ? PRODUCER_DOC_TYPES.every((docType) => {
+        const status = legalDocumentsByType[docType]?.status;
+        return status === 'pending_review' || status === 'uploaded' || status === 'approved';
+      }) && !producerDocsApproved
+    : false;
+
+  const loadLegalDocuments = React.useCallback(async () => {
+    if (!supabaseClient) {
+      setLegalEntityDbId(null);
+      setLegalDocumentsByType({});
+      setLegalDocumentsLoading(false);
+      return;
+    }
+
+    if (requestedLegalDocumentTypes.length === 0) {
+      setLegalEntityDbId(null);
+      setLegalDocumentsByType({});
+      setLegalDocumentsLoading(false);
+      return;
+    }
+
+    setLegalDocumentsLoading(true);
+    try {
+      const [{ data: legalEntityData, error: legalEntityError }, { data: docsData, error: docsError }] =
+        await Promise.all([
+          supabaseClient.from('legal_entities').select('id').eq('profile_id', user.id).maybeSingle(),
+          supabaseClient
+            .from('legal_documents')
+            .select('*')
+            .eq('profile_id', user.id)
+            .in('doc_type', requestedLegalDocumentTypes)
+            .order('created_at', { ascending: false }),
+        ]);
+
+      if (legalEntityError) {
+        console.warn('[ProfileView] legal entity fetch error', legalEntityError);
+      }
+      setLegalEntityDbId((legalEntityData as { id?: string } | null)?.id ?? null);
+
+      if (docsError) {
+        console.warn('[ProfileView] legal documents fetch error', docsError);
+        setLegalDocumentsByType({});
+        return;
+      }
+
+      const mapped: Partial<Record<LegalDocumentType, LegalDocumentRow>> = {};
+      (docsData as Array<Record<string, unknown>> | null)?.forEach((row) => {
+        const docType = typeof row.doc_type === 'string' ? row.doc_type : '';
+        if (!isLegalDocumentType(docType)) return;
+        if (mapped[docType]) return;
+        mapped[docType] = row as unknown as LegalDocumentRow;
+      });
+      setLegalDocumentsByType(mapped);
+    } finally {
+      setLegalDocumentsLoading(false);
+    }
+  }, [requestedLegalDocumentTypes, supabaseClient, user.id]);
+
+  React.useEffect(() => {
+    void loadLegalDocuments();
+  }, [loadLegalDocuments]);
 
   React.useEffect(() => {
     let isActive = true;
@@ -1199,6 +1353,148 @@ function ProfileEditPanel({
     setEditTab('general');
   }, [editTab, editTabs]);
 
+  const getDocumentRecord = React.useCallback(
+    (docType: LegalDocumentType) => legalDocumentsByType[docType] ?? null,
+    [legalDocumentsByType]
+  );
+
+  const ensureDocumentRecord = React.useCallback(
+    async (docType: LegalDocumentType) => {
+      if (!supabaseClient) return null;
+      const existing = getDocumentRecord(docType);
+      if (existing) return existing;
+
+      const { data, error } = await supabaseClient
+        .from('legal_documents')
+        .insert({
+          profile_id: user.id,
+          legal_entity_id: legalEntityDbId,
+          doc_type: docType,
+          status: 'draft',
+          template_version: LEGAL_DOCUMENT_TEMPLATE_VERSION,
+        })
+        .select('*')
+        .maybeSingle();
+
+      if (error) {
+        if ((error as { code?: string }).code === '23505') {
+          const { data: conflictData } = await supabaseClient
+            .from('legal_documents')
+            .select('*')
+            .eq('profile_id', user.id)
+            .eq('doc_type', docType)
+            .eq('template_version', LEGAL_DOCUMENT_TEMPLATE_VERSION)
+            .in('status', ['draft', 'uploaded', 'pending_review', 'approved'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          return (conflictData as LegalDocumentRow | null) ?? null;
+        }
+        console.warn('[ProfileView] create legal document draft error', error);
+        toast.error('Impossible de preparer ce document.');
+        return null;
+      }
+
+      return (data as LegalDocumentRow | null) ?? null;
+    },
+    [getDocumentRecord, legalEntityDbId, supabaseClient, user.id]
+  );
+
+  const handleDownloadLegalDocument = React.useCallback(
+    async (docType: LegalDocumentType) => {
+      if (!supabaseClient) {
+        toast.error('Supabase non configuré.');
+        return;
+      }
+
+      setDownloadingDocType(docType);
+      const { data, error } = await supabaseClient.functions.invoke('generate_legal_document_pdf', {
+        body: {
+          doc_type: docType,
+          template_version: LEGAL_DOCUMENT_TEMPLATE_VERSION,
+        },
+      });
+      setDownloadingDocType(null);
+
+      if (error) {
+        console.warn('[ProfileView] generate legal document error', error);
+        toast.error('Impossible de générer le PDF pré-rempli.');
+        return;
+      }
+
+      const signedUrl = (data as { signedUrl?: string } | null)?.signedUrl;
+      if (!signedUrl) {
+        toast.error('URL de téléchargement indisponible.');
+        return;
+      }
+
+      window.open(signedUrl, '_blank', 'noopener,noreferrer');
+    },
+    [supabaseClient]
+  );
+
+  const handleUploadLegalDocument = React.useCallback(
+    async (docType: LegalDocumentType, file: File) => {
+      if (!supabaseClient) {
+        toast.error('Supabase non configuré.');
+        return;
+      }
+      if (!isPdfFile(file)) {
+        toast.error('Seuls les fichiers PDF sont acceptés.');
+        return;
+      }
+
+      const existing = getDocumentRecord(docType);
+      if (existing?.status === 'approved') {
+        toast.info('Ce document est déjà validé.');
+        return;
+      }
+
+      setUploadingDocType(docType);
+      const record = await ensureDocumentRecord(docType);
+      if (!record) {
+        setUploadingDocType(null);
+        return;
+      }
+
+      const path = getSignedDocumentPath(docType, user.id, record.id);
+      const { error: uploadError } = await supabaseClient.storage
+        .from('signed_documents')
+        .upload(path, file, { upsert: true, contentType: 'application/pdf' });
+
+      if (uploadError) {
+        console.warn('[ProfileView] signed document upload error', uploadError);
+        toast.error('Upload du document signé impossible.');
+        setUploadingDocType(null);
+        return;
+      }
+
+      const { error: updateError } = await supabaseClient
+        .from('legal_documents')
+        .update({
+          legal_entity_id: legalEntityDbId,
+          status: 'pending_review',
+          signed_pdf_path: path,
+          submitted_at: new Date().toISOString(),
+          rejection_reason: null,
+        })
+        .eq('id', record.id)
+        .eq('profile_id', user.id);
+
+      if (updateError) {
+        console.warn('[ProfileView] legal document update error', updateError);
+        toast.error('Impossible de soumettre le document pour validation.');
+        setUploadingDocType(null);
+        return;
+      }
+
+      await loadLegalDocuments();
+      setUploadingDocType(null);
+      toast.success('Document envoyé. Validation en attente.');
+    },
+    [ensureDocumentRecord, getDocumentRecord, legalEntityDbId, loadLegalDocuments, supabaseClient, user.id]
+  );
+
   const handleSave = async () => {
     const socialLinks: Record<string, string | null> = {
       instagram: socialInstagram.trim() || null,
@@ -1297,7 +1593,6 @@ function ProfileEditPanel({
       postcode: postcode.trim(),
       phone: phone.trim(),
       accountType,
-      role: computedRole,
       handle: handleValue.trim() || defaultHandle,
       profileVisibility,
       addressVisibility,
@@ -1342,6 +1637,69 @@ function ProfileEditPanel({
         </span>
         <span className={isValid ? 'text-[#1F2937]' : 'text-[#6B7280]'}>{label}</span>
       </div>
+    );
+  };
+
+  const renderLegalDocumentCard = (card: {
+    docType: LegalDocumentType;
+    title: string;
+    downloadLabel: string;
+  }) => {
+    const doc = legalDocumentsByType[card.docType];
+    const status = doc?.status;
+    const isApproved = status === 'approved';
+    const isUploading = uploadingDocType === card.docType;
+    const isDownloading = downloadingDocType === card.docType;
+    const showRejectedReason = status === 'rejected' && Boolean(doc?.rejection_reason?.trim());
+    const uploadInputId = `legal-doc-upload-${card.docType}`;
+
+    return (
+      <article key={card.docType} className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="text-sm font-semibold text-[#1F2937]">{card.title}</h4>
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold ${getLegalDocumentStatusClassName(status)}`}
+          >
+            {getLegalDocumentStatusLabel(status)}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void handleDownloadLegalDocument(card.docType)}
+          disabled={isDownloading}
+          className="w-full rounded-lg border border-[#FF6B4A] px-3 py-2 text-sm font-medium text-[#FF6B4A] transition-colors hover:bg-[#FFF1ED] disabled:opacity-60"
+        >
+          {isDownloading ? 'Génération du PDF...' : card.downloadLabel}
+        </button>
+
+        <input
+          id={uploadInputId}
+          type="file"
+          accept="application/pdf,.pdf"
+          disabled={isApproved || isUploading}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            void handleUploadLegalDocument(card.docType, file);
+          }}
+          className="sr-only"
+        />
+        <label
+          htmlFor={uploadInputId}
+          className={`block w-full rounded-lg border border-[#FF6B4A] px-3 py-2 text-center text-sm font-medium text-[#FF6B4A] transition-colors ${
+            isApproved || isUploading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[#FFF1ED]'
+          }`}
+        >
+          {isUploading ? 'Envoi du PDF...' : 'Déposer le PDF signé'}
+        </label>
+
+        {isUploading && <p className="text-xs text-[#B45309]">Envoi en cours...</p>}
+        {showRejectedReason && (
+          <p className="text-xs text-[#B91C1C]">Motif du refus: {doc?.rejection_reason}</p>
+        )}
+      </article>
     );
   };
 
@@ -1662,88 +2020,113 @@ function ProfileEditPanel({
     }
     if (editTab === 'structure') {
       return (
-        <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
-            <span className="text-xs text-[#6B7280]">
-              Ces informations peuvent être complétées progressivement.
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-sm text-[#6B7280]">Raison sociale</label>
-              <input
-                type="text"
-                value={legalName}
-                onChange={(e) => setLegalName(e.target.value)}
-                placeholder="Votre entreprise"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              />
+        <div className="space-y-6">
+          <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-[#1F2937] font-semibold">Informations legales</h3>
+              <span className="text-xs text-[#6B7280]">
+                Ces informations peuvent etre completees progressivement.
+              </span>
             </div>
-            <div>
-              <label className="block text-sm text-[#6B7280]">SIRET</label>
-              <input
-                type="text"
-                value={siret}
-                onChange={(e) => setSiret(e.target.value)}
-                placeholder="123 456 789 00012"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-[#6B7280]">Regime TVA</label>
-              <select
-                value={vatRegime ?? 'unknown'}
-                onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              >
-                <option value="unknown">Selectionner un regime</option>
-                <option value="franchise">Franchise de base (TVA non applicable)</option>
-                <option value="assujetti">Assujetti a la TVA</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
-              <input
-                type="text"
-                value={vatNumber}
-                onChange={(e) => setVatNumber(e.target.value)}
-                placeholder="FRXX999999999"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-              />
-              {vatRegime === 'assujetti' && !vatNumber.trim() ? (
-                <p className="mt-2 text-xs text-[#B45309]">
-                  Le numero de TVA est requis pour un regime assujetti.
-                </p>
-              ) : null}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <label className="block text-sm text-[#6B7280]">Coordonnées bancaires</label>
-            <div className="grid md:grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
-                <label className="block text-sm text-[#6B7280]">Identité du compte</label>
+                <label className="block text-sm text-[#6B7280]">Raison sociale</label>
                 <input
                   type="text"
-                  value={accountHolderName}
-                  onChange={(e) => setAccountHolderName(e.target.value)}
-                  placeholder="Nom du titulaire"
+                  value={legalName}
+                  onChange={(e) => setLegalName(e.target.value)}
+                  placeholder="Votre entreprise"
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 />
               </div>
               <div>
-                <label className="block text-sm text-[#6B7280]">IBAN</label>
+                <label className="block text-sm text-[#6B7280]">SIRET</label>
                 <input
                   type="text"
-                  value={iban}
-                  onChange={(e) => setIban(e.target.value)}
-                  placeholder="FR76...."
+                  value={siret}
+                  onChange={(e) => setSiret(e.target.value)}
+                  placeholder="123 456 789 00012"
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 />
               </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Regime TVA</label>
+                <select
+                  value={vatRegime ?? 'unknown'}
+                  onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                >
+                  <option value="unknown">Selectionner un regime</option>
+                  <option value="franchise">Franchise de base (TVA non applicable)</option>
+                  <option value="assujetti">Assujetti a la TVA</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
+                <input
+                  type="text"
+                  value={vatNumber}
+                  onChange={(e) => setVatNumber(e.target.value)}
+                  placeholder="FRXX999999999"
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+                {vatRegime === 'assujetti' && !vatNumber.trim() ? (
+                  <p className="mt-2 text-xs text-[#B45309]">
+                    Le numero de TVA est requis pour un regime assujetti.
+                  </p>
+                ) : null}
+              </div>
             </div>
-          </div>
-        </section>
+            <div className="space-y-2">
+              <label className="block text-sm text-[#6B7280]">Coordonnees bancaires</label>
+              <div className="grid md:grid-cols-1 lg:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Identite du compte</label>
+                  <input
+                    type="text"
+                    value={accountHolderName}
+                    onChange={(e) => setAccountHolderName(e.target.value)}
+                    placeholder="Nom du titulaire"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">IBAN</label>
+                  <input
+                    type="text"
+                    value={iban}
+                    onChange={(e) => setIban(e.target.value)}
+                    placeholder="FR76...."
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {requestedLegalDocumentTypes.length > 0 && (
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h3 className="text-[#1F2937] font-semibold">Documents légaux</h3>
+                {legalDocumentsLoading && (
+                  <span className="text-xs text-[#6B7280]">Chargement...</span>
+                )}
+              </div>
+              {canBeProducer && (
+                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
+                  {producerDocsApproved
+                    ? 'Mandats producteur validés.'
+                    : producerDocsPendingReview
+                    ? 'Mandats de faturation et d encaissement en attente de validation.'
+                    : 'Afin Mandats producteur à signer.'}
+                </div>
+              )}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {structureDocumentCards.map((card) => renderLegalDocumentCard(card))}
+              </div>
+            </section>
+          )}
+        </div>
       );
     }
     if (editTab === 'sharer') {
@@ -1975,7 +2358,7 @@ function ProfileEditPanel({
             </div>
             {!supabaseClient && (
               <p className="text-xs text-[#9CA3AF]">
-                Supabase non configure : les labels ne seront pas sauvegardes.
+                Supabase non configuré : les labels ne seront pas sauvegardés.
               </p>
             )}
           </section>
@@ -2289,7 +2672,6 @@ function ProfileEditPanel({
       <div className="profile-edit-header flex items-center justify-between">
         <div>
           <h2 className="text-[#1F2937] text-xl font-semibold">Modifier le profil</h2>
-          <p className="text-sm text-[#6B7280]">Retrouvez les réglages de l'ancien profil.</p>
         </div>
         <button
           onClick={onClose}

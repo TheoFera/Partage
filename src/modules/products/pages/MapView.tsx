@@ -1,9 +1,11 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import L from 'leaflet';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import 'leaflet/dist/leaflet.css';
 import { DeckCard, GroupOrder, Product } from '../../../shared/types';
 import { ProductGroupContainer, ProductGroupDescriptor } from '../components/ProductGroup';
+import { ORDER_LOCATION_DISPLAY_RADIUS_M } from '../../../shared/constants/locationPrivacy';
 import {
   CARD_WIDTH,
   CARD_GAP,
@@ -43,6 +45,8 @@ const DESKTOP_SIDEBAR_BOTTOM_OFFSET = 72;
 const MOBILE_SIDEBAR_TOP_OFFSET = 64;
 const MOBILE_SIDEBAR_BOTTOM_OFFSET = 68;
 const MOBILE_TOGGLE_HEIGHT = 24;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value?: string | null) => Boolean(value && UUID_REGEX.test(value));
 
 type MapOrderPoint = {
   id: string;
@@ -50,6 +54,7 @@ type MapOrderPoint = {
   sharerName: string;
   lat: number;
   lng: number;
+  radiusMeters: number;
   products: Product[];
   areaLabel?: string;
 };
@@ -59,7 +64,10 @@ interface MapViewProps {
   deck: DeckCard[];
   onAddToDeck?: (product: Product) => void;
   onRemoveFromDeck: (productId: string) => void;
-  onOpenProduct?: (productId: string) => void;
+  onOpenProduct?: (
+    productId: string,
+    context?: { orderCode?: string | null; lotCode?: string | null }
+  ) => void;
   onOpenOrder: (orderId: string) => void;
   onOpenProducer: (product: Product) => void;
   onOpenSharer: (sharerName: string) => void;
@@ -67,6 +75,7 @@ interface MapViewProps {
   userRole: 'producer' | 'sharer' | 'participant';
   userLocation?: { lat: number; lng: number };
   userAddress?: string;
+  supabaseClient?: SupabaseClient | null;
 }
 
 function computeCenter(points: MapOrderPoint[]) {
@@ -110,6 +119,7 @@ export function MapView({
   userRole,
   userLocation,
   userAddress,
+  supabaseClient,
 }: MapViewProps) {
   const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
   const mapRef = React.useRef<L.Map | null>(null);
@@ -122,6 +132,9 @@ export function MapView({
   const [isMobile, setIsMobile] = React.useState(false);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [mobileContainerHeight, setMobileContainerHeight] = React.useState<number | null>(null);
+  const [profileMetaById, setProfileMetaById] = React.useState<
+    Record<string, { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }>
+  >({});
 
   const mapOrders = React.useMemo<MapOrderPoint[]>(() => {
     return orders
@@ -132,6 +145,7 @@ export function MapView({
         sharerName: order.sharerName,
         lat: order.mapLocation!.lat,
         lng: order.mapLocation!.lng,
+        radiusMeters: order.mapLocation?.radiusMeters ?? ORDER_LOCATION_DISPLAY_RADIUS_M,
         products: order.products,
         areaLabel: order.mapLocation?.areaLabel,
       }));
@@ -142,6 +156,57 @@ export function MapView({
     if (mapOrders.length) return computeCenter(mapOrders);
     return defaultCenter;
   }, [mapOrders, resolvedCenter?.lat, resolvedCenter?.lng]);
+
+  const profileIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    orders.forEach((order) => {
+      if (isUuid(order.sharerId)) ids.add(order.sharerId);
+      if (isUuid(order.producerId)) ids.add(order.producerId);
+    });
+    return Array.from(ids);
+  }, [orders]);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !profileIds.length) {
+      setProfileMetaById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    supabaseClient
+      .from('profiles')
+      .select('id, handle, avatar_path, avatar_updated_at, name')
+      .in('id', profileIds)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('Map profile avatars load error:', error);
+          setProfileMetaById({});
+          return;
+        }
+        const mapped: Record<
+          string,
+          { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+        > = {};
+        (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
+          const id = typeof row.id === 'string' ? row.id : '';
+          if (!id) return;
+          mapped[id] = {
+            path: (row.avatar_path as string | null) ?? null,
+            updatedAt: (row.avatar_updated_at as string | null) ?? null,
+            handle: (row.handle as string | null) ?? null,
+            name: (row.name as string | null) ?? null,
+          };
+        });
+        setProfileMetaById(mapped);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [profileIds, supabaseClient]);
 
   React.useEffect(() => {
     selectedOrderRef.current = selectedOrder;
@@ -183,14 +248,17 @@ export function MapView({
 
   const selectedGroup: ProductGroupDescriptor | null = React.useMemo(() => {
     if (!selectedOrder) return null;
+    const sharerMeta = profileMetaById[selectedOrder.sharerId];
+    const producerMeta = profileMetaById[selectedOrder.producerId];
+    const resolvedProducerName = producerMeta?.name?.trim() || selectedOrder.producerName;
     const productCountLabel =
       selectedOrder.products.length > 1
         ? `${selectedOrder.products.length} produits`
         : '1 produit';
     return {
       id: selectedOrder.id,
-      orderId: selectedOrder.id,
-      title: selectedOrder.title || selectedOrder.producerName,
+      orderId: selectedOrder.orderCode ?? selectedOrder.id,
+      title: selectedOrder.title || resolvedProducerName,
       location:
         selectedOrder.mapLocation?.areaLabel ||
         selectedOrder.pickupCity ||
@@ -207,21 +275,27 @@ export function MapView({
       orderedWeight: selectedOrder.orderedWeight,
       deliveryFeeCents: selectedOrder.deliveryFeeCents,
       deadline: selectedOrder.deadline,
+      profileHandle: sharerMeta?.handle ?? undefined,
+      avatarPath: sharerMeta?.path ?? null,
+      avatarUpdatedAt: sharerMeta?.updatedAt ?? null,
       avatarUrl: selectedOrder.products[0]?.imageUrl,
     };
-  }, [selectedOrder]);
+  }, [profileMetaById, selectedOrder]);
 
   const overlayGroups: ProductGroupDescriptor[] = React.useMemo(() => {
     const all = mapOrders
       .map((point) => {
         const order = orders.find((o) => o.id === point.id);
         if (!order) return null;
+        const sharerMeta = profileMetaById[order.sharerId];
+        const producerMeta = profileMetaById[order.producerId];
+        const resolvedProducerName = producerMeta?.name?.trim() || order.producerName;
         const productCountLabel =
           order.products.length > 1 ? `${order.products.length} produits` : '1 produit';
         return {
           id: order.id,
-          orderId: order.id,
-          title: order.title || order.producerName,
+          orderId: order.orderCode ?? order.id,
+          title: order.title || resolvedProducerName,
           location:
             order.mapLocation?.areaLabel ||
             order.pickupCity ||
@@ -238,6 +312,9 @@ export function MapView({
           orderedWeight: order.orderedWeight,
           deliveryFeeCents: order.deliveryFeeCents,
           deadline: order.deadline,
+          profileHandle: sharerMeta?.handle ?? undefined,
+          avatarPath: sharerMeta?.path ?? null,
+          avatarUpdatedAt: sharerMeta?.updatedAt ?? null,
           avatarUrl: order.products[0]?.imageUrl,
         } as ProductGroupDescriptor;
       })
@@ -246,7 +323,7 @@ export function MapView({
     if (!selectedGroup) return all;
     const others = all.filter((g) => g.id !== selectedGroup.id);
     return [selectedGroup, ...others];
-  }, [mapOrders, orders, selectedGroup]);
+  }, [mapOrders, orders, profileMetaById, selectedGroup]);
 
   const groupedOverlay = React.useMemo(() => {
     if (!selectedGroup) {
@@ -347,7 +424,7 @@ export function MapView({
       const isSelected = selectedOrderRef.current?.id === point.id;
 
       const circle = L.circle(latLng, {
-        radius: 400,
+        radius: point.radiusMeters,
         color: '#FF6B4A',
         weight: 1.5,
         fillColor: '#FF6B4A',
@@ -541,11 +618,12 @@ export function MapView({
                           group={group}
                           canSave={canSave}
                           deckIds={deckIds}
+                          supabaseClient={supabaseClient}
                           onSave={onAddToDeck}
                           onRemoveFromDeck={onRemoveFromDeck}
                           onToggleSelection={toggleSelection}
                           onCreateOrder={undefined}
-                          onOpenProduct={(productId) => onOpenProduct?.(productId)}
+                          onOpenProduct={(productId, context) => onOpenProduct?.(productId, context)}
                           onOpenOrder={onOpenOrder}
                           onOpenProducer={onOpenProducer}
                           onOpenSharer={onOpenSharer}
@@ -659,11 +737,12 @@ export function MapView({
                             group={group}
                             canSave={canSave}
                             deckIds={deckIds}
+                            supabaseClient={supabaseClient}
                             onSave={onAddToDeck}
                             onRemoveFromDeck={onRemoveFromDeck}
                             onToggleSelection={toggleSelection}
                             onCreateOrder={undefined}
-                            onOpenProduct={(productId) => onOpenProduct?.(productId)}
+                            onOpenProduct={(productId, context) => onOpenProduct?.(productId, context)}
                             onOpenOrder={onOpenOrder}
                             onOpenProducer={onOpenProducer}
                             onOpenSharer={onOpenSharer}
@@ -686,11 +765,12 @@ export function MapView({
                             group={group}
                             canSave={canSave}
                             deckIds={deckIds}
+                            supabaseClient={supabaseClient}
                             onSave={onAddToDeck}
                             onRemoveFromDeck={onRemoveFromDeck}
                             onToggleSelection={toggleSelection}
                             onCreateOrder={undefined}
-                            onOpenProduct={(productId) => onOpenProduct?.(productId)}
+                            onOpenProduct={(productId, context) => onOpenProduct?.(productId, context)}
                             onOpenOrder={onOpenOrder}
                             onOpenProducer={onOpenProducer}
                             onOpenSharer={onOpenSharer}

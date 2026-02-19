@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { SlidersHorizontal, Users, Leaf, ChevronDown } from 'lucide-react';
+import './FiltersPopover.css';
 
 type SearchScope = 'products' | 'producers' | 'combined';
 type FilterMode = 'products' | 'profiles';
@@ -28,6 +29,10 @@ interface FiltersPopoverProps {
   profileOptions?: FilterOption[];
   profileValues?: string[];
   onToggleProfile?: (id: string) => void;
+  distanceKm?: number;
+  onDistanceKmChange?: (value: number) => void;
+  minDistanceKm?: number;
+  maxDistanceKm?: number;
 }
 
 export function FiltersPopover({
@@ -48,11 +53,23 @@ export function FiltersPopover({
   profileOptions = [],
   profileValues = [],
   onToggleProfile,
+  distanceKm,
+  onDistanceKmChange,
+  minDistanceKm = 1,
+  maxDistanceKm = 50,
 }: FiltersPopoverProps) {
   const filterAnchor =
     typeof document !== 'undefined' ? document.getElementById('filters-anchor') : null;
   const isProfileMode = mode === 'profiles';
   const handleToggleProfile = onToggleProfile ?? (() => {});
+  const clampedDistanceKm =
+    typeof distanceKm === 'number'
+      ? Math.min(maxDistanceKm, Math.max(minDistanceKm, distanceKm))
+      : minDistanceKm;
+  const distanceProgressPercent =
+    maxDistanceKm > minDistanceKm
+      ? ((clampedDistanceKm - minDistanceKm) / (maxDistanceKm - minDistanceKm)) * 100
+      : 0;
 
   const popoverRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -140,6 +157,43 @@ export function FiltersPopover({
           <ScopeToggle active={scope === 'producers'} label="Producteurs" onClick={() => onScopeChange('producers')} />
         </div>
       )}
+
+      {!isProfileMode && typeof distanceKm === 'number' && onDistanceKmChange ? (
+        <div
+          style={{
+            borderRadius: 12,
+            border: '1px solid #E5E7EB',
+            background: '#FFFFFF',
+            padding: '10px 12px',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: '#374151' }}>Distance autour du code postal</p>
+            <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600 }}>{distanceKm} km</span>
+          </div>
+          <input
+            className="filters-popover__distance-range"
+            type="range"
+            min={minDistanceKm}
+            max={maxDistanceKm}
+            step={1}
+            value={distanceKm}
+            onChange={(event) => onDistanceKmChange(Number(event.target.value))}
+            style={
+              {
+                width: '100%',
+                '--range-progress': `${distanceProgressPercent}%`,
+              } as React.CSSProperties & { '--range-progress': string }
+            }
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6B7280' }}>
+            <span>{minDistanceKm} km</span>
+            <span>{maxDistanceKm} km</span>
+          </div>
+        </div>
+      ) : null}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
         {isProfileMode ? (

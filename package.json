@@ -54,6 +54,7 @@
             "zustand": "*"
       },
       "devDependencies": {
+            "@vitejs/plugin-basic-ssl": "*",
             "@types/leaflet": "^1.9.21",
             "@types/node": "^20.10.0",
             "@types/react": "^19.2.7",
@@ -64,6 +65,7 @@
       },
       "scripts": {
             "dev": "vite",
+            "dev:https": "vite --mode https",
             "build": "vite build"
       }
 }

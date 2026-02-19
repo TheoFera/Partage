@@ -1,8 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEMO_MODE } from '../../../shared/config/demoMode';
+import {
+  ORDER_LOCATION_DISPLAY_RADIUS_M,
+  ORDER_LOCATION_OBFUSCATION_MAX_M,
+  ORDER_LOCATION_OBFUSCATION_MIN_M,
+} from '../../../shared/constants/locationPrivacy';
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
 import { mockGroupOrders } from '../../../data/fixtures/mockData';
-import type { DbProduct, GroupOrder, Product, ProductListingRow } from '../../../shared/types';
+import type { DbLot, DbProduct, GroupOrder, Product, ProductListingRow } from '../../../shared/types';
 import {
   centsToEuros,
   type DbOrder,
@@ -148,7 +153,95 @@ const getClient = (): SupabaseClient => {
   }
 };
 
+const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EARTH_RADIUS_METERS = 6371000;
+
 const toDate = (value: string | null) => (value ? new Date(value) : null);
+
+type Coordinates = { lat: number; lng: number };
+type ObfuscationOffset = { distanceMeters: number; bearingRad: number };
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+const toDegrees = (value: number) => (value * 180) / Math.PI;
+
+const normalizeLongitude = (lng: number) => {
+  if (!Number.isFinite(lng)) return lng;
+  return ((lng + 540) % 360) - 180;
+};
+
+const toCoordinate = (lat?: number | null, lng?: number | null): Coordinates | null => {
+  if (!Number.isFinite(lat ?? NaN) || !Number.isFinite(lng ?? NaN)) return null;
+  const safeLat = Number(lat);
+  const safeLng = Number(lng);
+  if (safeLat < -90 || safeLat > 90 || safeLng < -180 || safeLng > 180) return null;
+  return { lat: safeLat, lng: safeLng };
+};
+
+const areCoordinatesEquivalent = (a: Coordinates, b: Coordinates) => {
+  const epsilon = 1e-9;
+  return Math.abs(a.lat - b.lat) <= epsilon && Math.abs(a.lng - b.lng) <= epsilon;
+};
+
+const sampleObfuscationOffset = (): ObfuscationOffset => {
+  const minDistance = Math.max(0, ORDER_LOCATION_OBFUSCATION_MIN_M);
+  const cappedMaxDistance = Math.max(0, ORDER_LOCATION_DISPLAY_RADIUS_M - 20);
+  const maxDistance = Math.max(minDistance, Math.min(ORDER_LOCATION_OBFUSCATION_MAX_M, cappedMaxDistance));
+  const minSquared = minDistance * minDistance;
+  const maxSquared = maxDistance * maxDistance;
+  const distanceMeters = Math.sqrt(Math.random() * (maxSquared - minSquared) + minSquared);
+  const bearingRad = Math.random() * Math.PI * 2;
+  return { distanceMeters, bearingRad };
+};
+
+const projectCoordinate = (
+  origin: Coordinates,
+  distanceMeters: number,
+  bearingRad: number
+): Coordinates => {
+  const angularDistance = distanceMeters / EARTH_RADIUS_METERS;
+  const lat1 = toRadians(origin.lat);
+  const lng1 = toRadians(origin.lng);
+  const sinLat1 = Math.sin(lat1);
+  const cosLat1 = Math.cos(lat1);
+  const sinAngularDistance = Math.sin(angularDistance);
+  const cosAngularDistance = Math.cos(angularDistance);
+  const sinLat2 = sinLat1 * cosAngularDistance + cosLat1 * sinAngularDistance * Math.cos(bearingRad);
+  const lat2 = Math.asin(Math.min(1, Math.max(-1, sinLat2)));
+  const y = Math.sin(bearingRad) * sinAngularDistance * cosLat1;
+  const x = cosAngularDistance - sinLat1 * Math.sin(lat2);
+  const lng2 = lng1 + Math.atan2(y, x);
+  return {
+    lat: toDegrees(lat2),
+    lng: normalizeLongitude(toDegrees(lng2)),
+  };
+};
+
+const obfuscateCoordinate = (origin: Coordinates, forcedOffset?: ObfuscationOffset): Coordinates => {
+  const offset = forcedOffset ?? sampleObfuscationOffset();
+  return projectCoordinate(origin, offset.distanceMeters, offset.bearingRad);
+};
+
+const buildObfuscatedOrderCoordinates = (params: {
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+}) => {
+  const delivery = toCoordinate(params.deliveryLat, params.deliveryLng);
+  const pickup = toCoordinate(params.pickupLat, params.pickupLng);
+  const sameSourcePoint = Boolean(delivery && pickup && areCoordinatesEquivalent(delivery, pickup));
+  const sharedOffset = sameSourcePoint ? sampleObfuscationOffset() : undefined;
+
+  const obfuscatedDelivery = delivery ? obfuscateCoordinate(delivery, sharedOffset) : null;
+  const obfuscatedPickup = pickup ? obfuscateCoordinate(pickup, sharedOffset) : null;
+
+  return {
+    deliveryLat: obfuscatedDelivery?.lat ?? null,
+    deliveryLng: obfuscatedDelivery?.lng ?? null,
+    pickupLat: obfuscatedPickup?.lat ?? null,
+    pickupLng: obfuscatedPickup?.lng ?? null,
+  };
+};
 
 const mapOrderRow = (row: DbOrder): Order => ({
   id: row.id,
@@ -330,7 +423,29 @@ const mapFactureLigneRow = (row: DbFactureLigne): FactureLigne => ({
   vatRate: Number(row.vat_rate),
   totalHtCents: row.total_ht_cents,
   totalTvaCents: row.total_tva_cents,
+  metadata: row.metadata ?? null,
 });
+
+const normalizeLabel = (value?: string | null) =>
+  (value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+const isPlatformCommissionLine = (line: FactureLigne) => {
+  const component = String((line.metadata as Record<string, unknown> | null)?.component ?? '').toLowerCase();
+  if (component === 'platform_commission') return true;
+  const label = normalizeLabel(line.label);
+  return label.includes('commission plateforme') || label.includes('commission de la plateforme');
+};
+
+const isSharerDiscountLine = (line: FactureLigne) => {
+  const component = String((line.metadata as Record<string, unknown> | null)?.component ?? '').toLowerCase();
+  if (component === 'sharer_discount') return true;
+  const label = normalizeLabel(line.label);
+  return label.includes('remise avantage partage') || label.includes('remise produits du partageur');
+};
 
 const buildImageUrl = (client: SupabaseClient, path?: string | null, bucket = PRODUCT_IMAGE_BUCKET) => {
   if (!path) return '';
@@ -437,11 +552,66 @@ const fetchProductsByCodes = async (client: SupabaseClient, productCodes: string
   return (data as ProductListingRow[]) ?? [];
 };
 
+type ActiveLotForProduct = {
+  id: string;
+  productId: string;
+  priceCents: number;
+  producedAt: string | null;
+  createdAt: string;
+};
+
+const pickLatestActiveLot = (lots: ActiveLotForProduct[]) => {
+  if (!lots.length) return null;
+  return lots
+    .slice()
+    .sort((a, b) => {
+      const aDate = Date.parse(a.producedAt ?? a.createdAt);
+      const bDate = Date.parse(b.producedAt ?? b.createdAt);
+      return bDate - aDate;
+    })[0];
+};
+
+const fetchLatestActiveLotsByProductId = async (client: SupabaseClient, productIds: string[]) => {
+  const map = new Map<string, ActiveLotForProduct>();
+  const uniqueProductIds = Array.from(new Set(productIds.filter(Boolean)));
+  if (!uniqueProductIds.length) return map;
+
+  const { data, error } = await client
+    .from('lots')
+    .select('id, product_id, status, produced_at, created_at, price_cents')
+    .in('product_id', uniqueProductIds)
+    .eq('status', 'active');
+  if (error) throw error;
+
+  const byProductId = new Map<string, ActiveLotForProduct[]>();
+  ((data as DbLot[] | null) ?? []).forEach((row) => {
+    const lot: ActiveLotForProduct = {
+      id: row.id,
+      productId: row.product_id,
+      priceCents: Number(row.price_cents ?? 0),
+      producedAt: row.produced_at ?? null,
+      createdAt: row.created_at,
+    };
+    const bucket = byProductId.get(lot.productId) ?? [];
+    bucket.push(lot);
+    byProductId.set(lot.productId, bucket);
+  });
+
+  byProductId.forEach((lots, productId) => {
+    const selected = pickLatestActiveLot(lots);
+    if (selected) map.set(productId, selected);
+  });
+
+  return map;
+};
+
 const fetchProfilesByIds = async (client: SupabaseClient, profileIds: string[]) => {
   if (!profileIds.length) return [] as Array<Record<string, unknown>>;
   const { data, error } = await client
     .from('profiles')
-    .select('id, name, handle, avatar_path, avatar_updated_at, address, address_details, city, postcode, opening_hours')
+    .select(
+      'id, name, handle, avatar_path, avatar_updated_at, phone_public, contact_email_public, address, address_details, city, postcode, opening_hours'
+    )
     .in('id', profileIds);
   if (error) throw error;
   return (data as Array<Record<string, unknown>>) ?? [];
@@ -694,8 +864,18 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
   if (productRows.length !== payload.productCodes.length) {
     throw new Error('Impossible de charger tous les produits selectionnes.');
   }
+  const activeLotsByProductId = await fetchLatestActiveLotsByProductId(
+    client,
+    productRows.map((row) => row.product_id as string)
+  );
 
   const producerProfileId = (productRows[0]?.producer_profile_id as string | null) ?? payload.userId;
+  const obfuscatedCoords = buildObfuscatedOrderCoordinates({
+    deliveryLat: payload.deliveryLat,
+    deliveryLng: payload.deliveryLng,
+    pickupLat: payload.pickupLat,
+    pickupLng: payload.pickupLng,
+  });
   const orderInsert = {
     created_by: payload.userId,
     sharer_profile_id: payload.userId,
@@ -719,8 +899,8 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
     delivery_address: payload.deliveryAddress ?? null,
     delivery_phone: payload.deliveryPhone ?? null,
     delivery_email: payload.deliveryEmail ?? null,
-    delivery_lat: payload.deliveryLat ?? null,
-    delivery_lng: payload.deliveryLng ?? null,
+    delivery_lat: obfuscatedCoords.deliveryLat,
+    delivery_lng: obfuscatedCoords.deliveryLng,
     estimated_delivery_date: payload.estimatedDeliveryDate
       ? payload.estimatedDeliveryDate.toISOString().slice(0, 10)
       : null,
@@ -729,8 +909,8 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
     pickup_city: payload.pickupCity ?? null,
     pickup_postcode: payload.pickupPostcode ?? null,
     pickup_address: payload.pickupAddress ?? null,
-    pickup_lat: payload.pickupLat ?? null,
-    pickup_lng: payload.pickupLng ?? null,
+    pickup_lat: obfuscatedCoords.pickupLat,
+    pickup_lng: obfuscatedCoords.pickupLng,
     use_pickup_date: payload.usePickupDate,
     pickup_date: payload.pickupDate ? payload.pickupDate.toISOString().slice(0, 10) : null,
     pickup_window_weeks: payload.pickupWindowWeeks ?? null,
@@ -761,7 +941,10 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
       productRow.unit_weight_kg,
       productRow.packaging
     );
-    const basePriceCents = Number(productRow.active_lot_price_cents ?? productRow.default_price_cents ?? 0);
+    const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
+    const basePriceCents = Number(
+      productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
+    );
     const pricing = calculateOrderItemPricing({
       order,
       basePriceCents,
@@ -837,6 +1020,11 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
         .map((entry) => {
           const productRow = productRows.find((row) => row.product_code === entry.code);
           if (!productRow) return null;
+          const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
+          const resolvedLotId = (productRow.active_lot_id as string | null) ?? fallbackLot?.id ?? null;
+          if (!resolvedLotId) {
+            throw new Error(`Lot actif introuvable pour le produit ${productRow.product_code}.`);
+          }
           const orderProduct = orderProductsById.get(productRow.product_id as string);
           const fallbackUnitWeightKg = resolveUnitWeightKg(
             productRow.sale_unit,
@@ -844,7 +1032,9 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
             productRow.packaging
           );
           const unitWeightKg = orderProduct?.unit_weight_kg ?? fallbackUnitWeightKg;
-          const basePriceCents = Number(productRow.active_lot_price_cents ?? productRow.default_price_cents ?? 0);
+          const basePriceCents = Number(
+            productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
+          );
           const unitBasePriceCents = orderProduct?.unit_base_price_cents ?? basePriceCents;
           const unitDeliveryCents = orderProduct?.unit_delivery_cents ?? 0;
           const unitSharerFeeCents = orderProduct?.unit_sharer_fee_cents ?? 0;
@@ -856,7 +1046,7 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
             order_id: order.id,
             participant_id: (sharerParticipant as DbOrderParticipant).id,
             product_id: productRow.product_id,
-            lot_id: null,
+            lot_id: resolvedLotId,
             quantity_units: entry.quantity,
             unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
             unit_weight_kg: unitWeightKg,
@@ -889,9 +1079,17 @@ export const getOrderByCode = async (orderCode: string): Promise<Order> => {
     return buildDemoOrder(demoOrder);
   }
   const client = getClient();
-  const { data, error } = await client.from('orders').select('*').eq('order_code', orderCode).maybeSingle();
-  if (error || !data) throw error ?? new Error('Commande introuvable.');
-  return mapOrderRow(data as DbOrder);
+  const byCode = await client.from('orders').select('*').eq('order_code', orderCode).maybeSingle();
+  if (byCode.error) throw byCode.error;
+  if (byCode.data) return mapOrderRow(byCode.data as DbOrder);
+
+  if (UUID_LIKE_REGEX.test(orderCode)) {
+    const byId = await client.from('orders').select('*').eq('id', orderCode).maybeSingle();
+    if (byId.error) throw byId.error;
+    if (byId.data) return mapOrderRow(byId.data as DbOrder);
+  }
+
+  throw new Error('Commande introuvable.');
 };
 
 export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> => {
@@ -959,6 +1157,8 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
       handle: (profile.handle as string | null) ?? null,
       avatarPath: (profile.avatar_path as string | null) ?? null,
       avatarUpdatedAt: (profile.avatar_updated_at as string | null) ?? null,
+      phonePublic: (profile.phone_public as string | null) ?? null,
+      contactEmailPublic: (profile.contact_email_public as string | null) ?? null,
       address: (profile.address as string | null) ?? null,
       addressDetails: (profile.address_details as string | null) ?? null,
       city: (profile.city as string | null) ?? null,
@@ -1315,25 +1515,38 @@ export const addItem = async (params: {
   if (itemsError) throw itemsError;
 
   const orderProduct = orderProductRow as DbOrderProduct;
-  const existingLotIds = ((existingItems as Array<{ lot_id: string | null }>) ?? [])
+  const existingOrderItems = (existingItems as Array<{ lot_id: string | null }>) ?? [];
+  const existingLotIds = existingOrderItems
     .map((item) => item.lot_id)
     .filter(Boolean) as string[];
-  const hasNullLot = ((existingItems as Array<{ lot_id: string | null }>) ?? []).some((item) => !item.lot_id);
+  let hasNullLot = existingOrderItems.some((item) => !item.lot_id);
   const existingLotId = existingLotIds.length ? existingLotIds[0] : null;
   const distinctLotIds = new Set(existingLotIds);
   if (distinctLotIds.size > 1) {
     throw new Error('Plusieurs lots detectes pour ce produit dans la commande.');
   }
-  if (existingLotId && hasNullLot) {
-    throw new Error('Lot incoherent pour ce produit dans la commande.');
+  let fallbackLotId: string | null = null;
+  if (!params.lotId && !existingLotId && !(productRow.active_lot_id as string | null)) {
+    const activeLotsByProductId = await fetchLatestActiveLotsByProductId(client, [params.productId]);
+    fallbackLotId = activeLotsByProductId.get(params.productId)?.id ?? null;
   }
+  const listingLotId = (productRow.active_lot_id as string | null) ?? fallbackLotId;
   if (existingLotId && params.lotId && params.lotId !== existingLotId) {
     throw new Error('Un seul lot est autorise pour ce produit dans la commande.');
   }
-  if (!existingLotId && params.lotId && hasNullLot) {
-    throw new Error('Ce produit contient deja des lignes sans lot. Fixez un seul lot pour toute la commande.');
+  const resolvedLotId = params.lotId ?? existingLotId ?? listingLotId ?? null;
+  if (!resolvedLotId) {
+    throw new Error('Lot actif introuvable pour ce produit.');
   }
-  const resolvedLotId = params.lotId ?? existingLotId ?? null;
+  if (hasNullLot) {
+    const { error: backfillLotError } = await client
+      .from('order_items')
+      .update({ lot_id: resolvedLotId })
+      .eq('order_id', params.orderId)
+      .eq('product_id', params.productId)
+      .is('lot_id', null);
+    if (backfillLotError) throw backfillLotError;
+  }
 
   const unitWeightKg =
     (isPositiveNumber(orderProduct.unit_weight_kg) ? orderProduct.unit_weight_kg : null) ??
@@ -1398,11 +1611,108 @@ export const removeItem = async (orderItemId: string, orderId: string, participa
   await recomputeCaches(orderId, participantId);
 };
 
+export const updateOrderItemQuantity = async (
+  orderItemId: string,
+  orderId: string,
+  participantId: string,
+  quantityUnits: number
+) => {
+  if (DEMO_MODE) {
+    throw new Error('Mise a jour indisponible en mode demo.');
+  }
+  const client = getClient();
+  const [
+    { data: orderRow, error: orderError },
+    { data: itemRow, error: itemError },
+  ] = await Promise.all([
+    client.from('orders').select('*').eq('id', orderId).maybeSingle(),
+    client.from('order_items').select('*').eq('id', orderItemId).maybeSingle(),
+  ]);
+  if (orderError || !orderRow) throw orderError ?? new Error('Commande introuvable.');
+  if (itemError || !itemRow) throw itemError ?? new Error('Ligne introuvable.');
+
+  const productId = (itemRow as DbOrderItem).product_id;
+  const [
+    { data: orderProductRow, error: orderProductError },
+    { data: productRow, error: productError },
+  ] = await Promise.all([
+    client
+      .from('order_products')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('product_id', productId)
+      .maybeSingle(),
+    client
+      .from('v_products_listing')
+      .select('*')
+      .eq('product_id', productId)
+      .maybeSingle(),
+  ]);
+  if (orderProductError || !orderProductRow) {
+    throw orderProductError ?? new Error('Produit non propose pour cette commande.');
+  }
+  if (productError || !productRow) throw productError ?? new Error('Produit introuvable.');
+
+  const orderProduct = orderProductRow as DbOrderProduct;
+  const unitWeightKg =
+    (isPositiveNumber(orderProduct.unit_weight_kg) ? orderProduct.unit_weight_kg : null) ??
+    resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging);
+  const unitBasePriceCents = orderProduct.unit_base_price_cents;
+  const pricing = calculateOrderItemPricing({
+    order: mapOrderRow(orderRow as DbOrder),
+    basePriceCents: unitBasePriceCents,
+    unitWeightKg,
+    quantityUnits,
+  });
+  const unitDeliveryCents = pricing.unitDeliveryCents;
+  const unitSharerFeeCents = pricing.unitSharerFeeCents;
+  const unitFinalPriceCents = pricing.unitFinalPriceCents;
+  const lineTotalCents = pricing.lineTotalCents;
+  const lineWeightKg = pricing.lineWeightKg;
+
+  const { error: updateError } = await client
+    .from('order_items')
+    .update({
+      quantity_units: quantityUnits,
+      unit_weight_kg: unitWeightKg,
+      unit_delivery_cents: unitDeliveryCents,
+      unit_sharer_fee_cents: unitSharerFeeCents,
+      unit_final_price_cents: unitFinalPriceCents,
+      line_total_cents: lineTotalCents,
+      line_weight_kg: lineWeightKg,
+    })
+    .eq('id', orderItemId);
+  if (updateError) throw updateError;
+
+  const { data: reservationRow } = await client
+    .from('lot_reservations')
+    .select('id')
+    .eq('order_item_id', orderItemId)
+    .maybeSingle();
+  if (reservationRow?.id) {
+    const payload = {
+      reserved_units: productRow.sale_unit === 'kg' ? null : quantityUnits,
+      reserved_kg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
+      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    };
+    await client.from('lot_reservations').update(payload).eq('id', reservationRow.id);
+  }
+
+  await recomputeCaches(orderId, participantId);
+};
+
 export const recomputeCaches = async (orderId: string, participantId?: string) => {
   const client = getClient();
   const { error } = await client.rpc('recompute_order_caches', {
     p_order_id: orderId,
     p_participant_id: participantId ?? null,
+  });
+  if (error) throw error;
+};
+
+const finalizeOrderPricingRpc = async (client: SupabaseClient, orderId: string) => {
+  const { error } = await client.rpc('finalize_order_pricing', {
+    p_order_id: orderId,
   });
   if (error) throw error;
 };
@@ -1449,6 +1759,11 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
     .select('order_id, product_id, sort_order')
     .in('order_id', orderIds);
   if (orderProductsError) throw orderProductsError;
+  const { data: orderPickupSlotsRows, error: orderPickupSlotsError } = await client
+    .from('order_pickup_slots')
+    .select('order_id, day, slot_date, label, enabled, start_time, end_time, sort_order')
+    .in('order_id', orderIds);
+  if (orderPickupSlotsError) throw orderPickupSlotsError;
 
   const orderProducts = (orderProductsRows as Array<{
     order_id: string;
@@ -1466,6 +1781,41 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
     orderProductMap.set(row.order_id, list);
   });
 
+  const pickupSlotMap = new Map<
+    string,
+    Array<{
+      day: string | null;
+      date: string | null;
+      label: string;
+      enabled: boolean;
+      start: string;
+      end: string;
+      sortOrder: number;
+    }>
+  >();
+  ((orderPickupSlotsRows as Array<{
+    order_id: string;
+    day: string | null;
+    slot_date: string | null;
+    label: string;
+    enabled: boolean;
+    start_time: string;
+    end_time: string;
+    sort_order: number;
+  }>) ?? []).forEach((row) => {
+    const list = pickupSlotMap.get(row.order_id) ?? [];
+    list.push({
+      day: row.day,
+      date: row.slot_date,
+      label: row.label,
+      enabled: Boolean(row.enabled),
+      start: row.start_time,
+      end: row.end_time,
+      sortOrder: Number.isFinite(row.sort_order) ? row.sort_order : 0,
+    });
+    pickupSlotMap.set(row.order_id, list);
+  });
+
   const productIds = Array.from(new Set(orderProducts.map((row) => row.product_id)));
   const productRows = await fetchProductsByIds(client, productIds);
   const productMap = new Map<string, Product>();
@@ -1476,9 +1826,16 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
 
   const profileIds = Array.from(new Set(rows.flatMap((row) => [row.sharer_profile_id, row.producer_profile_id])));
   const profiles = await fetchProfilesByIds(client, profileIds);
-  const profileMap = new Map<string, { name?: string | null }>();
+  const profileMap = new Map<
+    string,
+    { name?: string | null; avatarPath?: string | null; avatarUpdatedAt?: string | null }
+  >();
   profiles.forEach((profile) => {
-    profileMap.set(profile.id as string, { name: (profile.name as string | null) ?? null });
+    profileMap.set(profile.id as string, {
+      name: (profile.name as string | null) ?? null,
+      avatarPath: (profile.avatar_path as string | null) ?? null,
+      avatarUpdatedAt: (profile.avatar_updated_at as string | null) ?? null,
+    });
   });
 
   return rows.map((row) => {
@@ -1486,14 +1843,41 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
     const orderProductsForRow = (orderProductMap.get(row.id) ?? [])
       .slice()
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const orderPickupSlotsForRow = (pickupSlotMap.get(row.id) ?? [])
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .filter((slot) => slot.enabled);
     const products = orderProductsForRow
       .map((entry) => productMap.get(entry.productId))
       .filter(Boolean) as Product[];
-    const sharerName = profileMap.get(row.sharer_profile_id)?.name ?? 'Partageur';
-    const producerName = profileMap.get(row.producer_profile_id)?.name ?? products[0]?.producerName ?? 'Producteur';
-    const mapLat = order.pickupLat ?? order.deliveryLat ?? null;
-    const mapLng = order.pickupLng ?? order.deliveryLng ?? null;
-    const areaLabel = [order.pickupPostcode ?? order.deliveryPostcode, order.pickupCity ?? order.deliveryCity]
+    const sharerProfile = profileMap.get(row.sharer_profile_id);
+    const producerProfile = profileMap.get(row.producer_profile_id);
+    const sharerName = sharerProfile?.name ?? 'Partageur';
+    const producerName = producerProfile?.name ?? products[0]?.producerName ?? 'Producteur';
+    const prefersPickupLocation = order.deliveryOption === 'producer_pickup';
+    const primaryMapLat = prefersPickupLocation ? order.pickupLat : order.deliveryLat;
+    const primaryMapLng = prefersPickupLocation ? order.pickupLng : order.deliveryLng;
+    const fallbackMapLat = prefersPickupLocation ? order.deliveryLat : order.pickupLat;
+    const fallbackMapLng = prefersPickupLocation ? order.deliveryLng : order.pickupLng;
+    const hasPrimaryCoordinates =
+      Number.isFinite(primaryMapLat ?? NaN) && Number.isFinite(primaryMapLng ?? NaN);
+    const hasFallbackCoordinates =
+      Number.isFinite(fallbackMapLat ?? NaN) && Number.isFinite(fallbackMapLng ?? NaN);
+    const mapLat = hasPrimaryCoordinates
+      ? (primaryMapLat as number)
+      : hasFallbackCoordinates
+        ? (fallbackMapLat as number)
+        : null;
+    const mapLng = hasPrimaryCoordinates
+      ? (primaryMapLng as number)
+      : hasFallbackCoordinates
+        ? (fallbackMapLng as number)
+        : null;
+    const primaryPostcode = prefersPickupLocation ? order.pickupPostcode : order.deliveryPostcode;
+    const primaryCity = prefersPickupLocation ? order.pickupCity : order.deliveryCity;
+    const fallbackPostcode = prefersPickupLocation ? order.deliveryPostcode : order.pickupPostcode;
+    const fallbackCity = prefersPickupLocation ? order.deliveryCity : order.pickupCity;
+    const areaLabel = [primaryPostcode ?? fallbackPostcode, primaryCity ?? fallbackCity]
       .filter(Boolean)
       .join(' ');
     const mapLocation =
@@ -1501,19 +1885,24 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
         ? {
             lat: mapLat as number,
             lng: mapLng as number,
-            radiusMeters: 500,
+            radiusMeters: ORDER_LOCATION_DISPLAY_RADIUS_M,
             areaLabel: areaLabel || order.pickupAddress || order.deliveryAddress || 'Commande locale',
           }
         : undefined;
     return {
       id: order.id,
       orderCode: order.orderCode,
+      createdAt: order.createdAt ?? undefined,
       title: order.title,
       sharerId: order.sharerProfileId,
       sharerName,
+      sharerAvatarPath: sharerProfile?.avatarPath ?? null,
+      sharerAvatarUpdatedAt: sharerProfile?.avatarUpdatedAt ?? null,
       products,
       producerId: order.producerProfileId,
       producerName,
+      producerAvatarPath: producerProfile?.avatarPath ?? null,
+      producerAvatarUpdatedAt: producerProfile?.avatarUpdatedAt ?? null,
       sharerPercentage: order.sharerPercentage,
         sharerQuantities: order.sharerQuantities,
         minWeight: order.minWeightKg,
@@ -1536,7 +1925,13 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
       autoApprovePickupSlots: order.autoApprovePickupSlots,
       totalValue: centsToEuros(order.participantTotalCents),
       participants: 0,
-      pickupSlots: [],
+      pickupSlots: orderPickupSlotsForRow.map((slot) => ({
+        day: slot.day ?? undefined,
+        date: slot.date ?? undefined,
+        start: slot.start ?? undefined,
+        end: slot.end ?? undefined,
+        label: slot.label ?? undefined,
+      })),
       pickupDeliveryFee: centsToEuros(order.pickupDeliveryFeeCents),
       mapLocation,
     };
@@ -1549,6 +1944,7 @@ export const createPaymentStub = async (params: {
   amountCents: number;
   status?: Payment['status'];
   provider?: string;
+  raw?: Record<string, unknown>;
 }) => {
   if (DEMO_MODE) {
     const demoOrder = findDemoOrderById(params.orderId);
@@ -1571,7 +1967,7 @@ export const createPaymentStub = async (params: {
       paidAt: params.status === 'paid' ? now : null,
       failureCode: null,
       failureMessage: null,
-      raw: {},
+      raw: params.raw ?? {},
       createdAt: now,
       updatedAt: now,
     };
@@ -1587,6 +1983,7 @@ export const createPaymentStub = async (params: {
       amount_cents: params.amountCents,
       status: params.status ?? 'pending',
       provider: params.provider ?? 'stancer',
+      raw: params.raw ?? {},
     })
     .select('*')
     .single();
@@ -1634,8 +2031,50 @@ export const finalizePaymentSimulation = async (paymentId: string) => {
   const { data, error } = await client.functions.invoke('finalize-payment', {
     body: { paymentId },
   });
+  if (error) {
+    const response = (error as { context?: unknown }).context;
+    if (response instanceof Response) {
+      let extractedMessage: string | null = null;
+      try {
+        const payload = await response.clone().json() as { error?: unknown };
+        if (typeof payload?.error === 'string' && payload.error.trim()) {
+          extractedMessage = payload.error.trim();
+        }
+      } catch {
+        // Ignore JSON parse errors and fallback to text payload below.
+      }
+      if (!extractedMessage) {
+        try {
+          const text = await response.clone().text();
+          if (text.trim()) extractedMessage = text.trim();
+        } catch {
+          // Keep original error when response body cannot be parsed.
+        }
+      }
+      if (extractedMessage) throw new Error(extractedMessage);
+    }
+    throw error;
+  }
+  return data;
+};
+
+export const finalizeClosePayment = async (paymentId: string) => {
+  if (DEMO_MODE) {
+    return updatePaymentStatus(paymentId, 'paid');
+  }
+  const client = getClient();
+  const { data, error } = await client.rpc('finalize_close_payment', {
+    p_payment_id: paymentId,
+  });
   if (error) throw error;
   return data;
+};
+
+export const finalizeOrderPricing = async (orderId: string) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  await finalizeOrderPricingRpc(client, orderId);
+  return null;
 };
 
 export const createPlatformInvoiceForOrder = async (orderId: string) => {
@@ -1658,6 +2097,63 @@ export const createPlatformInvoiceAndSendForOrder = async (orderId: string) => {
   return data;
 };
 
+export const createLockClosePackage = async (orderId: string, useCoopBalance: boolean) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('create_lock_close_package', {
+    p_order_id: orderId,
+    p_use_coop_balance: useCoopBalance,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const issueSharerInvoiceAfterLock = async (orderId: string) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('issue_sharer_invoice_after_lock', {
+    p_order_id: orderId,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const triggerOutgoingEmails = async () => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('call_process_emails_sortants');
+  if (error) throw error;
+  return data;
+};
+
+export const issueParticipantInvoiceWithCoop = async (params: {
+  orderId: string;
+  profileId: string;
+  coopAppliedCents: number;
+}) => {
+  if (DEMO_MODE) return null;
+  const client = getClient();
+  const { data, error } = await client.rpc('issue_participant_invoice_with_coop', {
+    p_order_id: params.orderId,
+    p_profile_id: params.profileId,
+    p_coop_cents: params.coopAppliedCents,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const fetchCoopBalance = async (profileId: string): Promise<number> => {
+  if (DEMO_MODE) return 0;
+  const client = getClient();
+  const { data, error } = await client
+    .from('coop_balances')
+    .select('balance_cents')
+    .eq('profile_id', profileId)
+    .maybeSingle();
+  if (error) throw error;
+  return Number(data?.balance_cents ?? 0);
+};
+
 const fetchInvoices = async (filters: {
   orderId: string;
   serie: InvoiceSerie;
@@ -1666,7 +2162,13 @@ const fetchInvoices = async (filters: {
 }): Promise<Facture[]> => {
   if (DEMO_MODE) return [];
   const client = getClient();
-  let query = client.from('factures').select('*').eq('order_id', filters.orderId).eq('serie', filters.serie);
+  let query = client
+    .from('factures')
+    .select('*')
+    .eq('order_id', filters.orderId)
+    .eq('serie', filters.serie)
+    .order('issued_at', { ascending: false })
+    .order('created_at', { ascending: false });
   if (filters.clientProfileId) {
     query = query.eq('client_profile_id', filters.clientProfileId);
   }
@@ -1690,6 +2192,147 @@ export const fetchInvoiceLines = async (invoiceId: string): Promise<FactureLigne
   const { data, error } = await client.from('facture_lignes').select('*').eq('facture_id', invoiceId);
   if (error) throw error;
   return ((data as DbFactureLigne[] | null) ?? []).map(mapFactureLigneRow);
+};
+
+export type ProducerStatementSources = {
+  platformInvoice: Facture | null;
+  platformInvoiceLines: FactureLigne[];
+  platformCommissionCents: number | null;
+  platformCommissionLineIds: string[];
+  sharerInvoice: Facture | null;
+  sharerInvoiceLines: FactureLigne[];
+  sharerDiscountCents: number | null;
+  sharerDiscountLineIds: string[];
+  coopSurplusCents: number | null;
+  coopSurplusLedgerId: string | null;
+  participantGainsCents: number | null;
+  participantGainsLedgerRefs: string[];
+  participantCoopUsedCents: number | null;
+};
+
+export const fetchProducerStatementSources = async (params: {
+  orderId: string;
+  producerProfileId: string;
+  sharerProfileId: string;
+}): Promise<ProducerStatementSources> => {
+  if (DEMO_MODE) {
+    return {
+      platformInvoice: null,
+      platformInvoiceLines: [],
+      platformCommissionCents: null,
+      platformCommissionLineIds: [],
+      sharerInvoice: null,
+      sharerInvoiceLines: [],
+      sharerDiscountCents: null,
+      sharerDiscountLineIds: [],
+      coopSurplusCents: null,
+      coopSurplusLedgerId: null,
+      participantGainsCents: null,
+      participantGainsLedgerRefs: [],
+      participantCoopUsedCents: null,
+    };
+  }
+
+  const client = getClient();
+  const [platformInvoices, sharerInvoices] = await Promise.all([
+    fetchInvoices({
+      orderId: params.orderId,
+      serie: 'PLAT_PROD',
+      producerProfileId: params.producerProfileId,
+    }),
+    fetchInvoices({
+      orderId: params.orderId,
+      serie: 'PROD_CLIENT',
+      clientProfileId: params.sharerProfileId,
+    }),
+  ]);
+
+  const platformInvoice = platformInvoices[0] ?? null;
+  const sharerInvoice = sharerInvoices[0] ?? null;
+
+  const [platformInvoiceLines, sharerInvoiceLines] = await Promise.all([
+    platformInvoice ? fetchInvoiceLines(platformInvoice.id) : Promise.resolve([]),
+    sharerInvoice ? fetchInvoiceLines(sharerInvoice.id) : Promise.resolve([]),
+  ]);
+
+  const platformCommissionLines = platformInvoiceLines.filter(isPlatformCommissionLine);
+  const platformCommissionCents =
+    platformCommissionLines.length > 0
+      ? platformCommissionLines.reduce((sum, line) => sum + Math.max(0, line.totalTtcCents), 0)
+      : platformInvoice
+        ? Math.max(0, platformInvoice.totalTtcCents)
+        : null;
+
+  const sharerDiscountLines = sharerInvoiceLines.filter(isSharerDiscountLine);
+  const sharerDiscountCents =
+    sharerDiscountLines.length > 0
+      ? sharerDiscountLines.reduce((sum, line) => sum + Math.max(0, -line.totalTtcCents), 0)
+      : sharerInvoice
+        ? 0
+        : null;
+
+  const { data: coopRows, error: coopError } = await client
+    .from('coop_ledger')
+    .select('id, reason, delta_cents, created_at')
+    .eq('order_id', params.orderId)
+    .eq('profile_id', params.sharerProfileId)
+    .in('reason', ['create_surplus', 'sharer_surplus'])
+    .order('created_at', { ascending: false });
+  if (coopError) throw coopError;
+
+  const coopList =
+    (coopRows as Array<{ id: string; reason: string | null; delta_cents: number | null }> | null) ?? [];
+  const hasCreateSurplus = coopList.some((row) => row.reason === 'create_surplus');
+  const selectedReason = hasCreateSurplus ? 'create_surplus' : 'sharer_surplus';
+  const selectedRows = coopList.filter((row) => row.reason === selectedReason);
+  const coopSurplusCents =
+    selectedRows.length > 0
+      ? selectedRows.reduce((sum, row) => sum + Math.max(0, Number(row.delta_cents ?? 0)), 0)
+      : null;
+
+  const { data: participantGainRows, error: participantGainError } = await client
+    .from('coop_ledger')
+    .select('id, delta_cents, created_at')
+    .eq('order_id', params.orderId)
+    .eq('reason', 'participant_gain')
+    .neq('profile_id', params.sharerProfileId)
+    .order('created_at', { ascending: false });
+  if (participantGainError) throw participantGainError;
+
+  const participantGainList =
+    (participantGainRows as Array<{ id: string; delta_cents: number | null }> | null) ?? [];
+  const participantGainsCents = participantGainList.reduce(
+    (sum, row) => sum + Math.max(0, Number(row.delta_cents ?? 0)),
+    0
+  );
+
+  const { data: participantCoopRows, error: participantCoopError } = await client
+    .from('coop_ledger')
+    .select('delta_cents')
+    .eq('order_id', params.orderId)
+    .eq('reason', 'consume_order')
+    .neq('profile_id', params.sharerProfileId);
+  if (participantCoopError) throw participantCoopError;
+
+  const participantCoopUsedCents = (
+    (participantCoopRows as Array<{ delta_cents: number | null }> | null) ?? []
+  ).reduce((sum, row) => sum + Math.max(0, -Number(row.delta_cents ?? 0)), 0);
+
+  return {
+    platformInvoice,
+    platformInvoiceLines,
+    platformCommissionCents,
+    platformCommissionLineIds: platformCommissionLines.map((line) => line.id),
+    sharerInvoice,
+    sharerInvoiceLines,
+    sharerDiscountCents,
+    sharerDiscountLineIds: sharerDiscountLines.map((line) => line.id),
+    coopSurplusCents,
+    coopSurplusLedgerId: selectedRows[0]?.id ?? null,
+    participantGainsCents,
+    participantGainsLedgerRefs: participantGainList.map((row) => row.id),
+    participantCoopUsedCents,
+  };
 };
 
 export const getInvoiceDownloadUrl = async (invoice: Facture): Promise<string | null> => {
@@ -1717,6 +2360,42 @@ export const getParticipantByProfile = async (orderId: string, profileId: string
   if (error) throw error;
   if (!data) return null;
   return mapParticipantRow(data as DbOrderParticipant);
+};
+
+export const deleteParticipantIfNoActivity = async (params: {
+  orderId: string;
+  participantId: string;
+  profileId: string;
+}) => {
+  if (DEMO_MODE) return;
+  const client = getClient();
+  const [{ count: itemsCount, error: itemsError }, { count: paymentsCount, error: paymentsError }] =
+    await Promise.all([
+      client
+        .from('order_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', params.orderId)
+        .eq('participant_id', params.participantId),
+      client
+        .from('payments')
+        .select('id', { count: 'exact', head: true })
+        .eq('order_id', params.orderId)
+        .eq('participant_id', params.participantId),
+    ]);
+
+  if (itemsError) throw itemsError;
+  if (paymentsError) throw paymentsError;
+  if ((itemsCount ?? 0) > 0 || (paymentsCount ?? 0) > 0) return;
+
+  const { error: deleteError } = await client
+    .from('order_participants')
+    .delete()
+    .eq('id', params.participantId)
+    .eq('order_id', params.orderId)
+    .eq('profile_id', params.profileId)
+    .eq('role', 'participant');
+
+  if (deleteError) throw deleteError;
 };
 
 export const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<OrderStatus> => {
