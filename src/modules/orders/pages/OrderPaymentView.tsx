@@ -437,7 +437,7 @@ export function OrderPaymentView({
 
       <div className="order-payment-view__intro">
         <h2 className="order-payment-view__title">
-          {isClosePayment ? 'Réglement de cloture' : 'Paiement en ligne securisé'}
+          {isClosePayment ? 'Réglement de clôture' : 'Paiement en ligne sécurisé'}
         </h2>
       </div>
 
@@ -493,7 +493,7 @@ export function OrderPaymentView({
               : hasCheckoutSession
                 ? 'Reprendre le paiement'
                 : isClosePayment
-                  ? 'Payer et cloturer'
+                  ? 'Payer et clôturer'
                   : 'Payer avec votre carte bancaire'}
           </button>
           {isBusy ? (
@@ -525,10 +525,10 @@ export function OrderPaymentView({
               <div className="order-payment-view__notice">
                 <div className="order-payment-view__notice-label">
                   <ShieldCheck className="order-payment-view__icon order-payment-view__icon--accent" />
-                  Paiement securise
+                  Paiement sécurisé
                 </div>
                 <p className="order-payment-view__notice-text">
-                  Vos informations sont traitees et securisees par le prestataire de paiement Stripe.
+                  Vos informations sont traitées et sécurisées par le prestataire de paiement Stripe.
                 </p>
               </div>
             )}
