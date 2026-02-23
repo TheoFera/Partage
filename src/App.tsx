@@ -40,6 +40,12 @@ import {
   TimelineStep,
 } from './shared/types';
 import { getSupabaseClient } from './shared/lib/supabaseClient';
+import {
+  clearStoredAuthRedirect,
+  getStoredAuthRedirect,
+  sanitizeAuthRedirect,
+  setStoredAuthRedirect,
+} from './shared/lib/authRedirect';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
 import { DEMO_MODE } from './shared/config/demoMode';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
@@ -2214,6 +2220,11 @@ export default function App() {
   const [orderProducer, setOrderProducer] = React.useState<User | null>(null);
 
   React.useEffect(() => {
+    if (!isAuthenticated || location.pathname === '/connexion') return;
+    clearStoredAuthRedirect();
+  }, [isAuthenticated, location.pathname]);
+
+  React.useEffect(() => {
     const sourceProducts = orderBuilderProducts ?? deck;
     const firstProducerId = sourceProducts[0]?.producerId;
     if (!firstProducerId) {
@@ -2771,7 +2782,8 @@ export default function App() {
     [publicOrdersBySearch, matchesProductFilters]
   );
 
-  const authRedirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo;
+  const authRedirectTo =
+    sanitizeAuthRedirect((location.state as { redirectTo?: string } | null)?.redirectTo) ?? getStoredAuthRedirect();
   const canAccessAuthPageWhileAuthenticated = Boolean(isAuthenticated && user?.emailVerified === false);
   const hideAuthTitle = isAuthPage && Boolean(authRedirectTo?.startsWith(tabRoutes.messages));
   const isDiscoverRoute = location.pathname.startsWith('/decouvrir');
@@ -2789,12 +2801,9 @@ export default function App() {
     mode: 'login' | 'signup' | 'verify' = 'login',
     extras?: AuthRedirectExtras
   ) => {
-    const target = path ?? `${location.pathname}${location.search}${location.hash}`;
-    if (typeof window !== 'undefined') {
-      try {
-        window.sessionStorage.setItem('authRedirectTo', target);
-      } catch {}
-    }
+    const fallbackTarget = `${location.pathname}${location.search}${location.hash}`;
+    const target = sanitizeAuthRedirect(path) ?? sanitizeAuthRedirect(fallbackTarget) ?? tabRoutes.home;
+    setStoredAuthRedirect(target);
     navigate('/connexion', { state: { redirectTo: target, mode, ...extras } });
   };
 
@@ -4776,7 +4785,7 @@ export default function App() {
             path="/connexion"
             element={
               isAuthenticated && !isRecoveryAuth && !canAccessAuthPageWhileAuthenticated ? (
-                <Navigate to={tabRoutes.home} replace />
+                <Navigate to={authRedirectTo ?? tabRoutes.home} replace />
               ) : (
                 <AuthPage
                   supabaseClient={supabaseClient}

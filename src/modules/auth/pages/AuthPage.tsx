@@ -3,6 +3,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { Mail, Lock, UserPlus, ArrowRight, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  clearStoredAuthRedirect,
+  getStoredAuthRedirect,
+  sanitizeAuthRedirect,
+} from '../../../shared/lib/authRedirect';
 import './AuthPage.css';
 
 type AuthMode = 'login' | 'signup' | 'verify' | 'forgot' | 'reset';
@@ -63,26 +68,15 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     }
   }, [isRecoveryLink, locationState?.emailPrefill, locationState?.mode]);
 
-  const storedRedirect = React.useMemo(() => {
-    if (typeof window === 'undefined') return undefined;
-    try {
-      return window.sessionStorage.getItem('authRedirectTo') || undefined;
-    } catch {
-      return undefined;
-    }
-  }, []);
-
-  const redirectTo = locationState?.redirectTo || storedRedirect || location.pathname || '/';
-  const resetRedirectTo = React.useMemo(() => {
+  const storedRedirect = React.useMemo(() => getStoredAuthRedirect(), []);
+  const redirectTo = sanitizeAuthRedirect(locationState?.redirectTo) || storedRedirect || '/';
+  const authEmailRedirectTo = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
     return `${window.location.origin}/connexion`;
   }, []);
 
   const clearStoredRedirect = React.useCallback(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.sessionStorage.removeItem('authRedirectTo');
-    } catch {}
+    clearStoredAuthRedirect();
   }, []);
 
   const passwordPolicyLabel =
@@ -164,7 +158,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           if (normalizedMessage.includes('email not confirmed') || normalizedMessage.includes('email_not_confirmed')) {
             setMode('verify');
             setPassword('');
-            toast.error('Votre email doit etre verifie avant de continuer.');
+            toast.error('Votre email doit être vérifié avant de pouvoir continuer.');
             return;
           }
           throw error;
@@ -202,6 +196,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           email,
           password,
           options: {
+            emailRedirectTo: authEmailRedirectTo,
             data: {
               full_name: displayName,
               role: 'sharer',
@@ -237,6 +232,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         const { error } = await supabaseClient.auth.resend({
           type: 'signup',
           email: verificationEmail,
+          options: authEmailRedirectTo ? { emailRedirectTo: authEmailRedirectTo } : undefined,
         });
         if (error) throw error;
         setVerificationEmailSent(true);
@@ -249,7 +245,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         }
         const { error } = await supabaseClient.auth.resetPasswordForEmail(
           trimmedEmail,
-          resetRedirectTo ? { redirectTo: resetRedirectTo } : undefined
+          authEmailRedirectTo ? { redirectTo: authEmailRedirectTo } : undefined
         );
         if (error) throw error;
         setResetEmailSent(true);
@@ -637,7 +633,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               <>
                 <div className="auth-form__col auth-form__col_single">
                   <p className="auth-form__helper">
-                    Ouvrez le lien de confirmation recu par email avant de poursuivre votre commande.
+                    Ouvrez le lien de confirmation reçu sur votre email afin de poursuivre votre commande. Pensez à vérifier vos spams.
                   </p>
                   <label className="auth-form__label">Email</label>
                   <div className="auth-form__input-wrapper">
@@ -654,13 +650,13 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                   </div>
                   {verificationEmailSent ? (
                     <p className="auth-form__helper auth-form__helper--valid">
-                      Email envoyé. Pensez a vérifier vos spams.
+                      Email envoyé. Pensez à vérifier vos spams.
                     </p>
                   ) : null}
                 </div>
                 <div className="auth-form__action-row">
                   <button type="button" onClick={() => setMode('login')} className="auth-btn auth-btn--primary">
-                    J'ai verifié mon email et je souhaite poursuivre vers la commande
+                    Je confirme avoir cliqué sur le lien
                   </button>
                 </div>
               </>
