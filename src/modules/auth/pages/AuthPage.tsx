@@ -5,11 +5,12 @@ import { Mail, Lock, UserPlus, ArrowRight, ShieldCheck, Eye, EyeOff } from 'luci
 import { toast } from 'sonner';
 import './AuthPage.css';
 
-type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
+type AuthMode = 'login' | 'signup' | 'verify' | 'forgot' | 'reset';
 
 type AuthLocationState = {
   redirectTo?: string;
   mode?: AuthMode;
+  emailPrefill?: string;
   signupPrefill?: {
     address?: string;
     addressDetails?: string;
@@ -29,7 +30,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const navigate = useNavigate();
   const locationState = location.state as AuthLocationState | null;
   const [mode, setMode] = React.useState<AuthMode>(locationState?.mode ?? 'login');
-  const [email, setEmail] = React.useState('');
+  const [email, setEmail] = React.useState(locationState?.emailPrefill ?? '');
   const [password, setPassword] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [resetPassword, setResetPassword] = React.useState('');
@@ -49,6 +50,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   >('individual');
   const [loading, setLoading] = React.useState(false);
   const [resetEmailSent, setResetEmailSent] = React.useState(false);
+  const [verificationEmailSent, setVerificationEmailSent] = React.useState(false);
 
   const isRecoveryLink = React.useMemo(() => {
     const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
@@ -56,6 +58,15 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     return hashParams.get('type') === 'recovery' || searchParams.get('type') === 'recovery' || searchParams.get('reset') === '1';
   }, [location.hash, location.search]);
   const activeMode: AuthMode = isRecoveryLink ? 'reset' : mode;
+
+  React.useEffect(() => {
+    if (locationState?.mode && !isRecoveryLink) {
+      setMode(locationState.mode);
+    }
+    if (locationState?.emailPrefill) {
+      setEmail(locationState.emailPrefill);
+    }
+  }, [isRecoveryLink, locationState?.emailPrefill, locationState?.mode]);
 
   const storedRedirect = React.useMemo(() => {
     if (typeof window === 'undefined') return undefined;
@@ -151,8 +162,18 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     setLoading(true);
     try {
       if (activeMode === 'login') {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-        if (error) throw error;
+        const loginEmail = email.trim();
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email: loginEmail, password });
+        if (error) {
+          const normalizedMessage = (error.message || '').toLowerCase();
+          if (normalizedMessage.includes('email not confirmed') || normalizedMessage.includes('email_not_confirmed')) {
+            setMode('verify');
+            setPassword('');
+            toast.error('Votre email doit etre verifie avant de continuer.');
+            return;
+          }
+          throw error;
+        }
         if (data.user) {
           onAuthSuccess(data.user);
           clearStoredRedirect();
@@ -200,15 +221,31 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           },
         });
         if (error) throw error;
-        const newUser = data.user ?? data.session?.user;
-        if (newUser) {
-          onAuthSuccess(newUser);
+        const sessionUser = data.session?.user;
+        if (sessionUser) {
+          onAuthSuccess(sessionUser);
           clearStoredRedirect();
           toast.success('Compte cree et connecte');
           navigate(redirectTo, { replace: true });
         } else {
-          toast.success('Compte crée. Consultez vos emails pour activer votre accès.');
+          setMode('verify');
+          setPassword('');
+          setVerificationEmailSent(true);
+          toast.info('Compte cree. Verifiez votre email avant de vous connecter.');
         }
+      } else if (activeMode === 'verify') {
+        const verificationEmail = email.trim();
+        if (!verificationEmail) {
+          toast.error('Merci de saisir votre email.');
+          return;
+        }
+        const { error } = await supabaseClient.auth.resend({
+          type: 'signup',
+          email: verificationEmail,
+        });
+        if (error) throw error;
+        setVerificationEmailSent(true);
+        toast.success('Email de verification renvoye.');
       } else if (activeMode === 'forgot') {
         const trimmedEmail = email.trim();
         if (!trimmedEmail) {
@@ -242,6 +279,15 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Impossible de terminer la demande.';
+      if (activeMode === 'login') {
+        const normalizedMessage = message.toLowerCase();
+        if (normalizedMessage.includes('email not confirmed') || normalizedMessage.includes('email_not_confirmed')) {
+          setMode('verify');
+          setPassword('');
+          toast.error('Votre email doit etre verifie avant de continuer.');
+          return;
+        }
+      }
       toast.error(message);
     } finally {
       setLoading(false);
@@ -257,6 +303,11 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   React.useEffect(() => {
     if (activeMode === 'forgot') return;
     setResetEmailSent(false);
+  }, [activeMode]);
+
+  React.useEffect(() => {
+    if (activeMode === 'verify') return;
+    setVerificationEmailSent(false);
   }, [activeMode]);
 
   React.useEffect(() => {
@@ -299,6 +350,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       ? 'Connexion'
       : activeMode === 'signup'
       ? 'Créer un compte'
+      : activeMode === 'verify'
+      ? 'Verifiez votre email'
       : activeMode === 'forgot'
       ? 'Mot de passe oublié'
       : 'Reinitialiser le mot de passe';
@@ -307,6 +360,8 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       ? 'Se connecter'
       : activeMode === 'signup'
       ? 'Créer un compte'
+      : activeMode === 'verify'
+      ? 'Renvoyer le lien'
       : activeMode === 'forgot'
       ? 'Envoyer le lien'
       : 'Mettre à jour le mot de passe';
@@ -564,6 +619,40 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                   </button>
                 </div>
               </>
+            ) : activeMode === 'verify' ? (
+              <>
+                <div className="auth-form__col auth-form__col_single">
+                  <p className="auth-form__helper">
+                    Un email de verification est necessaire avant de continuer vers le paiement.
+                  </p>
+                  <label className="auth-form__label">Email</label>
+                  <div className="auth-form__input-wrapper">
+                    <Mail className="auth-form__icon" />
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="vous@exemple.fr"
+                      className="auth-form__input"
+                      autoComplete="email"
+                      required
+                    />
+                  </div>
+                  <p className="auth-form__helper">
+                    Ouvrez le lien de confirmation recu par email, puis reconnectez-vous.
+                  </p>
+                  {verificationEmailSent ? (
+                    <p className="auth-form__helper auth-form__helper--valid">
+                      Email envoye. Pensez a verifier vos spams.
+                    </p>
+                  ) : null}
+                </div>
+                <div className="auth-form__action-row">
+                  <button type="button" onClick={() => setMode('login')} className="auth-link-button">
+                    J ai verifie mon email, me connecter
+                  </button>
+                </div>
+              </>
             ) : activeMode === 'forgot' ? (
               <>
                 <div className="auth-form__col auth-form__col_single">
@@ -672,11 +761,13 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                     {activeMode === 'login' ? 'Créer un compte' : 'Se connecter'}
                   </button>
                 </>
-              ) : activeMode === 'forgot' ? (
+              ) : activeMode === 'forgot' || activeMode === 'verify' ? (
                 <>
-                  <span className="auth-form__helper">Vous avez déjà un compte ?</span>
+                  <span className="auth-form__helper">
+                    {activeMode === 'verify' ? 'Adresse deja verifiee ?' : 'Vous avez deja un compte ?'}
+                  </span>
                   <button type="button" onClick={() => setMode('login')} className="auth-link-button">
-                    Retour à la connexion
+                    Retour a la connexion
                   </button>
                 </>
               ) : null}
@@ -694,3 +785,4 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     </div>
   );
 }
+

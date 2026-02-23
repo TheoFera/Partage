@@ -151,11 +151,13 @@
   background: #f9fafb;
 }
 
-.order-payment-view__iframe {
+.order-payment-view__iframe,
+.order-payment-view__embedded-checkout {
   width: 100%;
   border: 0;
   border-radius: 12px;
   background: #ffffff;
+  min-height: 560px;
 }
 
 .order-payment-view__payment-actions {

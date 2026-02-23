@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckCircle2, Copy, Mail, MessageCircle, Share2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { GroupOrder, OrderPurchaseDraft } from '../../../shared/types';
+import { centsToEuros, eurosToCents } from '../../../shared/lib/money';
 import './OrderShareGainView.css';
 
 interface OrderShareGainViewProps {
@@ -21,12 +22,60 @@ const formatEUR = new Intl.NumberFormat('fr-FR', {
   currency: 'EUR',
 });
 
-function estimateLogisticsCost(order: GroupOrder) {
-  const maxWeight = Math.max(order.maxWeight, 1);
-  const base = 6 + maxWeight * 0.55;
-  const valueBased = order.totalValue * 0.05;
-  return Math.max(base, valueBased, 8);
+type DeliveryOptionLike = 'chronofresh' | 'producer_delivery' | 'producer_pickup';
+
+const logisticCostByWeight = (weightKg: number) => {
+  if (!weightKg || weightKg <= 0) return 0;
+  const raw = 7 + 8 * Math.sqrt(weightKg);
+  return Math.max(15, 5 * Math.round(raw / 5));
+};
+
+const resolveEffectiveWeightKg = (totalWeight: number, minWeight: number, maxWeight: number | null) => {
+  if (maxWeight !== null && maxWeight > 0) {
+    return Math.min(Math.max(totalWeight, Math.max(minWeight, 0)), maxWeight);
+  }
+  return Math.max(totalWeight, Math.max(minWeight, 0));
+};
+
+function getProductWeightKg(product: { weightKg?: number; unit?: string; measurement?: 'unit' | 'kg' }) {
+  if (product.weightKg) return product.weightKg;
+  const unit = product.unit?.toLowerCase() ?? '';
+  const match = unit.match(/([\d.,]+)\s*(kg|g)/);
+  if (match) {
+    const raw = parseFloat(match[1].replace(',', '.'));
+    if (Number.isFinite(raw)) {
+      return match[2] === 'kg' ? raw : raw / 1000;
+    }
+  }
+  if (product.measurement === 'kg') return 1;
+  return 0.25;
 }
+
+const resolveDeliveryOption = (order: GroupOrder): DeliveryOptionLike => {
+  const raw = (order as GroupOrder & { deliveryOption?: unknown }).deliveryOption;
+  if (raw === 'chronofresh' || raw === 'producer_delivery' || raw === 'producer_pickup') {
+    return raw;
+  }
+
+  const pickupFeeEuros = Math.max(0, Number(order.pickupDeliveryFee ?? 0));
+  const pickupFeeCents = eurosToCents(pickupFeeEuros);
+  const deliveryFeeCents = Math.max(0, Number(order.deliveryFeeCents ?? 0));
+  if (pickupFeeCents > 0 && Math.abs(deliveryFeeCents - pickupFeeCents) <= 1) {
+    return 'producer_pickup';
+  }
+
+  const estimatedEffectiveWeightKg = resolveEffectiveWeightKg(
+    Math.max(0, Number(order.orderedWeight ?? 0)),
+    Math.max(0, Number(order.minWeight ?? 0)),
+    order.maxWeight > 0 ? order.maxWeight : null
+  );
+  const estimatedChronofreshCents = eurosToCents(logisticCostByWeight(estimatedEffectiveWeightKg));
+  if (deliveryFeeCents > 0 && Math.abs(deliveryFeeCents - estimatedChronofreshCents) <= 5) {
+    return 'chronofresh';
+  }
+
+  return 'producer_delivery';
+};
 
 function formatDeadline(value: GroupOrder['deadline']) {
   const date = value instanceof Date ? value : new Date(value);
@@ -71,17 +120,70 @@ export function OrderShareGainView({
 }: OrderShareGainViewProps) {
   const participantWeight = Math.max(purchase.weight, 0);
   const reportedWeight = Math.max(order.orderedWeight ?? 0, 0);
-  const currentWeight = Math.max(
-    purchase.baseOrderedWeight + participantWeight,
-    reportedWeight,
-    0.1
+  const currentWeightRaw = Math.max(purchase.baseOrderedWeight + participantWeight, reportedWeight, 0);
+  const currentWeight = Math.max(currentWeightRaw, 0.1);
+  const maxWeight = Math.max(order.maxWeight, currentWeightRaw, 0.1);
+  const remainingCapacity = Math.max(order.maxWeight - currentWeightRaw, 0);
+  const weightNowKg = currentWeightRaw;
+  const weightMaxKg = order.maxWeight > 0 ? Math.max(order.maxWeight, currentWeightRaw) : currentWeightRaw;
+  const deliveryOption = resolveDeliveryOption(order);
+  const shareFraction = React.useMemo(() => {
+    const percentage = Math.max(order.sharerPercentage ?? 0, 0);
+    if (percentage <= 0 || percentage >= 100) return 0;
+    return percentage / (100 - percentage);
+  }, [order.sharerPercentage]);
+  const productsById = React.useMemo(
+    () => new Map(order.products.map((product) => [product.id, product])),
+    [order.products]
   );
-  const maxWeight = Math.max(order.maxWeight, currentWeight);
-  const remainingCapacity = Math.max(order.maxWeight - currentWeight, 0);
-  const logisticsCost = estimateLogisticsCost(order);
-  const costPerKgNow = logisticsCost / currentWeight;
-  const costPerKgAtMax = logisticsCost / maxWeight;
-  const potentialCredit = Math.max(0, participantWeight * (costPerKgNow - costPerKgAtMax));
+  const participantTotalAtWeightCents = React.useCallback(
+    (targetWeightKg: number) => {
+      const effectiveWeightKg = resolveEffectiveWeightKg(
+        targetWeightKg,
+        Math.max(order.minWeight ?? 0, 0),
+        order.maxWeight > 0 ? order.maxWeight : null
+      );
+      const deliveryFeeCents =
+        deliveryOption === 'chronofresh'
+          ? eurosToCents(logisticCostByWeight(effectiveWeightKg))
+          : deliveryOption === 'producer_pickup'
+            ? eurosToCents(Math.max(order.pickupDeliveryFee ?? 0, 0))
+            : Math.max(order.deliveryFeeCents ?? 0, 0);
+      const feePerKg = effectiveWeightKg > 0 ? deliveryFeeCents / effectiveWeightKg : 0;
+
+      let totalCents = 0;
+      Object.entries(purchase.quantities).forEach(([productId, rawQty]) => {
+        const qty = Math.max(0, Number(rawQty) || 0);
+        if (qty <= 0) return;
+
+        const product = productsById.get(productId);
+        if (!product) return;
+
+        const unitWeightKg = getProductWeightKg(product);
+        const baseCents = eurosToCents(product.price);
+        const unitDeliveryCents = Math.round(feePerKg * unitWeightKg);
+        const unitSharerFeeCents = Math.round((baseCents + unitDeliveryCents) * shareFraction);
+        const unitFinalCents = baseCents + unitDeliveryCents + unitSharerFeeCents;
+        totalCents += unitFinalCents * qty;
+      });
+
+      return Math.round(totalCents);
+    },
+    [
+      deliveryOption,
+      order.deliveryFeeCents,
+      order.maxWeight,
+      order.minWeight,
+      order.pickupDeliveryFee,
+      productsById,
+      purchase.quantities,
+      shareFraction,
+    ]
+  );
+  const totalNowCents = participantTotalAtWeightCents(weightNowKg);
+  const totalAtMaxCents = participantTotalAtWeightCents(weightMaxKg);
+  const potentialCreditCents = Math.max(0, totalNowCents - totalAtMaxCents);
+  const potentialCredit = centsToEuros(potentialCreditCents);
   const progress = Math.min(100, (currentWeight / maxWeight) * 100);
   const requiresManualApproval = order.autoApproveParticipationRequests === false;
   const deadlineLabel = formatDeadline(order.deadline);
@@ -173,7 +275,7 @@ export function OrderShareGainView({
         <section className="order-share-gain-view__focus-card">
           <p className="order-share-gain-view__focus-eyebrow">
             <Sparkles className="order-share-gain-view__icon order-share-gain-view__icon--accent" />
-            Gains de coopération gagnables si la commande atteint son poids maximum
+            Gain de coopération gagnable si la commande atteint son poids maximum
           </p>
           <p className="order-share-gain-view__focus-value">Jusqu’à {formatEUR.format(potentialCredit)}</p>
           <p className="order-share-gain-view__focus-note">

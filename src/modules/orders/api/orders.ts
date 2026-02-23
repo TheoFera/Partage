@@ -1944,6 +1944,8 @@ export const createPaymentStub = async (params: {
   amountCents: number;
   status?: Payment['status'];
   provider?: string;
+  providerPaymentId?: string | null;
+  idempotencyKey?: string | null;
   raw?: Record<string, unknown>;
 }) => {
   if (DEMO_MODE) {
@@ -1956,8 +1958,8 @@ export const createPaymentStub = async (params: {
       orderId: params.orderId,
       participantId: params.participantId,
       provider: params.provider ?? 'demo',
-      providerPaymentId: null,
-      idempotencyKey: null,
+      providerPaymentId: params.providerPaymentId ?? null,
+      idempotencyKey: params.idempotencyKey ?? null,
       status: params.status ?? 'pending',
       amountCents: params.amountCents,
       feeCents: 0,
@@ -1982,7 +1984,9 @@ export const createPaymentStub = async (params: {
       participant_id: params.participantId,
       amount_cents: params.amountCents,
       status: params.status ?? 'pending',
-      provider: params.provider ?? 'stancer',
+      provider: params.provider ?? 'stripe',
+      provider_payment_id: params.providerPaymentId ?? null,
+      idempotency_key: params.idempotencyKey ?? null,
       raw: params.raw ?? {},
     })
     .select('*')

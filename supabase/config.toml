@@ -20,3 +20,13 @@ entrypoint = "./functions/finalize-payment/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/generate_legal_document_pdf/index.ts"
+
+[functions.stripe_create_checkout_session]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_create_checkout_session/index.ts"
+
+[functions.stripe_checkout_session_status]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_checkout_session_status/index.ts"

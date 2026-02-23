@@ -59,6 +59,13 @@ interface OrderClientViewProps {
   onOpenParticipantProfile?: (participantName: string) => void;
   onStartPayment?: (payload: {
     quantities: Record<string, number>;
+    lineItems: Array<{
+      productCode: string;
+      label: string;
+      quantity: number;
+      unitPriceCents: number;
+      lineTotalCents: number;
+    }>;
     total: number;
     weight: number;
     useCoopBalance: boolean;
@@ -1139,6 +1146,30 @@ const sharerAvatarUpdatedAt =
       }, 0),
     [products, quantities, unitPriceCentsById]
   );
+  const paymentLineItems = React.useMemo(
+    () =>
+      products
+        .map((product) => {
+          const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
+          if (quantity <= 0) return null;
+          const unitPriceCents = unitPriceCentsById[product.id] ?? eurosToCents(product.price);
+          return {
+            productCode: product.id,
+            label: product.name,
+            quantity,
+            unitPriceCents,
+            lineTotalCents: unitPriceCents * quantity,
+          };
+        })
+        .filter(Boolean) as Array<{
+        productCode: string;
+        label: string;
+        quantity: number;
+        unitPriceCents: number;
+        lineTotalCents: number;
+      }>,
+    [products, quantities, unitPriceCentsById]
+  );
   const totalPrice = centsToEuros(totalPriceCents);
   const coopAppliedCents = useCoopBalance ? Math.min(coopBalanceCents, totalPriceCents) : 0;
   const remainingToPayCents = Math.max(0, totalPriceCents - coopAppliedCents);
@@ -1472,6 +1503,7 @@ const sharerAvatarUpdatedAt =
     if (remainingToPayCents > 0 && onStartPayment) {
       onStartPayment({
         quantities: { ...quantities },
+        lineItems: paymentLineItems,
         total: centsToEuros(remainingToPayCents),
         weight: selectedWeight,
         useCoopBalance,
@@ -2931,7 +2963,7 @@ const sharerAvatarUpdatedAt =
                         </>
                       ) : (
                         <p className="order-client-view__calendar-slots-note">
-                          Sélectionnez un jour dans la période de récupération.
+                          Le rendez-vous de récupération des produits se fait dans la période de récupération.
                         </p>
                       )}
                     </div>

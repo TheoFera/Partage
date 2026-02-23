@@ -6,7 +6,7 @@ This is a code bundle for TEST Site Partage. The original project is available a
 
 1. Run `npm i` to install the dependencies.
 2. Run `npm run dev` to start the development server.
-3. Creez un fichier `.env` et renseignez `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` si vous branchez Supabase (optionnel: `VITE_DEMO_MODE=true`).
+3. Creez un fichier `.env` et renseignez `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` et `VITE_STRIPE_PUBLISHABLE_KEY` si vous branchez Supabase (optionnel: `VITE_DEMO_MODE=true`).
 
 ## Routing
 
@@ -18,7 +18,8 @@ L'application utilise `react-router-dom` (BrowserRouter). Les routes principales
 
 `src/shared/lib/supabaseClient.ts` expose `getSupabaseClient()`/`supabase`. Le client est instancie si `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` sont renseignees dans votre `.env`.
 
-Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`).
+Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`, `supabase/functions/stripe_create_checkout_session`, `supabase/functions/stripe_checkout_session_status`).
+Pour Stripe, configurez aussi les secrets Edge Functions `STRIPE_SECRET_KEY` (obligatoire) et `STRIPE_API_BASE` (optionnel, par defaut `https://api.stripe.com/v1`).
 
 ### Billing / factures (runbook)
 

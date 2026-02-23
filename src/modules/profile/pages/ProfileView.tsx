@@ -310,6 +310,11 @@ export function ProfileView({
       : user.accountType === 'public_institution'
       ? 'Collectivité / service public'
       : 'Particulier';
+  const effectiveAccountType = user.accountType ?? 'individual';
+  const isProducerProfile =
+    user.role === 'producer' &&
+    effectiveAccountType !== 'individual' &&
+    effectiveAccountType !== 'auto_entrepreneur';
   const following = Boolean(isFollowing);
   const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
   const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
@@ -455,7 +460,7 @@ React.useEffect(() => {
           id: 'products' as TabKey,
           label: 'Produits',
           icon: Apple,
-          visible: user.role === 'producer' && (isOwnProfile || productCount > 0),
+          visible: isProducerProfile && (isOwnProfile || productCount > 0),
         },
         {
           id: 'orders' as TabKey,
@@ -470,7 +475,7 @@ React.useEffect(() => {
           visible: isOwnProfile || selectionCount > 0,
         },
       ].filter((tab) => tab.visible),
-    [user.role, isOwnProfile, productCount, ordersCount, selectionCount]
+    [isProducerProfile, isOwnProfile, productCount, ordersCount, selectionCount]
   );
 
   React.useEffect(() => {
@@ -521,7 +526,7 @@ React.useEffect(() => {
     value: tabCounts[tab.id]?.value ?? 0,
     meta: tabCounts[tab.id]?.meta ?? tab.label,
   }));
-  const showAddProductCta = isOwnProfile && user.role === 'producer' && Boolean(onAddProductClick);
+  const showAddProductCta = isOwnProfile && isProducerProfile && Boolean(onAddProductClick);
   const selectionActionsEnabled = Boolean(onAddToDeck || onRemoveFromDeck);
   const canSaveProducts = selectionActionsEnabled;
   const canEditSelection = selectionActionsEnabled;

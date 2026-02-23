@@ -31,6 +31,7 @@ export interface User {
   freshProductsCertified?: boolean;
   socialLinks?: Record<string, string | null>;
   openingHours?: Record<string, string>;
+  emailVerified?: boolean;
   verified?: boolean;
   businessStatus?: string;
   producerId?: string;
@@ -159,6 +160,13 @@ export interface GroupOrder {
 export interface OrderPurchaseDraft {
   orderId: string;
   quantities: Record<string, number>;
+  lineItems?: Array<{
+    productCode: string;
+    label: string;
+    quantity: number;
+    unitPriceCents: number;
+    lineTotalCents: number;
+  }>;
   total: number;
   weight: number;
   baseOrderedWeight: number;

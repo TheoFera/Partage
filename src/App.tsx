@@ -16,7 +16,7 @@ import { HowItWorksView } from './modules/marketing/pages/HowItWorksView';
 import { AboutUsView } from './modules/marketing/pages/AboutUsView';
 import { MapView } from './modules/products/pages/MapView';
 import { OrderClientView } from './modules/orders/pages/OrderClientView';
-import { OrderPaymentView } from './modules/orders/pages/OrderPaymentView';
+import { OrderPaymentView, type OrderPaymentConfirmationPayload } from './modules/orders/pages/OrderPaymentView';
 import { OrderShareGainView } from './modules/orders/pages/OrderShareGainView';
 import { OrderCloseView } from './modules/orders/pages/OrderCloseView';
 import { AuthPage } from './modules/auth/pages/AuthPage';
@@ -137,6 +137,81 @@ const POSTCODE_COORDS_STORAGE_KEY = 'partage:postcode-search-coords:v1';
 const POSTCODE_OVERLAY_DISMISSED_SESSION_KEY = 'partage:postcode-overlay-dismissed:v1';
 const POSTCODE_GEOCODE_DEBOUNCE_MS = 250;
 const POSTCODE_OVERLAY_ALLOWED_PATHS = new Set(['/', '/carte', '/decouvrir']);
+const PURCHASE_DRAFT_STORAGE_KEY = 'partage:order-purchase-draft:v1';
+
+const parseStoredPurchaseDraft = (): OrderPurchaseDraft | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(PURCHASE_DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<OrderPurchaseDraft> & Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.orderId !== 'string') return null;
+
+    const quantities: Record<string, number> = {};
+    if (parsed.quantities && typeof parsed.quantities === 'object') {
+      Object.entries(parsed.quantities as Record<string, unknown>).forEach(([productCode, rawQty]) => {
+        const qty = Number(rawQty);
+        if (!Number.isFinite(qty) || qty <= 0) return;
+        quantities[productCode] = qty;
+      });
+    }
+
+    const nextDraft: OrderPurchaseDraft = {
+      orderId: parsed.orderId,
+      quantities,
+      lineItems: Array.isArray(parsed.lineItems)
+        ? parsed.lineItems
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const rawItem = item as Record<string, unknown>;
+              const productCode =
+                typeof rawItem.productCode === 'string' ? rawItem.productCode.trim() : '';
+              const label = typeof rawItem.label === 'string' ? rawItem.label.trim() : '';
+              const quantity = Math.max(0, Number(rawItem.quantity ?? 0));
+              const unitPriceCents = Math.max(0, Math.round(Number(rawItem.unitPriceCents ?? 0)));
+              const lineTotalCents = Math.max(0, Math.round(Number(rawItem.lineTotalCents ?? 0)));
+              if (!productCode || !label || quantity <= 0) return null;
+              return { productCode, label, quantity, unitPriceCents, lineTotalCents };
+            })
+            .filter(Boolean) as Array<{
+            productCode: string;
+            label: string;
+            quantity: number;
+            unitPriceCents: number;
+            lineTotalCents: number;
+          }>
+        : [],
+      total: Number(parsed.total) || 0,
+      weight: Number(parsed.weight) || 0,
+      baseOrderedWeight: Number(parsed.baseOrderedWeight) || 0,
+      kind: parsed.kind === 'close' ? 'close' : 'participant',
+      useCoopBalance: Boolean(parsed.useCoopBalance),
+    };
+
+    if (parsed.closeData && typeof parsed.closeData === 'object') {
+      const rawCloseData = parsed.closeData as Record<string, unknown>;
+      const extraQuantities: Record<string, number> = {};
+      if (rawCloseData.extraQuantities && typeof rawCloseData.extraQuantities === 'object') {
+        Object.entries(rawCloseData.extraQuantities as Record<string, unknown>).forEach(
+          ([productId, rawQty]) => {
+            const qty = Number(rawQty);
+            if (!Number.isFinite(qty) || qty <= 0) return;
+            extraQuantities[productId] = qty;
+          }
+        );
+      }
+      nextDraft.closeData = {
+        useCoopBalance: Boolean(rawCloseData.useCoopBalance),
+        extraQuantities,
+      };
+    }
+
+    return nextDraft;
+  } catch (error) {
+    console.warn('Unable to parse stored purchase draft:', error);
+    return null;
+  }
+};
 
 const mockNotifications = [
   {
@@ -229,6 +304,13 @@ const AuthWall = ({
 
 type StartPaymentPayload = {
   quantities: Record<string, number>;
+  lineItems: Array<{
+    productCode: string;
+    label: string;
+    quantity: number;
+    unitPriceCents: number;
+    lineTotalCents: number;
+  }>;
   total: number;
   weight: number;
   useCoopBalance: boolean;
@@ -347,6 +429,7 @@ type AuthRedirectExtras = {
     city?: string;
     postcode?: string;
   };
+  emailPrefill?: string;
 };
 
 const normalizeUserRole = (role?: string | null): UserRole => {
@@ -378,6 +461,7 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
     website: authUser.user_metadata?.website,
     address: authUser.user_metadata?.address,
     addressDetails: authUser.user_metadata?.address_details ?? authUser.user_metadata?.addressDetails,
+    emailVerified: Boolean(authUser.email_confirmed_at),
     verified: Boolean(authUser.user_metadata?.verified),
     businessStatus: authUser.user_metadata?.businessStatus,
     producerId: authUser.user_metadata?.producerId,
@@ -748,6 +832,7 @@ const mapProfileRowToUser = (
     freshProductsCertified: Boolean(row.fresh_products_certified),
     socialLinks: row.social_links ?? undefined,
     openingHours: row.opening_hours ?? undefined,
+    emailVerified: authUser?.email_confirmed_at ? true : authUser ? false : undefined,
     verified: Boolean(row.verified),
     businessStatus: row.business_status ?? undefined,
     producerId: row.producer_id ?? undefined,
@@ -1416,8 +1501,22 @@ export default function App() {
   const [deck, setDeck] = React.useState<DeckCard[]>([]);
   const [orderBuilderProducts, setOrderBuilderProducts] = React.useState<DeckCard[] | null>(null);
   const [orderBuilderSelection, setOrderBuilderSelection] = React.useState<string[] | null>(null);
-  const [purchaseDraft, setPurchaseDraft] = React.useState<OrderPurchaseDraft | null>(null);
+  const [purchaseDraft, setPurchaseDraft] = React.useState<OrderPurchaseDraft | null>(() =>
+    parseStoredPurchaseDraft()
+  );
   const [recentPurchase, setRecentPurchase] = React.useState<OrderPurchaseDraft | null>(null);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (purchaseDraft) {
+        sessionStorage.setItem(PURCHASE_DRAFT_STORAGE_KEY, JSON.stringify(purchaseDraft));
+      } else {
+        sessionStorage.removeItem(PURCHASE_DRAFT_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn('Unable to persist purchase draft:', error);
+    }
+  }, [purchaseDraft]);
   const [productHeaderActions, setProductHeaderActions] = React.useState<React.ReactNode | null>(null);
   const [productShareContext, setProductShareContext] = React.useState<ProductShareContext | null>(null);
   const [shareOverlay, setShareOverlay] = React.useState<{
@@ -2672,6 +2771,7 @@ export default function App() {
   );
 
   const authRedirectTo = (location.state as { redirectTo?: string } | null)?.redirectTo;
+  const canAccessAuthPageWhileAuthenticated = Boolean(isAuthenticated && user?.emailVerified === false);
   const hideAuthTitle = isAuthPage && Boolean(authRedirectTo?.startsWith(tabRoutes.messages));
   const isDiscoverRoute = location.pathname.startsWith('/decouvrir');
   const isGuestDiscover = !isAuthenticated && isDiscoverRoute;
@@ -2683,7 +2783,11 @@ export default function App() {
   }, [guestLocationStatus, isGuestDiscover, requestGuestLocation]);
 
 
-  const redirectToAuth = (path?: string, mode: 'login' | 'signup' = 'login', extras?: AuthRedirectExtras) => {
+  const redirectToAuth = (
+    path?: string,
+    mode: 'login' | 'signup' | 'verify' = 'login',
+    extras?: AuthRedirectExtras
+  ) => {
     const target = path ?? `${location.pathname}${location.search}${location.hash}`;
     if (typeof window !== 'undefined') {
       try {
@@ -2868,6 +2972,7 @@ export default function App() {
     const draft: OrderPurchaseDraft = {
       orderId: order.id,
       quantities: payload.quantities,
+      lineItems: payload.lineItems,
       total,
       weight,
       baseOrderedWeight: order.orderedWeight ?? 0,
@@ -2929,7 +3034,10 @@ export default function App() {
     );
   };
 
-  const handleConfirmPayment = async (draft: OrderPurchaseDraft) => {
+  const handleConfirmPayment = async (
+    draft: OrderPurchaseDraft,
+    providerContext?: OrderPaymentConfirmationPayload
+  ) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
       return;
@@ -3013,13 +3121,25 @@ export default function App() {
           orderId: order.id,
           participantId: participant.id,
           amountCents: paidAmountCents,
+          provider: providerContext?.provider ?? 'stripe',
+          providerPaymentId: providerContext?.providerPaymentId ?? null,
           raw: {
             flow_kind: 'participant',
             use_coop_balance: useCoopBalance,
+            ...providerContext?.raw,
           },
         });
         createdPaymentId = payment.id;
-        await finalizePaymentSimulation(payment.id);
+        const finalizeResult = (await finalizePaymentSimulation(payment.id)) as
+          | { email?: { ok?: boolean; error?: string | null } }
+          | null;
+        if (finalizeResult?.email?.ok === false) {
+          toast.warning(
+            finalizeResult.email.error
+              ? `Paiement confirme, mais envoi email non declenche: ${finalizeResult.email.error}`
+              : 'Paiement confirme, mais envoi email non declenche.'
+          );
+        }
       }
     } catch (error) {
       if (createdPaymentId) {
@@ -3065,10 +3185,13 @@ export default function App() {
     setRecentPurchase(finalizedDraft);
     setPurchaseDraft(null);
     navigate(`/cmd/${resolveOrderCode(draft.orderId)}/partage`);
-    toast.success('Paiement confirme (simulation).');
+    toast.success('Paiement confirme.');
   };
 
-  const handleConfirmClosePayment = async (draft: OrderPurchaseDraft) => {
+  const handleConfirmClosePayment = async (
+    draft: OrderPurchaseDraft,
+    providerContext?: OrderPaymentConfirmationPayload
+  ) => {
     if (!isAuthenticated) {
       redirectToAuth(location.pathname);
       return;
@@ -3126,9 +3249,12 @@ export default function App() {
         orderId: order.id,
         participantId: sharerParticipant.id,
         amountCents: eurosToCents(draft.total),
+        provider: providerContext?.provider ?? 'stripe',
+        providerPaymentId: providerContext?.providerPaymentId ?? null,
         raw: {
           flow_kind: 'close',
           use_coop_balance: Boolean(closeData.useCoopBalance),
+          ...providerContext?.raw,
         },
       });
       await finalizeClosePayment(payment.id);
@@ -4345,6 +4471,32 @@ export default function App() {
         />
       );
     }
+    if (user?.emailVerified === false) {
+      return (
+        <div className="bg-white border border-dashed border-[#FF6B4A]/40 rounded-2xl p-6 sm:p-8 shadow-sm text-center space-y-4">
+          <div className="flex flex-col items-center gap-3">
+            <span className="px-3 py-1 rounded-full bg-[#FFF1E6] text-[#B45309] text-xs font-semibold">
+              Verification requise
+            </span>
+            <h2 className="text-xl sm:text-2xl text-[#1F2937] font-semibold">Confirmez votre email</h2>
+            <p className="text-sm text-[#6B7280] max-w-xl">
+              Vous devez verifier votre adresse email avant de payer. Utilisez le lien recu par email puis revenez
+              vous connecter.
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              redirectToAuth(location.pathname, 'verify', {
+                emailPrefill: user.email,
+              })
+            }
+            className="px-4 py-2 rounded-lg bg-[#FF6B4A] text-white font-semibold shadow-sm hover:bg-[#FF5A39] transition-colors"
+          >
+            Verifier mon email
+          </button>
+        </div>
+      );
+    }
     if (!draft) return <NotFound message="Aucun paiement en cours pour cette commande." />;
 
     if (!isClosePayment && participantError) {
@@ -4378,8 +4530,10 @@ export default function App() {
               : `/cmd/${order.orderCode ?? order.id}`
           )
         }
-        onConfirmPayment={() =>
-          isClosePayment ? handleConfirmClosePayment(draft) : handleConfirmPayment(draft)
+        onConfirmPayment={(providerContext) =>
+          isClosePayment
+            ? handleConfirmClosePayment(draft, providerContext)
+            : handleConfirmPayment(draft, providerContext)
         }
       />
     );
@@ -4626,7 +4780,7 @@ export default function App() {
           <Route
             path="/connexion"
             element={
-              isAuthenticated && !isRecoveryAuth ? (
+              isAuthenticated && !isRecoveryAuth && !canAccessAuthPageWhileAuthenticated ? (
                 <Navigate to={tabRoutes.home} replace />
               ) : (
                 <AuthPage
