@@ -220,13 +220,13 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         if (sessionUser) {
           onAuthSuccess(sessionUser);
           clearStoredRedirect();
-          toast.success('Compte cree et connecte');
+          toast.success('Compte crée et connecté');
           navigate(redirectTo, { replace: true });
         } else {
           setMode('verify');
           setPassword('');
           setVerificationEmailSent(true);
-          toast.info('Compte cree. Verifiez votre email avant de vous connecter.');
+          toast.info('Compte crée. Vérifiez votre email avant de vous connecter.');
         }
       } else if (activeMode === 'verify') {
         const verificationEmail = email.trim();
@@ -240,7 +240,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
         });
         if (error) throw error;
         setVerificationEmailSent(true);
-        toast.success('Email de verification renvoye.');
+        toast.success('Email de verification renvoyé.');
       } else if (activeMode === 'forgot') {
         const trimmedEmail = email.trim();
         if (!trimmedEmail) {
@@ -365,7 +365,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       : activeMode === 'signup'
       ? 'Créer un compte'
       : activeMode === 'verify'
-      ? 'Verifiez votre email'
+      ? 'Vérifiez votre email'
       : activeMode === 'forgot'
       ? 'Mot de passe oublié'
       : 'Reinitialiser le mot de passe';
@@ -637,7 +637,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               <>
                 <div className="auth-form__col auth-form__col_single">
                   <p className="auth-form__helper">
-                    Un email de verification est necessaire avant de continuer vers le paiement.
+                    Ouvrez le lien de confirmation recu par email avant de poursuivre votre commande.
                   </p>
                   <label className="auth-form__label">Email</label>
                   <div className="auth-form__input-wrapper">
@@ -652,18 +652,15 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                       required
                     />
                   </div>
-                  <p className="auth-form__helper">
-                    Ouvrez le lien de confirmation recu par email, puis reconnectez-vous.
-                  </p>
                   {verificationEmailSent ? (
                     <p className="auth-form__helper auth-form__helper--valid">
-                      Email envoye. Pensez a verifier vos spams.
+                      Email envoyé. Pensez a vérifier vos spams.
                     </p>
                   ) : null}
                 </div>
                 <div className="auth-form__action-row">
-                  <button type="button" onClick={() => setMode('login')} className="auth-link-button">
-                    J ai verifie mon email, me connecter
+                  <button type="button" onClick={() => setMode('login')} className="auth-btn auth-btn--primary">
+                    J'ai verifié mon email et je souhaite poursuivre vers la commande
                   </button>
                 </div>
               </>
@@ -773,15 +770,6 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                     className="auth-link-button"
                   >
                     {activeMode === 'login' ? 'Créer un compte' : 'Se connecter'}
-                  </button>
-                </>
-              ) : activeMode === 'forgot' || activeMode === 'verify' ? (
-                <>
-                  <span className="auth-form__helper">
-                    {activeMode === 'verify' ? 'Adresse deja verifiee ?' : 'Vous avez deja un compte ?'}
-                  </span>
-                  <button type="button" onClick={() => setMode('login')} className="auth-link-button">
-                    Retour a la connexion
                   </button>
                 </>
               ) : null}
