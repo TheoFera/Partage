@@ -423,12 +423,6 @@ const OrderRoute = ({
 };
 
 type AuthRedirectExtras = {
-  signupPrefill?: {
-    address?: string;
-    addressDetails?: string;
-    city?: string;
-    postcode?: string;
-  };
   emailPrefill?: string;
 };
 
@@ -442,6 +436,11 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
   const fallbackHandle = authUser.email?.split('@')[0] || authUser.id.slice(0, 6);
   const metaRole = authUser.user_metadata?.role as string | undefined;
   const safeRole = normalizeUserRole(metaRole);
+  const metaAddressVisibility = authUser.user_metadata?.addressVisibility;
+  const safeAddressVisibility: User['addressVisibility'] =
+    metaAddressVisibility === 'public' || metaAddressVisibility === 'private'
+      ? metaAddressVisibility
+      : 'private';
   const metaLat = toNumberOrUndefined(
     authUser.user_metadata?.address_lat ?? authUser.user_metadata?.addressLat ?? authUser.user_metadata?.lat
   );
@@ -456,11 +455,13 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
     role: safeRole,
     profileImage: authUser.user_metadata?.avatar_url,
     profileVisibility: authUser.user_metadata?.profileVisibility,
-    addressVisibility: authUser.user_metadata?.addressVisibility,
+    addressVisibility: safeAddressVisibility,
     tagline: authUser.user_metadata?.tagline,
     website: authUser.user_metadata?.website,
     address: authUser.user_metadata?.address,
     addressDetails: authUser.user_metadata?.address_details ?? authUser.user_metadata?.addressDetails,
+    city: authUser.user_metadata?.city,
+    postcode: authUser.user_metadata?.postcode,
     emailVerified: Boolean(authUser.email_confirmed_at),
     verified: Boolean(authUser.user_metadata?.verified),
     businessStatus: authUser.user_metadata?.businessStatus,
@@ -3297,13 +3298,7 @@ export default function App() {
   const handleCreateOrder = (orderData: any) => {
     if (!user) {
       toast.info('Connectez-vous ou creez un compte pour publier une commande.');
-      const signupPrefill = {
-        address: orderData?.pickupStreet || orderData?.pickupAddress || '',
-        addressDetails: orderData?.pickupInfo || orderData?.deliveryInfo || '',
-        city: orderData?.pickupCity || '',
-        postcode: orderData?.pickupPostcode || '',
-      };
-      redirectToAuth('/commande/nouvelle', 'signup', { signupPrefill });
+      redirectToAuth('/commande/nouvelle', 'signup');
       return;
     }
     const now = new Date();

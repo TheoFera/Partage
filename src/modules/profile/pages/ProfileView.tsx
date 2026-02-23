@@ -291,7 +291,7 @@ export function ProfileView({
   const [activeTab, setActiveTab] = React.useState<TabKey>('orders');
   const profileHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const profileVisibility = user.profileVisibility ?? 'public';
-  const addressVisibility = user.addressVisibility ?? 'public';
+  const addressVisibility = user.addressVisibility ?? 'private';
   const isProfilePublic = profileVisibility === 'public';
   const canShowAddress = addressVisibility === 'public';
   const postalCityLabel = [user.postcode, user.city].filter(Boolean).join(' ');
@@ -841,7 +841,7 @@ function ProfileEditPanel({
     user.profileVisibility ?? 'public'
   );
   const [addressVisibility, setAddressVisibility] = React.useState<User['addressVisibility']>(
-    user.addressVisibility ?? 'public'
+    user.addressVisibility ?? 'private'
   );
   const [tagline, setTagline] = React.useState(user.tagline ?? '');
   const [website, setWebsite] = React.useState(user.website ?? '');

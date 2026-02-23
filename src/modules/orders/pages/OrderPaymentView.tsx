@@ -532,26 +532,6 @@ export function OrderPaymentView({
                 </p>
               </div>
             )}
-            {hasCheckoutSession ? (
-              <div className="order-payment-view__payment-actions">
-                <button
-                  type="button"
-                  onClick={handleRetryPayment}
-                  className="order-payment-view__secondary-button"
-                  disabled={isBusy}
-                >
-                  Relancer le paiement
-                </button>
-                <button
-                  type="button"
-                  onClick={() => verifyStripePayment()}
-                  className="order-payment-view__secondary-button"
-                  disabled={isBusy || !providerPaymentId}
-                >
-                  Verifier le paiement
-                </button>
-              </div>
-            ) : null}
           </div>
         </div>
       </div>

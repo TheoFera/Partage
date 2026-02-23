@@ -11,12 +11,6 @@ type AuthLocationState = {
   redirectTo?: string;
   mode?: AuthMode;
   emailPrefill?: string;
-  signupPrefill?: {
-    address?: string;
-    addressDetails?: string;
-    city?: string;
-    postcode?: string;
-  };
 };
 
 interface AuthPageProps {
@@ -29,8 +23,9 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = location.state as AuthLocationState | null;
-  const [mode, setMode] = React.useState<AuthMode>(locationState?.mode ?? 'login');
-  const [email, setEmail] = React.useState(locationState?.emailPrefill ?? '');
+  const initialMode = locationState?.mode ?? 'login';
+  const [mode, setMode] = React.useState<AuthMode>(initialMode);
+  const [email, setEmail] = React.useState(initialMode === 'signup' ? '' : locationState?.emailPrefill ?? '');
   const [password, setPassword] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [resetPassword, setResetPassword] = React.useState('');
@@ -41,10 +36,10 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const [handleValue, setHandleValue] = React.useState('');
   const [isHandleEdited, setIsHandleEdited] = React.useState(false);
   const [phone, setPhone] = React.useState('');
-  const [city, setCity] = React.useState(locationState?.signupPrefill?.city ?? '');
-  const [postcode, setPostcode] = React.useState(locationState?.signupPrefill?.postcode ?? '');
-  const [address, setAddress] = React.useState(locationState?.signupPrefill?.address ?? '');
-  const [addressDetails, setAddressDetails] = React.useState(locationState?.signupPrefill?.addressDetails ?? '');
+  const [city, setCity] = React.useState('');
+  const [postcode, setPostcode] = React.useState('');
+  const [address, setAddress] = React.useState('');
+  const [addressDetails, setAddressDetails] = React.useState('');
   const [accountType, setAccountType] = React.useState<
     'individual' | 'auto_entrepreneur' | 'company' | 'association' | 'public_institution'
   >('individual');
@@ -63,7 +58,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     if (locationState?.mode && !isRecoveryLink) {
       setMode(locationState.mode);
     }
-    if (locationState?.emailPrefill) {
+    if (locationState?.emailPrefill && locationState?.mode !== 'signup') {
       setEmail(locationState.emailPrefill);
     }
   }, [isRecoveryLink, locationState?.emailPrefill, locationState?.mode]);
@@ -187,7 +182,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
           toast.error(`Le mot de passe doit respecter : ${passwordPolicyLabel}`);
           return;
         }
-        const requestedHandle = sanitizeHandle(handleValue || fullName || email);
+        const requestedHandle = sanitizeHandle(handleValue || fullName);
         if (!requestedHandle) {
           toast.error('Choisissez un tag valide (lettres et chiffres, sans espace).');
           return;
@@ -312,13 +307,32 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
 
   React.useEffect(() => {
     if (activeMode !== 'signup') return;
+    setEmail('');
+    setPassword('');
+    setFullName('');
+    setHandleValue('');
     setIsHandleEdited(false);
+    setPhone('');
+    setCity('');
+    setPostcode('');
+    setAddress('');
+    setAddressDetails('');
+    setAccountType('individual');
   }, [activeMode]);
 
   React.useEffect(() => {
     if (activeMode !== 'signup' || isHandleEdited) return;
-    const sourceValue = fullName.trim() || email.trim().split('@')[0] || '';
-    const fallbackHandle = sanitizeHandle(sourceValue || 'profil');
+    const sourceValue = fullName.trim();
+    if (!sourceValue) {
+      setHandleValue('');
+      return;
+    }
+
+    const fallbackHandle = sanitizeHandle(sourceValue);
+    if (!fallbackHandle) {
+      setHandleValue('');
+      return;
+    }
 
     let active = true;
     const timeoutId = setTimeout(() => {
@@ -337,7 +351,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
       active = false;
       clearTimeout(timeoutId);
     };
-  }, [activeMode, email, fullName, isHandleEdited, resolveUniqueHandle]);
+  }, [activeMode, fullName, isHandleEdited, resolveUniqueHandle]);
 
   React.useEffect(() => {
     if (activeMode === 'reset') return;
@@ -785,4 +799,3 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     </div>
   );
 }
-
