@@ -2214,6 +2214,14 @@ export type ProducerStatementSources = {
   participantCoopUsedCents: number | null;
 };
 
+type ProducerStatementCoopRpc = {
+  coop_surplus_cents?: number | null;
+  coop_surplus_ledger_id?: string | null;
+  participant_gains_cents?: number | null;
+  participant_gains_ledger_refs?: string[] | null;
+  participant_coop_used_cents?: number | null;
+};
+
 export const fetchProducerStatementSources = async (params: {
   orderId: string;
   producerProfileId: string;
@@ -2274,53 +2282,34 @@ export const fetchProducerStatementSources = async (params: {
       : sharerInvoice
         ? 0
         : null;
+  let coopSource: ProducerStatementCoopRpc | null = null;
+  const { data: coopData, error: coopRpcError } = await client.rpc('get_producer_statement_sources', {
+    p_order_id: params.orderId,
+  });
+  if (coopRpcError) {
+    console.error('Producer statement coop RPC error:', coopRpcError);
+  } else if (Array.isArray(coopData)) {
+    coopSource = (coopData[0] as ProducerStatementCoopRpc | undefined) ?? null;
+  } else if (coopData && typeof coopData === 'object') {
+    coopSource = coopData as ProducerStatementCoopRpc;
+  }
 
-  const { data: coopRows, error: coopError } = await client
-    .from('coop_ledger')
-    .select('id, reason, delta_cents, created_at')
-    .eq('order_id', params.orderId)
-    .eq('profile_id', params.sharerProfileId)
-    .in('reason', ['create_surplus', 'sharer_surplus'])
-    .order('created_at', { ascending: false });
-  if (coopError) throw coopError;
-
-  const coopList =
-    (coopRows as Array<{ id: string; reason: string | null; delta_cents: number | null }> | null) ?? [];
-  const hasCreateSurplus = coopList.some((row) => row.reason === 'create_surplus');
-  const selectedReason = hasCreateSurplus ? 'create_surplus' : 'sharer_surplus';
-  const selectedRows = coopList.filter((row) => row.reason === selectedReason);
   const coopSurplusCents =
-    selectedRows.length > 0
-      ? selectedRows.reduce((sum, row) => sum + Math.max(0, Number(row.delta_cents ?? 0)), 0)
+    coopSource?.coop_surplus_cents !== null && coopSource?.coop_surplus_cents !== undefined
+      ? Math.max(0, Number(coopSource.coop_surplus_cents))
       : null;
-
-  const { data: participantGainRows, error: participantGainError } = await client
-    .from('coop_ledger')
-    .select('id, delta_cents, created_at')
-    .eq('order_id', params.orderId)
-    .eq('reason', 'participant_gain')
-    .neq('profile_id', params.sharerProfileId)
-    .order('created_at', { ascending: false });
-  if (participantGainError) throw participantGainError;
-
-  const participantGainList =
-    (participantGainRows as Array<{ id: string; delta_cents: number | null }> | null) ?? [];
-  const participantGainsCents = participantGainList.reduce(
-    (sum, row) => sum + Math.max(0, Number(row.delta_cents ?? 0)),
-    0
-  );
-
-  const { data: participantCoopRows, error: participantCoopError } = await client
-    .from('coop_ledger')
-    .select('delta_cents')
-    .eq('order_id', params.orderId)
-    .eq('reason', 'consume_order')
-    .neq('profile_id', params.sharerProfileId);
-  if (participantCoopError) throw participantCoopError;
-
-  const participantCoopUsedCents = (
-    (participantCoopRows as Array<{ delta_cents: number | null }> | null) ?? []
-  ).reduce((sum, row) => sum + Math.max(0, -Number(row.delta_cents ?? 0)), 0);
+  const coopSurplusLedgerId = coopSource?.coop_surplus_ledger_id ?? null;
+  const participantGainsCents =
+    coopSource?.participant_gains_cents !== null && coopSource?.participant_gains_cents !== undefined
+      ? Math.max(0, Number(coopSource.participant_gains_cents))
+      : null;
+  const participantGainsLedgerRefs = (
+    Array.isArray(coopSource?.participant_gains_ledger_refs) ? coopSource?.participant_gains_ledger_refs : []
+  ).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const participantCoopUsedCents =
+    coopSource?.participant_coop_used_cents !== null && coopSource?.participant_coop_used_cents !== undefined
+      ? Math.max(0, Number(coopSource.participant_coop_used_cents))
+      : null;
 
   return {
     platformInvoice,
@@ -2332,9 +2321,9 @@ export const fetchProducerStatementSources = async (params: {
     sharerDiscountCents,
     sharerDiscountLineIds: sharerDiscountLines.map((line) => line.id),
     coopSurplusCents,
-    coopSurplusLedgerId: selectedRows[0]?.id ?? null,
+    coopSurplusLedgerId,
     participantGainsCents,
-    participantGainsLedgerRefs: participantGainList.map((row) => row.id),
+    participantGainsLedgerRefs,
     participantCoopUsedCents,
   };
 };

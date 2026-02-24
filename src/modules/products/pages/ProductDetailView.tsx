@@ -3208,10 +3208,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         <div className="pd-card pd-stack pd-stack--md">
           <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
             <div>
-              <p className="pd-section-title">Carte du parcours</p>
-              <p className="pd-text-xs pd-text-muted">
-                Les points apparaissent dès qu'au moins une adresse est renseignée.
-              </p>
+              <p className="pd-section-title">Carte des différentes étapes du produit</p>
             </div>
           </div>
           <div ref={journeyMapContainerRef} className="pd-map pd-map--circuit" />

@@ -725,7 +725,7 @@ export function OrderClientView({
           orderFull.order.producerProfileId
             ? supabaseClient
                 .from('legal_entities')
-                .select('producer_delivery_fee')
+                .select('platform_fee_percent, producer_delivery_fee')
                 .eq('profile_id', orderFull.order.producerProfileId)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
@@ -746,7 +746,9 @@ export function OrderClientView({
 
         const platformDefaultRaw = Number(settingsRes.data?.value_numeric ?? NaN);
         const platformDefaultPercent = Number.isFinite(platformDefaultRaw) ? platformDefaultRaw : null;
-        const producerRaw = Number(legalRes?.data?.producer_delivery_fee ?? NaN);
+        const producerPlatformRaw = Number((legalRes?.data as { platform_fee_percent?: number | null } | null)?.platform_fee_percent ?? NaN);
+        const producerLegacyRaw = Number((legalRes?.data as { producer_delivery_fee?: number | null } | null)?.producer_delivery_fee ?? NaN);
+        const producerRaw = Number.isFinite(producerPlatformRaw) ? producerPlatformRaw : producerLegacyRaw;
         const producerPercent = Number.isFinite(producerRaw) ? producerRaw : null;
         const productPercentById = new Map<string, number>();
         ((productsRes?.data as Array<{ id: string; platform_fee_percent?: number | null }> | null) ?? []).forEach(
@@ -760,7 +762,7 @@ export function OrderClientView({
 
         fallbackItems.forEach((item) => {
           const percent =
-            platformDefaultPercent ?? producerPercent ?? productPercentById.get(item.productId) ?? 0;
+            productPercentById.get(item.productId) ?? producerPercent ?? platformDefaultPercent ?? 0;
           if (!percent) return;
           const baseTotalCents = (item.unitBasePriceCents ?? 0) * (item.quantityUnits ?? 0);
           if (!Number.isFinite(baseTotalCents) || baseTotalCents <= 0) return;
@@ -893,6 +895,20 @@ const sharerAvatarUpdatedAt =
     if (!target) return;
     navigate(`/profil/${encodeURIComponent(target)}`);
   };
+  const getParticipantDisplayName = React.useCallback(
+    (participant: OrderFull['participants'][number], includeRole = false) => {
+      const meta = getProfileMeta(participant.profileId);
+      const baseName = participant.profileName ?? meta?.name;
+      const ownerFallbackHandle = isOwner ? participant.profileHandle ?? meta?.handle : null;
+      const fallbackLabel = participant.role === 'sharer' ? 'Partageur' : 'Participant';
+      const resolvedName = baseName ?? ownerFallbackHandle ?? fallbackLabel;
+      if (includeRole && participant.role === 'sharer') {
+        return `${resolvedName} (partageur)`;
+      }
+      return resolvedName;
+    },
+    [getProfileMeta, isOwner]
+  );
   const producerProfileHandle = producerProfileMeta?.handle ?? null;
   const producerAvatarPath = producerProfileMeta?.avatarPath ?? null;
   const producerAvatarUpdatedAt = producerProfileMeta?.avatarUpdatedAt ?? null;
@@ -1281,6 +1297,17 @@ const sharerAvatarUpdatedAt =
   const deliveryFeeToSharerCents = order.deliveryOption === 'producer_pickup' ? pickupFeeCents : 0;
   const sharerShareProductsCents = Math.max(0, Math.min(adjustedSharerShareCents, sharerProductsCents));
   const platformShareWithFeesCents = platformShareCents + paymentFeeCents + deliveryFeeToPlatformCents;
+  const participantGainsEstimatedCents = React.useMemo(
+    () =>
+      orderFullValue.participants.reduce((sum, participant) => {
+        if (participant.role !== 'participant') return sum;
+        if (sharerParticipant?.id && participant.id === sharerParticipant.id) return sum;
+        const paid = sumPaidCentsForParticipant(orderFullValue.payments, participant.id);
+        const finalTotal = Math.max(0, participant.totalAmountCents ?? 0);
+        return sum + Math.max(0, paid - finalTotal);
+      }, 0),
+    [orderFullValue.participants, orderFullValue.payments, sharerParticipant?.id]
+  );
   const remainingToCollectCents = Math.max(0, participantTotalsCents - paidTotalCents);
   const paymentsReceivedCents = participantsTotalAllCents;
   const sharerWeightKg = sharerParticipant?.totalWeightKg ?? 0;
@@ -1947,7 +1974,7 @@ const sharerAvatarUpdatedAt =
   const availabilityRange = explicitPickupDay
     ? { start: explicitPickupDay, end: explicitPickupDay }
     : toRange(availabilityStart, pickupWindowEndDay ?? slotRangeEnd);
-  const calendarMonthViews = React.useMemo(() => {
+  const allCalendarMonthViews = React.useMemo(() => {
     const calendarDates = [
       openRange?.start,
       openRange?.end,
@@ -1967,10 +1994,15 @@ const sharerAvatarUpdatedAt =
       : firstDate;
     const firstMonth = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1);
     const lastMonth = new Date(lastDate.getFullYear(), lastDate.getMonth(), 1);
-    const months =
-      firstMonth.getFullYear() === lastMonth.getFullYear() && firstMonth.getMonth() === lastMonth.getMonth()
-        ? [firstMonth]
-        : [firstMonth, lastMonth];
+    const months: Date[] = [];
+    const cursor = new Date(firstMonth.getFullYear(), firstMonth.getMonth(), 1);
+    while (
+      cursor.getFullYear() < lastMonth.getFullYear() ||
+      (cursor.getFullYear() === lastMonth.getFullYear() && cursor.getMonth() <= lastMonth.getMonth())
+    ) {
+      months.push(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
 
     return months.map((month) => ({
       key: `${month.getFullYear()}-${month.getMonth() + 1}`,
@@ -1978,6 +2010,26 @@ const sharerAvatarUpdatedAt =
       days: buildCalendarDays(month),
     }));
   }, [availabilityRange, deliveryRange, openRange, slotRangeEnd, slotRangeStart]);
+  const [calendarStartMonthIndex, setCalendarStartMonthIndex] = React.useState(0);
+  const maxCalendarStartMonthIndex = React.useMemo(
+    () => Math.max(0, allCalendarMonthViews.length - 2),
+    [allCalendarMonthViews.length]
+  );
+  React.useEffect(() => {
+    setCalendarStartMonthIndex((prev) => Math.min(prev, maxCalendarStartMonthIndex));
+  }, [maxCalendarStartMonthIndex]);
+  React.useEffect(() => {
+    if (!order.id) return;
+    setCalendarStartMonthIndex(0);
+  }, [order.id]);
+  const calendarMonthViews = React.useMemo(() => {
+    if (allCalendarMonthViews.length <= 2) return allCalendarMonthViews;
+    return allCalendarMonthViews.slice(calendarStartMonthIndex, calendarStartMonthIndex + 2);
+  }, [allCalendarMonthViews, calendarStartMonthIndex]);
+  const hasCalendarMonthNavigation = allCalendarMonthViews.length > 2;
+  const canGoCalendarMonthLeft = hasCalendarMonthNavigation && calendarStartMonthIndex > 0;
+  const canGoCalendarMonthRight =
+    hasCalendarMonthNavigation && calendarStartMonthIndex < maxCalendarStartMonthIndex;
   const calendarPeriodLabel = React.useMemo(() => {
     if (calendarMonthViews.length === 0) return '';
     if (calendarMonthViews.length === 1) return calendarMonthViews[0].monthLabel;
@@ -2053,9 +2105,7 @@ const sharerAvatarUpdatedAt =
     orderFullValue.participants.forEach((participant) => {
       if (participant.role !== 'participant') return;
       if (!participant.pickupSlotId) return;
-      const meta = getProfileMeta(participant.profileId);
-      const baseName = participant.profileName ?? meta?.name ?? 'Participant';
-      const name = baseName;
+      const name = getParticipantDisplayName(participant);
       const entry: PickupSlotReservation = {
         id: participant.id,
         name,
@@ -2068,7 +2118,7 @@ const sharerAvatarUpdatedAt =
     });
     map.forEach((list) => list.sort((a, b) => a.name.localeCompare(b.name)));
     return map;
-  }, [getProfileMeta, isOwner, orderFullValue.participants]);
+  }, [getParticipantDisplayName, isOwner, orderFullValue.participants]);
 
   const pickupSlotReservationCountsByDate = React.useMemo(() => {
     if (!isOwner) return new Map<string, number>();
@@ -2167,7 +2217,7 @@ const sharerAvatarUpdatedAt =
     const participantGainsCents =
       participantGainsFromSource !== null && participantGainsFromSource !== undefined
         ? Math.max(0, participantGainsFromSource)
-        : 0;
+        : participantGainsEstimatedCents;
     const participantCoopUsedCents =
       participantCoopUsedFromSource !== null && participantCoopUsedFromSource !== undefined
         ? Math.max(0, participantCoopUsedFromSource)
@@ -2234,6 +2284,7 @@ const sharerAvatarUpdatedAt =
     remainingToCollectCents,
     adjustedSharerShareCents,
     sharerShareProductsCents,
+    participantGainsEstimatedCents,
   ]);
   const producerPickupDetailLines = React.useMemo(() => {
     if (!shouldShowProducerPickupDetails) return [];
@@ -2335,10 +2386,7 @@ const sharerAvatarUpdatedAt =
         quantities[code] = (quantities[code] ?? 0) + item.quantityUnits;
       });
       const meta = getProfileMeta(participant.profileId);
-      const displayName =
-        participant.role === 'sharer'
-          ? `${participant.profileName ?? meta?.name ?? 'Partageur'} (partageur)`
-          : participant.profileName ?? meta?.name ?? 'Participant';
+      const displayName = getParticipantDisplayName(participant, true);
       return {
         id: participant.id,
         profileId: participant.profileId ?? null,
@@ -2353,7 +2401,7 @@ const sharerAvatarUpdatedAt =
         role: participant.role,
       };
     });
-  }, [getProfileMeta, orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
+  }, [getParticipantDisplayName, getProfileMeta, orderFullValue.items, orderFullValue.participants, productCodeByDbId, products]);
   const participantsWithTotals = participants;
   const pendingParticipants = orderFullValue.participants.filter(
     (participant) => participant.participationStatus === 'requested'
@@ -2649,7 +2697,39 @@ const sharerAvatarUpdatedAt =
                       <MapPin className="order-client-view__info-icon order-client-view__info-icon--accent" />
                       Retrait : {locationAddress}
                     </div>
-                    <span className="order-client-view__calendar-month">{calendarPeriodLabel}</span>
+                    {hasCalendarMonthNavigation ? (
+                      <div className="order-client-view__calendar-nav">
+                        <button
+                          type="button"
+                          className="order-client-view__calendar-nav-button"
+                          onClick={() => {
+                            if (!canGoCalendarMonthLeft) return;
+                            setCalendarStartMonthIndex((prev) => Math.max(prev - 1, 0));
+                          }}
+                          aria-label="Mois precedent"
+                          disabled={!canGoCalendarMonthLeft}
+                        >
+                          <ChevronLeft className="w-4 h-4 text-[#4B5563]" />
+                        </button>
+                        <span className="order-client-view__calendar-month">{calendarPeriodLabel}</span>
+                        <button
+                          type="button"
+                          className="order-client-view__calendar-nav-button"
+                          onClick={() => {
+                            if (!canGoCalendarMonthRight) return;
+                            setCalendarStartMonthIndex((prev) =>
+                              Math.min(prev + 1, maxCalendarStartMonthIndex)
+                            );
+                          }}
+                          aria-label="Mois suivant"
+                          disabled={!canGoCalendarMonthRight}
+                        >
+                          <ChevronRight className="w-4 h-4 text-[#4B5563]" />
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="order-client-view__calendar-month">{calendarPeriodLabel}</span>
+                    )}
                   </div>
                   <div className="order-client-view__calendar-legend">
                     <span className="order-client-view__calendar-legend-item">
@@ -3631,7 +3711,7 @@ const sharerAvatarUpdatedAt =
                 {pendingParticipants.map((participant) => (
                   <div key={participant.id} className="flex items-center justify-between gap-3">
                     <span className="text-[#92400E]">
-                      {participant.profileName ?? 'Participant'}
+                      {getParticipantDisplayName(participant)}
                     </span>
                     <div className="flex items-center gap-2">
                       <button

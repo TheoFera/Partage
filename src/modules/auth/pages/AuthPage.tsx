@@ -656,7 +656,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
                 </div>
                 <div className="auth-form__action-row">
                   <button type="button" onClick={() => setMode('login')} className="auth-btn auth-btn--primary">
-                    Je confirme avoir cliqué sur le lien
+                    Je confirme avoir cliqué sur le lien reçu et poursuis ma commande
                   </button>
                 </div>
               </>

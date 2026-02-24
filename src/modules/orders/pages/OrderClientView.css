@@ -705,6 +705,13 @@
   background-color: #fff7ed;
 }
 
+.order-client-view__calendar-nav-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: #e5e7eb;
+  background-color: #f9fafb;
+}
+
 .order-client-view__calendar-month {
   font-size: 0.85rem;
   font-weight: 600;
