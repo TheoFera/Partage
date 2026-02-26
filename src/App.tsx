@@ -1150,6 +1150,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   const [isLoading, setIsLoading] = React.useState(false);
   const [producerProfileLabels, setProducerProfileLabels] = React.useState<ProducerLabelDetail[]>([]);
   const [orderContext, setOrderContext] = React.useState<OrderFull | null>(null);
+  const [loadedOrderCode, setLoadedOrderCode] = React.useState<string | null>(null);
 
   const ordersForProduct = React.useMemo(() => {
     if (!product) return [] as GroupOrder[];
@@ -1247,19 +1248,23 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     let active = true;
     if (!orderCode) {
       setOrderContext(null);
+      setLoadedOrderCode(null);
       return () => {
         active = false;
       };
     }
+    setLoadedOrderCode(null);
     getOrderFullByCode(orderCode)
       .then((data) => {
         if (!active) return;
         setOrderContext(data);
+        setLoadedOrderCode(orderCode);
       })
       .catch((error) => {
         console.warn('Order context load error:', error);
         if (!active) return;
         setOrderContext(null);
+        setLoadedOrderCode(orderCode);
       });
     return () => {
       active = false;
@@ -1332,6 +1337,59 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     }
     return `/produits/${slug || 'produit'}-${productCodeValue}`;
   }, [activeLotCode, lotCode, orderCode, orderContext?.order?.orderCode, product]);
+
+  const orderMatchedProduct = React.useMemo(() => {
+    if (!product || !orderContext?.productsOffered?.length) return null;
+    const codeCandidates = new Set(
+      [product.productCode, product.id]
+        .map((value) => (value ?? '').trim())
+        .filter(Boolean)
+    );
+    const productDbId = (product.dbId ?? '').trim();
+    return (
+      orderContext.productsOffered.find((entry) => {
+        const entryCode = (entry.product?.code ?? '').trim();
+        const entryDbId = (entry.productId ?? entry.product?.id ?? '').trim();
+        if (productDbId && entryDbId && entryDbId === productDbId) return true;
+        if (entryCode && codeCandidates.has(entryCode)) return true;
+        if (entryDbId && codeCandidates.has(entryDbId)) return true;
+        return false;
+      }) ?? null
+    );
+  }, [orderContext?.productsOffered, product]);
+
+  const readonlyOrderProductPriceCents = React.useMemo(() => {
+    if (!orderCode || !orderMatchedProduct) return null;
+    if (Number.isFinite(orderMatchedProduct.unitFinalPriceCents ?? NaN)) {
+      return Math.max(0, Math.round(orderMatchedProduct.unitFinalPriceCents));
+    }
+    if (Number.isFinite(orderMatchedProduct.unitBasePriceCents ?? NaN)) {
+      return Math.max(0, Math.round(orderMatchedProduct.unitBasePriceCents));
+    }
+    return null;
+  }, [orderCode, orderMatchedProduct]);
+
+  React.useEffect(() => {
+    if (!orderCode || !product) return;
+    if (loadedOrderCode !== orderCode) return;
+    if (orderContext && orderMatchedProduct) return;
+    const slug = product.slug ?? slugify(product.name);
+    const productCodeValue = product.productCode ?? product.id;
+    const resolvedLotCode = lotCode ?? activeLotCode ?? product.activeLotCode ?? null;
+    const targetPath = resolvedLotCode
+      ? `/produits/${slug || 'produit'}-${productCodeValue}/lot/${resolvedLotCode}`
+      : `/produits/${slug || 'produit'}-${productCodeValue}`;
+    navigate(targetPath, { replace: true });
+  }, [
+    activeLotCode,
+    loadedOrderCode,
+    lotCode,
+    navigate,
+    orderCode,
+    orderContext,
+    orderMatchedProduct,
+    product,
+  ]);
 
   React.useEffect(() => {
     if (!product || lotCode || !activeLotCode) return;
@@ -1417,6 +1475,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
         catalog={products}
         supabaseClient={supabaseClient ?? null}
         producerProfileLabels={producerProfileLabels}
+        readonlyPriceCentsOverride={readonlyOrderProductPriceCents}
         onHeaderActionsChange={onHeaderActionsChange}
         onOpenProducer={onOpenProducer}
         onOpenRelatedProduct={onOpenRelatedProduct}

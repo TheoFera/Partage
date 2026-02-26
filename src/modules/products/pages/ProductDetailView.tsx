@@ -70,6 +70,7 @@ interface ProductDetailViewProps {
   onCreateProduct?: (payload: CreateProductPayload) => void;
   categoryOptions?: string[];
   producerProfileLabels?: ProducerLabelDetail[];
+  readonlyPriceCentsOverride?: number | null;
 }
 
 type DetailTabKey =
@@ -523,6 +524,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onCreateProduct,
   categoryOptions,
   producerProfileLabels,
+  readonlyPriceCentsOverride,
 }) => {
   const isCreateMode = mode === 'create';
   const [draft, setDraft] = React.useState<ProductDetail>(() => ({
@@ -570,6 +572,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [dragOverStepIndex, setDragOverStepIndex] = React.useState<number | null>(null);
   const [producerAvatarPath, setProducerAvatarPath] = React.useState<string | null>(null);
   const [producerAvatarUpdatedAt, setProducerAvatarUpdatedAt] = React.useState<string | null>(null);
+  const [producerProfileName, setProducerProfileName] = React.useState<string | null>(null);
+  const [producerProfileCity, setProducerProfileCity] = React.useState<string | null>(null);
   const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
   const imagePreviewRef = React.useRef<string | null>(null);
   const journeyMapContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -622,6 +626,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     if (!supabaseClient || !producerProfileId) {
       setProducerAvatarPath(null);
       setProducerAvatarUpdatedAt(null);
+      setProducerProfileName(null);
+      setProducerProfileCity(null);
       return () => {
         active = false;
       };
@@ -629,7 +635,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
     supabaseClient
       .from('profiles')
-      .select('avatar_path, avatar_updated_at')
+      .select('name, city, avatar_path, avatar_updated_at')
       .eq('id', producerProfileId)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -638,8 +644,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           console.warn('Producer avatar load error:', error);
           setProducerAvatarPath(null);
           setProducerAvatarUpdatedAt(null);
+          setProducerProfileName(null);
+          setProducerProfileCity(null);
           return;
         }
+        setProducerProfileName((data?.name as string | null) ?? null);
+        setProducerProfileCity((data?.city as string | null) ?? null);
         setProducerAvatarPath((data?.avatar_path as string | null) ?? null);
         setProducerAvatarUpdatedAt((data?.avatar_updated_at as string | null) ?? null);
       });
@@ -3037,11 +3047,19 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   );
   const basePriceCents = overrideLotPriceCents ?? eurosToCents(product.price);
   const computedPriceCents = editMode ? breakdownPriceCents : basePriceCents;
+  const resolvedDisplayPriceCents =
+    !editMode && Number.isFinite(readonlyPriceCentsOverride ?? NaN)
+      ? Math.max(0, Math.round(readonlyPriceCentsOverride ?? 0))
+      : computedPriceCents;
   const displayPriceLabel =
-    computedPriceCents > 0 ? formatEurosFromCents(computedPriceCents) : 'Prix définie plus tard dans "Gestion des lots"';
+    resolvedDisplayPriceCents > 0 ? formatEurosFromCents(resolvedDisplayPriceCents) : 'Prix définie plus tard dans "Gestion des lots"';
   const displayCategory = display.category || product.category;
   const displayImage = display.productImage?.url || product.imageUrl;
   const displayProducer = display.producer ?? detail.producer;
+  const resolvedProducerName =
+    producerProfileName?.trim() || displayProducer.name || product.producerName || 'Producteur';
+  const resolvedProducerCity =
+    producerProfileCity?.trim() || displayProducer.city || product.producerLocation || 'Ville proche';
   const producerAvatarFallback = displayProducer.photo || DEFAULT_PROFILE_AVATAR;
   const relatedCatalog = React.useMemo(() => {
     const map = new Map<string, Product>();
@@ -3066,8 +3084,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       category: item.category ?? product.category,
       imageUrl: displayImage || product.imageUrl,
       producerId: displayProducer.id ?? product.producerId,
-      producerName: item.producerName ?? displayProducer.name ?? product.producerName,
-      producerLocation: item.city ?? displayProducer.city ?? product.producerLocation,
+      producerName: item.producerName ?? resolvedProducerName,
+      producerLocation: item.city ?? resolvedProducerCity,
       inStock: true,
       measurement: product.measurement,
     };
@@ -4686,19 +4704,19 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 updatedAt={producerAvatarUpdatedAt}
                 supabaseClient={supabaseClient ?? null}
                 fallbackSrc={producerAvatarFallback}
-                alt={displayProducer.name}
+                alt={resolvedProducerName}
                 className="pd-avatar"
               />
               <div>
                 <div className="pd-row pd-gap-sm">
-                  <p className="pd-text-strong pd-producer-name">{displayProducer.name}</p>
+                  <p className="pd-text-strong pd-producer-name">{resolvedProducerName}</p>
                   {displayProducer.badgesProducteur?.includes('Producteur verifie') ? (
                     <span className="pd-chip pd-chip--success">Verifié</span>
                   ) : null}
                 </div>
                 <p className="pd-row pd-gap-xs pd-text-xs pd-text-muted">
                   <MapPin size={14} className="pd-icon pd-icon--accent" />
-                  {displayProducer.city || 'Ville proche'}
+                  {resolvedProducerCity}
                 </p>
               </div>
             </button>
@@ -4890,6 +4908,3 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     </div>
   );
 };
-
-
-
