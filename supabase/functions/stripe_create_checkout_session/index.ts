@@ -66,7 +66,7 @@ serve(async (req) => {
   form.append("metadata[user_id]", String(userData.user.id));
   form.append("payment_intent_data[metadata][order_id]", String(order_id));
   form.append("payment_intent_data[metadata][user_id]", String(userData.user.id));
-  form.append("phone_number_collection[enabled]", "true");
+  form.append("phone_number_collection[enabled]", "false");
   if (customerEmail) {
     form.append("customer_email", customerEmail);
   }
