@@ -11,6 +11,7 @@ const BREVO_SENDER_EMAIL = Deno.env.get("BREVO_SENDER_EMAIL") ?? "";
 const BREVO_SENDER_NAME = Deno.env.get("BREVO_SENDER_NAME") ?? "Partage";
 const BILLING_BUCKET = Deno.env.get("BILLING_BUCKET") ?? "facturation-documents";
 const LOGO_PUBLIC_URL = Deno.env.get("LOGO_PUBLIC_URL") ?? "";
+const FUNCTION_VERSION = "process_emails_sortants_2026_03_13_fix_01";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
   <g fill="none" stroke="#FF6D4D" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
@@ -372,6 +373,11 @@ Deno.serve(async (req) => {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  console.log(
+    "[process-emails-sortants]",
+    JSON.stringify({ version: FUNCTION_VERSION, mode, timestamp: new Date().toISOString() })
+  );
 
   const { data: jobs, error: dqErr } = await supabase.rpc("dequeue_emails_sortants", { p_limit: 10 });
   if (dqErr) {
@@ -850,6 +856,7 @@ Deno.serve(async (req) => {
   return new Response(
     JSON.stringify({
       ok: true,
+      version: FUNCTION_VERSION,
       mode,
       dequeued: jobs?.length ?? 0,
       processed,

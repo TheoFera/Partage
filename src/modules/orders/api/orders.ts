@@ -41,15 +41,8 @@ import {
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 const INVOICES_BUCKET = 'facturation-documents';
-const DISTRIBUTED_TRACE_PREFIX = '[distributed-trace]';
 
-export const logDistributedTrace = (event: string, payload?: Record<string, unknown>) => {
-  console.debug(DISTRIBUTED_TRACE_PREFIX, {
-    at: new Date().toISOString(),
-    event,
-    ...(payload ?? {}),
-  });
-};
+export const logDistributedTrace = (_event: string, _payload?: Record<string, unknown>) => {};
 
 type DemoOrderState = {
   participants: OrderParticipant[];
@@ -2093,7 +2086,7 @@ export const finalizeOrderPricing = async (orderId: string) => {
 export const createPlatformInvoiceForOrder = async (orderId: string) => {
   if (DEMO_MODE) return null;
   const client = getClient();
-  const { data, error } = await client.rpc('create_platform_invoice_for_order_v2', {
+  const { data, error } = await client.rpc('create_platform_invoice_for_order', {
     p_order_id: orderId,
   });
   if (error) throw error;
@@ -2105,15 +2098,15 @@ export const createPlatformInvoiceAndSendForOrder = async (orderId: string) => {
   const client = getClient();
   logDistributedTrace('createPlatformInvoiceAndSendForOrder.start', {
     orderId,
-    rpcName: 'create_platform_invoice_and_send_for_order_v2',
+    rpcName: 'create_platform_invoice_and_send_for_order',
   });
-  const { data, error } = await client.rpc('create_platform_invoice_and_send_for_order_v2', {
+  const { data, error } = await client.rpc('create_platform_invoice_and_send_for_order', {
     p_order_id: orderId,
   });
   if (error) {
     logDistributedTrace('createPlatformInvoiceAndSendForOrder.error', {
       orderId,
-      rpcName: 'create_platform_invoice_and_send_for_order_v2',
+      rpcName: 'create_platform_invoice_and_send_for_order',
       code: error.code ?? null,
       message: error.message ?? 'unknown error',
       details: error.details ?? null,
@@ -2123,7 +2116,7 @@ export const createPlatformInvoiceAndSendForOrder = async (orderId: string) => {
   }
   logDistributedTrace('createPlatformInvoiceAndSendForOrder.success', {
     orderId,
-    rpcName: 'create_platform_invoice_and_send_for_order_v2',
+    rpcName: 'create_platform_invoice_and_send_for_order',
     data: (data as Record<string, unknown> | null) ?? null,
   });
   return data;

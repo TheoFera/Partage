@@ -15,6 +15,12 @@
 -- - aucune ligne fallback
 -- - si une ligne de commande n'est pas couverte par un lot valide -> erreur explicite
 -- - frais de paiement et frais livraison restent informatifs (non ajoutes a la commission).
+--
+-- Important:
+-- - la creation SQL de la facture PLAT_PROD est correcte avec cette logique.
+-- - si la facture se recrit ensuite avec une ancienne logique, la cause est hors de cette fonction,
+--   typiquement dans le flux declenche par call_process_emails_sortants() si l'edge function
+--   deployee n'est pas synchronisee avec ce repo.
 
 create or replace function public.create_platform_invoice_for_order(p_order_id uuid)
 returns jsonb
@@ -294,7 +300,7 @@ begin
     jsonb_build_object(
       'component', 'platform_commission',
       'source', 'lot_only_strict',
-      'generator_version', 'plat_prod_v2026_03_13_trace_01',
+      'generator_version', 'plat_prod_single_version_2026_03_13',
       'lot_platform_cents', v_platform_from_lots_cents,
       'fallback_non_covered_cents', 0,
       'fallback_enabled', false,
@@ -351,3 +357,83 @@ begin
   end loop;
 end
 $$;
+
+-- --------------------------------------------------------------------
+-- Wrapper unique de creation + envoi
+-- --------------------------------------------------------------------
+create or replace function public.create_platform_invoice_and_send_for_order(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_result jsonb;
+begin
+  v_result := public.create_platform_invoice_for_order(p_order_id);
+  perform public.call_process_emails_sortants();
+  return v_result;
+end;
+$function$;
+
+create or replace function public.admin_create_platform_invoice_and_send_for_order(p_order_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_order public.orders%rowtype;
+  v_prev_sub text;
+  v_prev_claims text;
+  v_prev_role text;
+  v_result jsonb;
+begin
+  if current_user <> 'postgres' then
+    raise exception 'Admin only';
+  end if;
+
+  select *
+    into v_order
+  from public.orders
+  where id = p_order_id;
+
+  if not found then
+    raise exception 'Order not found';
+  end if;
+
+  if v_order.sharer_profile_id is null then
+    raise exception 'Order sharer_profile_id missing';
+  end if;
+
+  v_prev_sub := current_setting('request.jwt.claim.sub', true);
+  v_prev_claims := current_setting('request.jwt.claims', true);
+  v_prev_role := current_setting('request.jwt.claim.role', true);
+
+  perform set_config('request.jwt.claim.sub', v_order.sharer_profile_id::text, true);
+  perform set_config(
+    'request.jwt.claims',
+    jsonb_build_object('sub', v_order.sharer_profile_id::text, 'role', 'authenticated')::text,
+    true
+  );
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+
+  v_result := public.create_platform_invoice_and_send_for_order(p_order_id);
+
+  perform set_config('request.jwt.claim.sub', coalesce(v_prev_sub, ''), true);
+  perform set_config('request.jwt.claims', coalesce(v_prev_claims, ''), true);
+  perform set_config('request.jwt.claim.role', coalesce(v_prev_role, ''), true);
+
+  return v_result;
+end;
+$function$;
+
+drop function if exists public.admin_create_platform_invoice_and_send_for_order_v2(uuid);
+drop function if exists public.create_platform_invoice_and_send_for_order_v2(uuid);
+drop function if exists public.create_platform_invoice_for_order_v2(uuid);
+
+grant execute on function public.create_platform_invoice_for_order(uuid) to authenticated, service_role;
+grant execute on function public.create_platform_invoice_and_send_for_order(uuid) to authenticated, service_role;
+grant execute on function public.admin_create_platform_invoice_and_send_for_order(uuid) to service_role;
+
+notify pgrst, 'reload schema';
