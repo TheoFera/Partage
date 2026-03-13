@@ -38,6 +38,7 @@ import {
   getInvoiceDownloadUrl,
   getOrderFullByCode,
   issueParticipantInvoiceWithCoop,
+  logDistributedTrace,
   removeItem,
   rejectParticipation,
   reviewParticipantPickupSlot,
@@ -522,6 +523,11 @@ export function OrderClientView({
         return;
       }
       setIsInvoiceLoading(true);
+      logDistributedTrace('OrderClientView.loadInvoices.start', {
+        orderId,
+        currentUserId: currentUser.id,
+        producerProfileId: producerProfileId ?? null,
+      });
       try {
         const isProducerForOrder =
           Boolean(producerProfileId) &&
@@ -534,8 +540,23 @@ export function OrderClientView({
         ]);
         setParticipantInvoices(participantData);
         setProducerInvoices(producerData);
+        logDistributedTrace('OrderClientView.loadInvoices.success', {
+          orderId,
+          participantInvoiceCount: participantData.length,
+          producerInvoiceCount: producerData.length,
+          producerInvoices: producerData.map((invoice) => ({
+            id: invoice.id,
+            numero: invoice.numero,
+            totalTtcCents: invoice.totalTtcCents,
+            pdfPath: invoice.pdfPath,
+          })),
+        });
       } catch (error) {
         console.error('Invoice load error:', error);
+        logDistributedTrace('OrderClientView.loadInvoices.error', {
+          orderId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
         toast.error('Impossible de charger les factures.');
       } finally {
         setIsInvoiceLoading(false);
@@ -671,107 +692,57 @@ export function OrderClientView({
         acc[item.lotId] = (acc[item.lotId] ?? 0) + item.quantityUnits;
         return acc;
       }, {} as Record<string, number>);
-      const lotUnitBasePriceCents = lotItems.reduce((acc, item) => {
-        if (!item.lotId) return acc;
-        if (acc[item.lotId] === undefined) {
-          acc[item.lotId] = item.unitBasePriceCents ?? 0;
-        }
-        return acc;
-      }, {} as Record<string, number>);
 
       let platformFromLots = 0;
-      const lotsWithPlatform = new Set<string>();
-      if (lotIds.length > 0) {
-        const { data, error } = await supabaseClient
-          .from('lot_price_breakdown')
-          .select('lot_id, value_type, value_cents')
-          .in('lot_id', lotIds)
-          .eq('source', 'platform');
-        if (error) {
-          console.error('Platform fee fetch error:', error);
-        } else {
-          (data ?? []).forEach((row) => {
-            const lotId = row.lot_id as string;
-            const units = lotUnitTotals[lotId] ?? 0;
-            if (!units) return;
-            const valueType = row.value_type ?? 'cents';
-            let valuePerUnit = 0;
-            if (valueType === 'percent') {
-              const percent = Number(row.value_cents ?? 0);
-              const baseCents = lotUnitBasePriceCents[lotId] ?? 0;
-              valuePerUnit = Math.round(baseCents * (percent / 100));
-            } else {
-              valuePerUnit = Number(row.value_cents ?? 0);
-            }
-            if (!Number.isFinite(valuePerUnit)) return;
-            platformFromLots += valuePerUnit * units;
-            lotsWithPlatform.add(lotId);
-          });
-        }
-      }
-
-      let fallbackTotal = 0;
-      const fallbackItems = items.filter((item) => !item.lotId || !lotsWithPlatform.has(item.lotId));
-      if (fallbackItems.length) {
-        const productIds = Array.from(
-          new Set(fallbackItems.map((item) => item.productId).filter(Boolean))
-        ) as string[];
-        const [settingsRes, legalRes, productsRes] = await Promise.all([
-          supabaseClient
-            .from('platform_settings')
-            .select('value_numeric')
-            .eq('key', 'platform_fee_percent')
-            .maybeSingle(),
-          orderFull.order.producerProfileId
-            ? supabaseClient
-                .from('legal_entities')
-                .select('platform_fee_percent, producer_delivery_fee')
-                .eq('profile_id', orderFull.order.producerProfileId)
-                .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
-          productIds.length
-            ? supabaseClient.from('products').select('id, platform_fee_percent').in('id', productIds)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-
-        if (settingsRes.error) {
-          console.error('Platform settings fetch error:', settingsRes.error);
-        }
-        if (legalRes?.error) {
-          console.error('Producer platform fee fetch error:', legalRes.error);
-        }
-        if (productsRes?.error) {
-          console.error('Product platform fee fetch error:', productsRes.error);
-        }
-
-        const platformDefaultRaw = Number(settingsRes.data?.value_numeric ?? NaN);
-        const platformDefaultPercent = Number.isFinite(platformDefaultRaw) ? platformDefaultRaw : null;
-        const producerPlatformRaw = Number((legalRes?.data as { platform_fee_percent?: number | null } | null)?.platform_fee_percent ?? NaN);
-        const producerLegacyRaw = Number((legalRes?.data as { producer_delivery_fee?: number | null } | null)?.producer_delivery_fee ?? NaN);
-        const producerRaw = Number.isFinite(producerPlatformRaw) ? producerPlatformRaw : producerLegacyRaw;
-        const producerPercent = Number.isFinite(producerRaw) ? producerRaw : null;
-        const productPercentById = new Map<string, number>();
-        ((productsRes?.data as Array<{ id: string; platform_fee_percent?: number | null }> | null) ?? []).forEach(
-          (row) => {
-            const raw = Number(row.platform_fee_percent ?? NaN);
-            if (Number.isFinite(raw)) {
-              productPercentById.set(row.id, raw);
-            }
-          }
+      if (items.some((item) => !item.lotId)) {
+        throw new Error(
+          "Commission plateforme indisponible: certaines lignes de commande n'ont pas de lot associe."
         );
-
-        fallbackItems.forEach((item) => {
-          const percent =
-            productPercentById.get(item.productId) ?? producerPercent ?? platformDefaultPercent ?? 0;
-          if (!percent) return;
-          const baseTotalCents = (item.unitBasePriceCents ?? 0) * (item.quantityUnits ?? 0);
-          if (!Number.isFinite(baseTotalCents) || baseTotalCents <= 0) return;
-          fallbackTotal += Math.round(baseTotalCents * (percent / 100));
-        });
       }
+      if (!lotIds.length) {
+        throw new Error('Commission plateforme indisponible: aucun lot detecte sur les lignes de commande.');
+      }
+
+      const { data, error } = await supabaseClient
+        .from('lot_price_breakdown')
+        .select('lot_id, value_type, value_cents')
+        .in('lot_id', lotIds)
+        .eq('source', 'platform');
+      if (error) {
+        throw error;
+      }
+      const rows = (data ?? []) as Array<{ lot_id: string; value_type: string | null; value_cents: number | null }>;
+      const valuePerUnitByLot = new Map<string, number>();
+      rows.forEach((row) => {
+        const lotId = row.lot_id;
+        if (!lotId) return;
+        const valueType = (row.value_type ?? '').toLowerCase();
+        if (valueType !== 'cents') {
+          throw new Error(
+            `Commission plateforme invalide: lot ${lotId} en value_type='${row.value_type ?? 'null'}' (attendu: 'cents').`
+          );
+        }
+        const valuePerUnit = Number(row.value_cents ?? NaN);
+        if (!Number.isFinite(valuePerUnit)) {
+          throw new Error(`Commission plateforme invalide: value_cents non numerique pour lot ${lotId}.`);
+        }
+        valuePerUnitByLot.set(lotId, (valuePerUnitByLot.get(lotId) ?? 0) + valuePerUnit);
+      });
+
+      lotIds.forEach((lotId) => {
+        const valuePerUnit = valuePerUnitByLot.get(lotId);
+        if (valuePerUnit == null) {
+          throw new Error(
+            `Commission plateforme indisponible: lot ${lotId} non couvert par lot_price_breakdown(source='platform').`
+          );
+        }
+        const units = lotUnitTotals[lotId] ?? 0;
+        if (!units) return;
+        platformFromLots += valuePerUnit * units;
+      });
 
       if (isActive) {
-        setPlatformShareCents(platformFromLots + fallbackTotal);
+        setPlatformShareCents(platformFromLots);
       }
     };
 
@@ -1439,15 +1410,34 @@ const sharerAvatarUpdatedAt =
   const handleStatusUpdate = (nextStatus: OrderStatus, successMessage: string) => {
     if (isWorking) return;
     setIsWorking(true);
+    logDistributedTrace('OrderClientView.handleStatusUpdate.start', {
+      orderId: order.id,
+      previousStatus: order.status,
+      nextStatus,
+    });
     updateOrderStatus(order.id, nextStatus)
       .then(async (updatedStatus) => {
+        logDistributedTrace('OrderClientView.handleStatusUpdate.statusUpdated', {
+          orderId: order.id,
+          previousStatus: order.status,
+          nextStatus,
+          updatedStatus,
+        });
         updateOrderLocal({ status: updatedStatus });
         if (nextStatus === 'distributed') {
           try {
-            await createPlatformInvoiceAndSendForOrder(order.id);
+            const invoiceResult = await createPlatformInvoiceAndSendForOrder(order.id);
+            logDistributedTrace('OrderClientView.handleStatusUpdate.invoiceRpcResult', {
+              orderId: order.id,
+              invoiceResult: (invoiceResult as Record<string, unknown> | null) ?? null,
+            });
             await loadInvoices(order.id, order.producerProfileId);
           } catch (error) {
             console.error('Platform invoice error:', error);
+            logDistributedTrace('OrderClientView.handleStatusUpdate.invoiceRpcError', {
+              orderId: order.id,
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
             toast.error("Impossible d'emettre la facture plateforme.");
           }
         }
@@ -1455,6 +1445,11 @@ const sharerAvatarUpdatedAt =
       })
       .catch((error) => {
         console.error('Order status update error:', error);
+        logDistributedTrace('OrderClientView.handleStatusUpdate.statusError', {
+          orderId: order.id,
+          nextStatus,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
         toast.error('Impossible de mettre a jour le statut de la commande.');
       })
       .finally(() => setIsWorking(false));

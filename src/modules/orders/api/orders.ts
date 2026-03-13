@@ -41,6 +41,15 @@ import {
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 const INVOICES_BUCKET = 'facturation-documents';
+const DISTRIBUTED_TRACE_PREFIX = '[distributed-trace]';
+
+export const logDistributedTrace = (event: string, payload?: Record<string, unknown>) => {
+  console.debug(DISTRIBUTED_TRACE_PREFIX, {
+    at: new Date().toISOString(),
+    event,
+    ...(payload ?? {}),
+  });
+};
 
 type DemoOrderState = {
   participants: OrderParticipant[];
@@ -2094,10 +2103,24 @@ export const createPlatformInvoiceForOrder = async (orderId: string) => {
 export const createPlatformInvoiceAndSendForOrder = async (orderId: string) => {
   if (DEMO_MODE) return null;
   const client = getClient();
+  logDistributedTrace('createPlatformInvoiceAndSendForOrder.start', { orderId });
   const { data, error } = await client.rpc('create_platform_invoice_and_send_for_order', {
     p_order_id: orderId,
   });
-  if (error) throw error;
+  if (error) {
+    logDistributedTrace('createPlatformInvoiceAndSendForOrder.error', {
+      orderId,
+      code: error.code ?? null,
+      message: error.message ?? 'unknown error',
+      details: error.details ?? null,
+      hint: error.hint ?? null,
+    });
+    throw error;
+  }
+  logDistributedTrace('createPlatformInvoiceAndSendForOrder.success', {
+    orderId,
+    data: (data as Record<string, unknown> | null) ?? null,
+  });
   return data;
 };
 
@@ -2181,7 +2204,22 @@ const fetchInvoices = async (filters: {
   }
   const { data, error } = await query;
   if (error) throw error;
-  return ((data as DbFacture[] | null) ?? []).map(mapFactureRow);
+  const invoices = ((data as DbFacture[] | null) ?? []).map(mapFactureRow);
+  if (filters.serie === 'PLAT_PROD') {
+    logDistributedTrace('fetchInvoices.result', {
+      orderId: filters.orderId,
+      serie: filters.serie,
+      producerProfileId: filters.producerProfileId ?? null,
+      invoiceCount: invoices.length,
+      invoices: invoices.map((invoice) => ({
+        id: invoice.id,
+        numero: invoice.numero,
+        totalTtcCents: invoice.totalTtcCents,
+        pdfPath: invoice.pdfPath,
+      })),
+    });
+  }
+  return invoices;
 };
 
 export const fetchParticipantInvoices = async (orderId: string, currentProfileId: string): Promise<Facture[]> =>
@@ -2195,7 +2233,18 @@ export const fetchInvoiceLines = async (invoiceId: string): Promise<FactureLigne
   const client = getClient();
   const { data, error } = await client.from('facture_lignes').select('*').eq('facture_id', invoiceId);
   if (error) throw error;
-  return ((data as DbFactureLigne[] | null) ?? []).map(mapFactureLigneRow);
+  const lines = ((data as DbFactureLigne[] | null) ?? []).map(mapFactureLigneRow);
+  logDistributedTrace('fetchInvoiceLines.result', {
+    invoiceId,
+    lineCount: lines.length,
+    lines: lines.map((line) => ({
+      id: line.id,
+      label: line.label,
+      totalTtcCents: line.totalTtcCents,
+      metadata: line.metadata,
+    })),
+  });
+  return lines;
 };
 
 export type ProducerStatementSources = {
@@ -2311,6 +2360,23 @@ export const fetchProducerStatementSources = async (params: {
       ? Math.max(0, Number(coopSource.participant_coop_used_cents))
       : null;
 
+  logDistributedTrace('fetchProducerStatementSources.result', {
+    orderId: params.orderId,
+    platformInvoiceId: platformInvoice?.id ?? null,
+    platformInvoiceNumero: platformInvoice?.numero ?? null,
+    platformCommissionCents,
+    platformInvoiceLines: platformInvoiceLines.map((line) => ({
+      id: line.id,
+      totalTtcCents: line.totalTtcCents,
+      metadata: line.metadata,
+    })),
+    sharerInvoiceId: sharerInvoice?.id ?? null,
+    sharerDiscountCents,
+    coopSurplusCents,
+    participantGainsCents,
+    participantCoopUsedCents,
+  });
+
   return {
     platformInvoice,
     platformInvoiceLines,
@@ -2397,11 +2463,20 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus): P
     return status;
   }
   const client = getClient();
+  logDistributedTrace('updateOrderStatus.start', { orderId, status });
   const { error: rpcError } = await client.rpc('set_order_status', {
     p_order_id: orderId,
     p_status: status,
   });
   if (rpcError) {
+    logDistributedTrace('updateOrderStatus.rpcError', {
+      orderId,
+      status,
+      code: rpcError.code ?? null,
+      message: rpcError.message ?? 'unknown error',
+      details: rpcError.details ?? null,
+      hint: rpcError.hint ?? null,
+    });
     const isStatusDatesConstraint =
       rpcError.code === '23514' &&
       typeof rpcError.message === 'string' &&
@@ -2464,6 +2539,12 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus): P
       .select('status')
       .maybeSingle();
     if (error) throw error;
+    logDistributedTrace('updateOrderStatus.fallbackUpdate', {
+      orderId,
+      status,
+      updates,
+      resultStatus: data?.status ?? null,
+    });
     if (data?.status) {
       return data.status as OrderStatus;
     }
@@ -2474,6 +2555,11 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus): P
   if (!data?.status) {
     throw new Error("Aucune ligne mise a jour. Verifiez les droits d'acces sur la commande.");
   }
+  logDistributedTrace('updateOrderStatus.success', {
+    orderId,
+    status,
+    resultStatus: data.status,
+  });
   return data.status as OrderStatus;
 };
 

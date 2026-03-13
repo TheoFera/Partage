@@ -1,0 +1,804 @@
+ table_schema |          table_name          
+--------------+------------------------------
+ cron         | job
+ cron         | job_run_details
+ extensions   | pg_stat_statements
+ extensions   | pg_stat_statements_info
+ net          | _http_response
+ net          | http_request_queue
+ public       | coop_balances
+ public       | coop_ledger
+ public       | emails_sortants
+ public       | exploitation_labels
+ public       | facture_lignes
+ public       | facture_sequences_producteur
+ public       | factures
+ public       | legal_documents
+ public       | legal_entities
+ public       | legal_entities_public
+ public       | lot_inputs
+ public       | lot_labels
+ public       | lot_price_breakdown
+ public       | lot_reservations
+ public       | lot_trace_steps
+ public       | lots
+ public       | notifications
+ public       | order_items
+ public       | order_participants
+ public       | order_pickup_slots
+ public       | order_products
+ public       | order_status_history
+ public       | orders
+ public       | payments
+ public       | pending_documents_view
+ public       | platform_fee_costs
+ public       | platform_settings
+ public       | product_images
+ public       | product_ingredients
+ public       | product_journey_steps
+ public       | product_labels
+ public       | product_questions
+ public       | product_reviews
+ public       | products
+ public       | profiles
+ public       | v_products_listing
+(42 lignes)
+
+ table_schema |          table_name          | ordinal_position |             column_name             |        data_type         | is_nullable 
+--------------+------------------------------+------------------+-------------------------------------+--------------------------+-------------
+ cron         | job                          |                1 | jobid                               | bigint                   | NO
+ cron         | job                          |                2 | schedule                            | text                     | NO
+ cron         | job                          |                3 | command                             | text                     | NO
+ cron         | job                          |                4 | nodename                            | text                     | NO
+ cron         | job                          |                5 | nodeport                            | integer                  | NO
+ cron         | job                          |                6 | database                            | text                     | NO
+ cron         | job                          |                7 | username                            | text                     | NO
+ cron         | job                          |                8 | active                              | boolean                  | NO
+ cron         | job                          |                9 | jobname                             | text                     | YES
+ cron         | job_run_details              |                1 | jobid                               | bigint                   | YES
+ cron         | job_run_details              |                2 | runid                               | bigint                   | NO
+ cron         | job_run_details              |                3 | job_pid                             | integer                  | YES
+ cron         | job_run_details              |                4 | database                            | text                     | YES
+ cron         | job_run_details              |                5 | username                            | text                     | YES
+ cron         | job_run_details              |                6 | command                             | text                     | YES
+ cron         | job_run_details              |                7 | status                              | text                     | YES
+ cron         | job_run_details              |                8 | return_message                      | text                     | YES
+ cron         | job_run_details              |                9 | start_time                          | timestamp with time zone | YES
+ cron         | job_run_details              |               10 | end_time                            | timestamp with time zone | YES
+ extensions   | pg_stat_statements           |                1 | userid                              | oid                      | YES
+ extensions   | pg_stat_statements           |                2 | dbid                                | oid                      | YES
+ extensions   | pg_stat_statements           |                3 | toplevel                            | boolean                  | YES
+ extensions   | pg_stat_statements           |                4 | queryid                             | bigint                   | YES
+ extensions   | pg_stat_statements           |                5 | query                               | text                     | YES
+ extensions   | pg_stat_statements           |                6 | plans                               | bigint                   | YES
+ extensions   | pg_stat_statements           |                7 | total_plan_time                     | double precision         | YES
+ extensions   | pg_stat_statements           |                8 | min_plan_time                       | double precision         | YES
+ extensions   | pg_stat_statements           |                9 | max_plan_time                       | double precision         | YES
+ extensions   | pg_stat_statements           |               10 | mean_plan_time                      | double precision         | YES
+ extensions   | pg_stat_statements           |               11 | stddev_plan_time                    | double precision         | YES
+ extensions   | pg_stat_statements           |               12 | calls                               | bigint                   | YES
+ extensions   | pg_stat_statements           |               13 | total_exec_time                     | double precision         | YES
+ extensions   | pg_stat_statements           |               14 | min_exec_time                       | double precision         | YES
+ extensions   | pg_stat_statements           |               15 | max_exec_time                       | double precision         | YES
+ extensions   | pg_stat_statements           |               16 | mean_exec_time                      | double precision         | YES
+ extensions   | pg_stat_statements           |               17 | stddev_exec_time                    | double precision         | YES
+ extensions   | pg_stat_statements           |               18 | rows                                | bigint                   | YES
+ extensions   | pg_stat_statements           |               19 | shared_blks_hit                     | bigint                   | YES
+ extensions   | pg_stat_statements           |               20 | shared_blks_read                    | bigint                   | YES
+ extensions   | pg_stat_statements           |               21 | shared_blks_dirtied                 | bigint                   | YES
+ extensions   | pg_stat_statements           |               22 | shared_blks_written                 | bigint                   | YES
+ extensions   | pg_stat_statements           |               23 | local_blks_hit                      | bigint                   | YES
+ extensions   | pg_stat_statements           |               24 | local_blks_read                     | bigint                   | YES
+ extensions   | pg_stat_statements           |               25 | local_blks_dirtied                  | bigint                   | YES
+ extensions   | pg_stat_statements           |               26 | local_blks_written                  | bigint                   | YES
+ extensions   | pg_stat_statements           |               27 | temp_blks_read                      | bigint                   | YES
+ extensions   | pg_stat_statements           |               28 | temp_blks_written                   | bigint                   | YES
+ extensions   | pg_stat_statements           |               29 | shared_blk_read_time                | double precision         | YES
+ extensions   | pg_stat_statements           |               30 | shared_blk_write_time               | double precision         | YES
+ extensions   | pg_stat_statements           |               31 | local_blk_read_time                 | double precision         | YES
+ extensions   | pg_stat_statements           |               32 | local_blk_write_time                | double precision         | YES
+ extensions   | pg_stat_statements           |               33 | temp_blk_read_time                  | double precision         | YES
+ extensions   | pg_stat_statements           |               34 | temp_blk_write_time                 | double precision         | YES
+ extensions   | pg_stat_statements           |               35 | wal_records                         | bigint                   | YES
+ extensions   | pg_stat_statements           |               36 | wal_fpi                             | bigint                   | YES
+ extensions   | pg_stat_statements           |               37 | wal_bytes                           | numeric                  | YES
+ extensions   | pg_stat_statements           |               38 | jit_functions                       | bigint                   | YES
+ extensions   | pg_stat_statements           |               39 | jit_generation_time                 | double precision         | YES
+ extensions   | pg_stat_statements           |               40 | jit_inlining_count                  | bigint                   | YES
+ extensions   | pg_stat_statements           |               41 | jit_inlining_time                   | double precision         | YES
+ extensions   | pg_stat_statements           |               42 | jit_optimization_count              | bigint                   | YES
+ extensions   | pg_stat_statements           |               43 | jit_optimization_time               | double precision         | YES
+ extensions   | pg_stat_statements           |               44 | jit_emission_count                  | bigint                   | YES
+ extensions   | pg_stat_statements           |               45 | jit_emission_time                   | double precision         | YES
+ extensions   | pg_stat_statements           |               46 | jit_deform_count                    | bigint                   | YES
+ extensions   | pg_stat_statements           |               47 | jit_deform_time                     | double precision         | YES
+ extensions   | pg_stat_statements           |               48 | stats_since                         | timestamp with time zone | YES
+ extensions   | pg_stat_statements           |               49 | minmax_stats_since                  | timestamp with time zone | YES
+ extensions   | pg_stat_statements_info      |                1 | dealloc                             | bigint                   | YES
+ extensions   | pg_stat_statements_info      |                2 | stats_reset                         | timestamp with time zone | YES
+ net          | _http_response               |                1 | id                                  | bigint                   | YES
+ net          | _http_response               |                2 | status_code                         | integer                  | YES
+ net          | _http_response               |                3 | content_type                        | text                     | YES
+ net          | _http_response               |                4 | headers                             | jsonb                    | YES
+ net          | _http_response               |                5 | content                             | text                     | YES
+ net          | _http_response               |                6 | timed_out                           | boolean                  | YES
+ net          | _http_response               |                7 | error_msg                           | text                     | YES
+ net          | _http_response               |                8 | created                             | timestamp with time zone | NO
+ net          | http_request_queue           |                1 | id                                  | bigint                   | NO
+ net          | http_request_queue           |                2 | method                              | text                     | NO
+ net          | http_request_queue           |                3 | url                                 | text                     | NO
+ net          | http_request_queue           |                4 | headers                             | jsonb                    | YES
+ net          | http_request_queue           |                5 | body                                | bytea                    | YES
+ net          | http_request_queue           |                6 | timeout_milliseconds                | integer                  | NO
+ public       | coop_balances                |                1 | profile_id                          | uuid                     | NO
+ public       | coop_balances                |                2 | balance_cents                       | integer                  | NO
+ public       | coop_balances                |                3 | updated_at                          | timestamp with time zone | NO
+ public       | coop_ledger                  |                1 | id                                  | uuid                     | NO
+ public       | coop_ledger                  |                2 | profile_id                          | uuid                     | NO
+ public       | coop_ledger                  |                3 | order_id                            | uuid                     | YES
+ public       | coop_ledger                  |                4 | delta_cents                         | integer                  | NO
+ public       | coop_ledger                  |                5 | reason                              | text                     | NO
+ public       | coop_ledger                  |                6 | metadata                            | jsonb                    | NO
+ public       | coop_ledger                  |                7 | created_at                          | timestamp with time zone | NO
+ public       | emails_sortants              |                1 | id                                  | uuid                     | NO
+ public       | emails_sortants              |                2 | kind                                | text                     | NO
+ public       | emails_sortants              |                3 | status                              | text                     | NO
+ public       | emails_sortants              |                4 | to_profile_id                       | uuid                     | YES
+ public       | emails_sortants              |                5 | facture_id                          | uuid                     | YES
+ public       | emails_sortants              |                6 | payload                             | jsonb                    | NO
+ public       | emails_sortants              |                7 | try_count                           | integer                  | NO
+ public       | emails_sortants              |                8 | last_error                          | text                     | YES
+ public       | emails_sortants              |                9 | created_at                          | timestamp with time zone | NO
+ public       | emails_sortants              |               10 | sent_at                             | timestamp with time zone | YES
+ public       | emails_sortants              |               11 | locked_at                           | timestamp with time zone | YES
+ public       | emails_sortants              |               12 | provider_message_id                 | text                     | YES
+ public       | exploitation_labels          |                1 | id                                  | uuid                     | NO
+ public       | exploitation_labels          |                2 | profile_id                          | uuid                     | NO
+ public       | exploitation_labels          |                3 | label                               | text                     | NO
+ public       | exploitation_labels          |                4 | description                         | text                     | YES
+ public       | exploitation_labels          |                5 | label_type                          | text                     | YES
+ public       | exploitation_labels          |                6 | created_at                          | timestamp with time zone | NO
+ public       | exploitation_labels          |                7 | obtained_year                       | integer                  | YES
+ public       | facture_lignes               |                1 | id                                  | uuid                     | NO
+ public       | facture_lignes               |                2 | facture_id                          | uuid                     | NO
+ public       | facture_lignes               |                3 | label                               | text                     | NO
+ public       | facture_lignes               |                4 | quantity                            | numeric                  | NO
+ public       | facture_lignes               |                5 | unit_ttc_cents                      | integer                  | NO
+ public       | facture_lignes               |                6 | total_ttc_cents                     | integer                  | NO
+ public       | facture_lignes               |                7 | vat_rate                            | numeric                  | NO
+ public       | facture_lignes               |                8 | total_ht_cents                      | integer                  | NO
+ public       | facture_lignes               |                9 | total_tva_cents                     | integer                  | NO
+ public       | facture_lignes               |               10 | metadata                            | jsonb                    | NO
+ public       | facture_sequences_producteur |                1 | producer_profile_id                 | uuid                     | NO
+ public       | facture_sequences_producteur |                2 | year                                | integer                  | NO
+ public       | facture_sequences_producteur |                3 | last_prod_client                    | integer                  | NO
+ public       | facture_sequences_producteur |                4 | last_plat_prod                      | integer                  | NO
+ public       | facture_sequences_producteur |                5 | updated_at                          | timestamp with time zone | NO
+ public       | factures                     |                1 | id                                  | uuid                     | NO
+ public       | factures                     |                2 | serie                               | text                     | NO
+ public       | factures                     |                3 | producer_profile_id                 | uuid                     | NO
+ public       | factures                     |                4 | order_id                            | uuid                     | NO
+ public       | factures                     |                5 | payment_id                          | uuid                     | YES
+ public       | factures                     |                6 | client_profile_id                   | uuid                     | YES
+ public       | factures                     |                7 | numero                              | text                     | NO
+ public       | factures                     |                8 | issued_at                           | timestamp with time zone | NO
+ public       | factures                     |                9 | currency                            | text                     | NO
+ public       | factures                     |               10 | total_ttc_cents                     | integer                  | NO
+ public       | factures                     |               11 | total_ht_cents                      | integer                  | NO
+ public       | factures                     |               12 | total_tva_cents                     | integer                  | NO
+ public       | factures                     |               13 | mention_tva                         | text                     | YES
+ public       | factures                     |               14 | seller_snapshot                     | jsonb                    | NO
+ public       | factures                     |               15 | buyer_snapshot                      | jsonb                    | NO
+ public       | factures                     |               16 | pdf_path                            | text                     | YES
+ public       | factures                     |               17 | status                              | text                     | NO
+ public       | factures                     |               18 | created_at                          | timestamp with time zone | NO
+ public       | factures                     |               19 | updated_at                          | timestamp with time zone | NO
+ public       | legal_documents              |                1 | id                                  | uuid                     | NO
+ public       | legal_documents              |                2 | profile_id                          | uuid                     | NO
+ public       | legal_documents              |                3 | legal_entity_id                     | uuid                     | YES
+ public       | legal_documents              |                4 | doc_type                            | text                     | NO
+ public       | legal_documents              |                5 | status                              | text                     | NO
+ public       | legal_documents              |                6 | template_version                    | text                     | NO
+ public       | legal_documents              |                7 | generated_pdf_path                  | text                     | YES
+ public       | legal_documents              |                8 | signed_pdf_path                     | text                     | YES
+ public       | legal_documents              |                9 | submitted_at                        | timestamp with time zone | YES
+ public       | legal_documents              |               10 | reviewed_at                         | timestamp with time zone | YES
+ public       | legal_documents              |               11 | reviewer_profile_id                 | uuid                     | YES
+ public       | legal_documents              |               12 | rejection_reason                    | text                     | YES
+ public       | legal_documents              |               13 | created_at                          | timestamp with time zone | NO
+ public       | legal_documents              |               14 | updated_at                          | timestamp with time zone | NO
+ public       | legal_entities               |                1 | id                                  | uuid                     | NO
+ public       | legal_entities               |                2 | profile_id                          | uuid                     | NO
+ public       | legal_entities               |                3 | legal_name                          | text                     | NO
+ public       | legal_entities               |                4 | siret                               | text                     | NO
+ public       | legal_entities               |                5 | vat_number                          | text                     | YES
+ public       | legal_entities               |                6 | entity_type                         | text                     | NO
+ public       | legal_entities               |                7 | created_at                          | timestamp with time zone | NO
+ public       | legal_entities               |                8 | updated_at                          | timestamp with time zone | NO
+ public       | legal_entities               |                9 | delivery_lead_type                  | text                     | YES
+ public       | legal_entities               |               10 | delivery_lead_days                  | integer                  | YES
+ public       | legal_entities               |               11 | delivery_fixed_day                  | text                     | YES
+ public       | legal_entities               |               12 | chronofresh_enabled                 | boolean                  | YES
+ public       | legal_entities               |               13 | chronofresh_min_weight              | numeric                  | YES
+ public       | legal_entities               |               14 | chronofresh_max_weight              | numeric                  | YES
+ public       | legal_entities               |               15 | producer_delivery_enabled           | boolean                  | YES
+ public       | legal_entities               |               16 | producer_delivery_days              | ARRAY                    | YES
+ public       | legal_entities               |               17 | producer_delivery_min_weight        | numeric                  | YES
+ public       | legal_entities               |               18 | producer_delivery_max_weight        | numeric                  | YES
+ public       | legal_entities               |               19 | producer_pickup_enabled             | boolean                  | YES
+ public       | legal_entities               |               20 | producer_pickup_days                | ARRAY                    | YES
+ public       | legal_entities               |               21 | producer_pickup_start_time          | time without time zone   | YES
+ public       | legal_entities               |               22 | producer_pickup_end_time            | time without time zone   | YES
+ public       | legal_entities               |               23 | producer_pickup_min_weight          | numeric                  | YES
+ public       | legal_entities               |               24 | producer_pickup_max_weight          | numeric                  | YES
+ public       | legal_entities               |               25 | producer_category                   | text                     | YES
+ public       | legal_entities               |               26 | iban                                | text                     | YES
+ public       | legal_entities               |               27 | account_holder_name                 | text                     | YES
+ public       | legal_entities               |               28 | platform_fee_percent                | numeric                  | YES
+ public       | legal_entities               |               29 | producer_delivery_fee               | numeric                  | YES
+ public       | legal_entities               |               30 | producer_delivery_radius_km         | numeric                  | YES
+ public       | legal_entities               |               31 | vat_regime                          | text                     | NO
+ public       | legal_entities               |               32 | can_receive_sharer_cash             | boolean                  | NO
+ public       | legal_entities_public        |                1 | profile_id                          | uuid                     | NO
+ public       | legal_entities_public        |                2 | delivery_lead_type                  | text                     | YES
+ public       | legal_entities_public        |                3 | delivery_lead_days                  | integer                  | YES
+ public       | legal_entities_public        |                4 | delivery_fixed_day                  | text                     | YES
+ public       | legal_entities_public        |                5 | chronofresh_enabled                 | boolean                  | YES
+ public       | legal_entities_public        |                6 | chronofresh_min_weight              | numeric                  | YES
+ public       | legal_entities_public        |                7 | chronofresh_max_weight              | numeric                  | YES
+ public       | legal_entities_public        |                8 | producer_delivery_enabled           | boolean                  | YES
+ public       | legal_entities_public        |                9 | producer_delivery_days              | ARRAY                    | YES
+ public       | legal_entities_public        |               10 | producer_delivery_min_weight        | numeric                  | YES
+ public       | legal_entities_public        |               11 | producer_delivery_max_weight        | numeric                  | YES
+ public       | legal_entities_public        |               12 | producer_delivery_radius_km         | numeric                  | YES
+ public       | legal_entities_public        |               13 | producer_delivery_fee               | numeric                  | YES
+ public       | legal_entities_public        |               14 | producer_pickup_enabled             | boolean                  | YES
+ public       | legal_entities_public        |               15 | producer_pickup_days                | ARRAY                    | YES
+ public       | legal_entities_public        |               16 | producer_pickup_start_time          | text                     | YES
+ public       | legal_entities_public        |               17 | producer_pickup_end_time            | text                     | YES
+ public       | legal_entities_public        |               18 | producer_pickup_min_weight          | numeric                  | YES
+ public       | legal_entities_public        |               19 | producer_pickup_max_weight          | numeric                  | YES
+ public       | lot_inputs                   |                1 | id                                  | uuid                     | NO
+ public       | lot_inputs                   |                2 | lot_id                              | uuid                     | NO
+ public       | lot_inputs                   |                3 | input_name                          | text                     | NO
+ public       | lot_inputs                   |                4 | reason                              | text                     | YES
+ public       | lot_inputs                   |                5 | details                             | text                     | YES
+ public       | lot_inputs                   |                6 | created_at                          | timestamp with time zone | NO
+ public       | lot_labels                   |                1 | id                                  | uuid                     | NO
+ public       | lot_labels                   |                3 | label                               | text                     | NO
+ public       | lot_labels                   |                4 | description                         | text                     | YES
+ public       | lot_labels                   |                5 | label_type                          | text                     | YES
+ public       | lot_labels                   |                6 | created_at                          | timestamp with time zone | NO
+ public       | lot_labels                   |                7 | obtained_year                       | integer                  | YES
+ public       | lot_labels                   |                8 | product_id                          | uuid                     | NO
+ public       | lot_labels                   |                9 | lot_id                              | uuid                     | YES
+ public       | lot_price_breakdown          |                1 | id                                  | uuid                     | NO
+ public       | lot_price_breakdown          |                3 | label                               | text                     | NO
+ public       | lot_price_breakdown          |                4 | value_type                          | USER-DEFINED             | NO
+ public       | lot_price_breakdown          |                5 | value_cents                         | integer                  | YES
+ public       | lot_price_breakdown          |                7 | sort_order                          | integer                  | NO
+ public       | lot_price_breakdown          |                8 | created_at                          | timestamp with time zone | NO
+ public       | lot_price_breakdown          |               10 | stakeholder                         | text                     | YES
+ public       | lot_price_breakdown          |               11 | lot_id                              | uuid                     | YES
+ public       | lot_price_breakdown          |               12 | source                              | USER-DEFINED             | NO
+ public       | lot_price_breakdown          |               13 | platform_cost_code                  | text                     | YES
+ public       | lot_price_breakdown          |               14 | stakeholder_key                     | text                     | YES
+ public       | lot_reservations             |                1 | id                                  | uuid                     | NO
+ public       | lot_reservations             |                2 | lot_id                              | uuid                     | NO
+ public       | lot_reservations             |                3 | order_id                            | uuid                     | NO
+ public       | lot_reservations             |                4 | order_item_id                       | uuid                     | NO
+ public       | lot_reservations             |                5 | reserved_units                      | integer                  | YES
+ public       | lot_reservations             |                6 | reserved_kg                         | numeric                  | YES
+ public       | lot_reservations             |                7 | status                              | text                     | NO
+ public       | lot_reservations             |                8 | expires_at                          | timestamp with time zone | YES
+ public       | lot_reservations             |                9 | created_at                          | timestamp with time zone | NO
+ public       | lot_trace_steps              |                1 | id                                  | uuid                     | NO
+ public       | lot_trace_steps              |                2 | lot_id                              | uuid                     | NO
+ public       | lot_trace_steps              |                3 | product_step_id                     | uuid                     | YES
+ public       | lot_trace_steps              |                4 | step_label                          | text                     | YES
+ public       | lot_trace_steps              |                5 | occurred_at                         | date                     | YES
+ public       | lot_trace_steps              |                6 | location                            | text                     | YES
+ public       | lot_trace_steps              |                7 | notes                               | text                     | YES
+ public       | lot_trace_steps              |                8 | evidence_label                      | text                     | YES
+ public       | lot_trace_steps              |                9 | evidence_url                        | text                     | YES
+ public       | lot_trace_steps              |               10 | metadata                            | jsonb                    | NO
+ public       | lot_trace_steps              |               11 | created_at                          | timestamp with time zone | NO
+ public       | lots                         |                1 | id                                  | uuid                     | NO
+ public       | lots                         |                2 | lot_code                            | text                     | NO
+ public       | lots                         |                3 | product_id                          | uuid                     | NO
+ public       | lots                         |                4 | status                              | USER-DEFINED             | NO
+ public       | lots                         |                5 | price_cents                         | integer                  | NO
+ public       | lots                         |                6 | stock_units                         | integer                  | YES
+ public       | lots                         |                7 | stock_kg                            | numeric                  | YES
+ public       | lots                         |                8 | lot_comment                         | text                     | YES
+ public       | lots                         |                9 | produced_at                         | date                     | YES
+ public       | lots                         |               10 | dlc                                 | date                     | YES
+ public       | lots                         |               11 | ddm                                 | date                     | YES
+ public       | lots                         |               12 | notes                               | text                     | YES
+ public       | lots                         |               13 | metadata                            | jsonb                    | NO
+ public       | lots                         |               14 | created_at                          | timestamp with time zone | NO
+ public       | lots                         |               15 | updated_at                          | timestamp with time zone | NO
+ public       | lots                         |               16 | lot_reference                       | text                     | YES
+ public       | notifications                |                1 | id                                  | uuid                     | NO
+ public       | notifications                |                2 | profile_id                          | uuid                     | NO
+ public       | notifications                |                3 | order_id                            | uuid                     | YES
+ public       | notifications                |                4 | title                               | text                     | NO
+ public       | notifications                |                5 | message                             | text                     | NO
+ public       | notifications                |                6 | notification_type                   | text                     | NO
+ public       | notifications                |                7 | event_key                           | text                     | NO
+ public       | notifications                |                8 | data                                | jsonb                    | YES
+ public       | notifications                |                9 | created_at                          | timestamp with time zone | NO
+ public       | notifications                |               10 | read_at                             | timestamp with time zone | YES
+ public       | order_items                  |                1 | id                                  | uuid                     | NO
+ public       | order_items                  |                2 | order_id                            | uuid                     | NO
+ public       | order_items                  |                3 | participant_id                      | uuid                     | NO
+ public       | order_items                  |                4 | product_id                          | uuid                     | NO
+ public       | order_items                  |                5 | lot_id                              | uuid                     | YES
+ public       | order_items                  |                6 | quantity_units                      | integer                  | NO
+ public       | order_items                  |                7 | unit_label                          | text                     | YES
+ public       | order_items                  |                8 | unit_weight_kg                      | numeric                  | YES
+ public       | order_items                  |                9 | unit_base_price_cents               | integer                  | NO
+ public       | order_items                  |               10 | unit_delivery_cents                 | integer                  | NO
+ public       | order_items                  |               11 | unit_sharer_fee_cents               | integer                  | NO
+ public       | order_items                  |               12 | unit_final_price_cents              | integer                  | NO
+ public       | order_items                  |               13 | line_total_cents                    | integer                  | NO
+ public       | order_items                  |               14 | line_weight_kg                      | numeric                  | NO
+ public       | order_items                  |               15 | is_sharer_share                     | boolean                  | NO
+ public       | order_items                  |               16 | created_at                          | timestamp with time zone | NO
+ public       | order_items                  |               17 | updated_at                          | timestamp with time zone | NO
+ public       | order_participants           |                1 | id                                  | uuid                     | NO
+ public       | order_participants           |                2 | order_id                            | uuid                     | NO
+ public       | order_participants           |                3 | profile_id                          | uuid                     | YES
+ public       | order_participants           |                4 | role                                | text                     | NO
+ public       | order_participants           |                5 | participation_status                | text                     | NO
+ public       | order_participants           |                6 | request_message                     | text                     | YES
+ public       | order_participants           |                7 | requested_at                        | timestamp with time zone | NO
+ public       | order_participants           |                8 | reviewed_at                         | timestamp with time zone | YES
+ public       | order_participants           |                9 | reviewed_by                         | uuid                     | YES
+ public       | order_participants           |               10 | pickup_slot_id                      | uuid                     | YES
+ public       | order_participants           |               11 | pickup_slot_status                  | text                     | YES
+ public       | order_participants           |               12 | pickup_slot_requested_at            | timestamp with time zone | YES
+ public       | order_participants           |               13 | pickup_slot_reviewed_at             | timestamp with time zone | YES
+ public       | order_participants           |               14 | pickup_slot_reviewed_by             | uuid                     | YES
+ public       | order_participants           |               15 | total_weight_kg                     | numeric                  | NO
+ public       | order_participants           |               16 | total_amount_cents                  | integer                  | NO
+ public       | order_participants           |               17 | created_at                          | timestamp with time zone | NO
+ public       | order_participants           |               18 | updated_at                          | timestamp with time zone | NO
+ public       | order_participants           |               19 | pickup_code                         | text                     | YES
+ public       | order_participants           |               20 | pickup_code_generated_at            | timestamp with time zone | YES
+ public       | order_participants           |               21 | picked_up_at                        | timestamp with time zone | YES
+ public       | order_participants           |               22 | pickup_slot_time                    | text                     | YES
+ public       | order_pickup_slots           |                1 | id                                  | uuid                     | NO
+ public       | order_pickup_slots           |                2 | order_id                            | uuid                     | NO
+ public       | order_pickup_slots           |                3 | slot_type                           | text                     | NO
+ public       | order_pickup_slots           |                4 | day                                 | text                     | YES
+ public       | order_pickup_slots           |                5 | slot_date                           | date                     | YES
+ public       | order_pickup_slots           |                6 | label                               | text                     | NO
+ public       | order_pickup_slots           |                7 | enabled                             | boolean                  | NO
+ public       | order_pickup_slots           |                8 | start_time                          | time without time zone   | NO
+ public       | order_pickup_slots           |                9 | end_time                            | time without time zone   | NO
+ public       | order_pickup_slots           |               10 | sort_order                          | integer                  | NO
+ public       | order_pickup_slots           |               11 | created_at                          | timestamp with time zone | NO
+ public       | order_pickup_slots           |               12 | updated_at                          | timestamp with time zone | NO
+ public       | order_products               |                1 | id                                  | uuid                     | NO
+ public       | order_products               |                2 | order_id                            | uuid                     | NO
+ public       | order_products               |                3 | product_id                          | uuid                     | NO
+ public       | order_products               |                4 | sort_order                          | integer                  | NO
+ public       | order_products               |                5 | is_enabled                          | boolean                  | NO
+ public       | order_products               |                6 | unit_label                          | text                     | YES
+ public       | order_products               |                7 | unit_weight_kg                      | numeric                  | YES
+ public       | order_products               |                8 | unit_base_price_cents               | integer                  | NO
+ public       | order_products               |                9 | unit_delivery_cents                 | integer                  | NO
+ public       | order_products               |               10 | unit_sharer_fee_cents               | integer                  | NO
+ public       | order_products               |               11 | unit_final_price_cents              | integer                  | NO
+ public       | order_products               |               12 | price_breakdown_snapshot            | jsonb                    | NO
+ public       | order_products               |               13 | created_at                          | timestamp with time zone | NO
+ public       | order_products               |               14 | updated_at                          | timestamp with time zone | NO
+ public       | order_status_history         |                1 | id                                  | uuid                     | NO
+ public       | order_status_history         |                2 | order_id                            | uuid                     | NO
+ public       | order_status_history         |                3 | from_status                         | text                     | YES
+ public       | order_status_history         |                4 | to_status                           | text                     | NO
+ public       | order_status_history         |                5 | changed_by                          | uuid                     | YES
+ public       | order_status_history         |                6 | note                                | text                     | YES
+ public       | order_status_history         |                7 | metadata                            | jsonb                    | NO
+ public       | order_status_history         |                8 | created_at                          | timestamp with time zone | NO
+ public       | orders                       |                1 | id                                  | uuid                     | NO
+ public       | orders                       |                2 | order_code                          | text                     | NO
+ public       | orders                       |                3 | created_by                          | uuid                     | NO
+ public       | orders                       |                4 | sharer_profile_id                   | uuid                     | NO
+ public       | orders                       |                5 | producer_profile_id                 | uuid                     | NO
+ public       | orders                       |                6 | product_ids                         | ARRAY                    | NO
+ public       | orders                       |                7 | title                               | text                     | NO
+ public       | orders                       |                8 | visibility                          | text                     | NO
+ public       | orders                       |                9 | status                              | text                     | NO
+ public       | orders                       |               10 | deadline                            | date                     | YES
+ public       | orders                       |               11 | message                             | text                     | YES
+ public       | orders                       |               12 | auto_approve_participation_requests | boolean                  | NO
+ public       | orders                       |               13 | allow_sharer_messages               | boolean                  | NO
+ public       | orders                       |               14 | auto_approve_pickup_slots           | boolean                  | NO
+ public       | orders                       |               15 | min_weight_kg                       | numeric                  | NO
+ public       | orders                       |               16 | max_weight_kg                       | numeric                  | YES
+ public       | orders                       |               17 | ordered_weight_kg                   | numeric                  | NO
+ public       | orders                       |               18 | delivery_option                     | text                     | NO
+ public       | orders                       |               19 | delivery_street                     | text                     | YES
+ public       | orders                       |               20 | delivery_info                       | text                     | YES
+ public       | orders                       |               21 | delivery_city                       | text                     | YES
+ public       | orders                       |               22 | delivery_postcode                   | text                     | YES
+ public       | orders                       |               23 | delivery_address                    | text                     | YES
+ public       | orders                       |               24 | estimated_delivery_date             | date                     | YES
+ public       | orders                       |               25 | pickup_street                       | text                     | YES
+ public       | orders                       |               26 | pickup_info                         | text                     | YES
+ public       | orders                       |               27 | pickup_city                         | text                     | YES
+ public       | orders                       |               28 | pickup_postcode                     | text                     | YES
+ public       | orders                       |               29 | pickup_address                      | text                     | YES
+ public       | orders                       |               30 | use_pickup_date                     | boolean                  | NO
+ public       | orders                       |               31 | pickup_date                         | date                     | YES
+ public       | orders                       |               32 | pickup_window_weeks                 | integer                  | YES
+ public       | orders                       |               33 | pickup_delivery_fee_cents           | integer                  | NO
+ public       | orders                       |               34 | sharer_percentage                   | numeric                  | NO
+ public       | orders                       |               35 | share_mode                          | text                     | NO
+ public       | orders                       |               36 | sharer_quantities                   | jsonb                    | NO
+ public       | orders                       |               37 | currency                            | text                     | NO
+ public       | orders                       |               38 | base_total_cents                    | integer                  | NO
+ public       | orders                       |               39 | delivery_fee_cents                  | integer                  | NO
+ public       | orders                       |               40 | participant_total_cents             | integer                  | NO
+ public       | orders                       |               41 | sharer_share_cents                  | integer                  | NO
+ public       | orders                       |               42 | effective_weight_kg                 | numeric                  | NO
+ public       | orders                       |               43 | participants_visibility             | jsonb                    | NO
+ public       | orders                       |               44 | created_at                          | timestamp with time zone | NO
+ public       | orders                       |               45 | updated_at                          | timestamp with time zone | NO
+ public       | orders                       |               46 | delivery_lat                        | double precision         | YES
+ public       | orders                       |               47 | delivery_lng                        | double precision         | YES
+ public       | orders                       |               48 | pickup_lat                          | double precision         | YES
+ public       | orders                       |               49 | pickup_lng                          | double precision         | YES
+ public       | orders                       |               50 | shipped_at                          | timestamp with time zone | YES
+ public       | orders                       |               51 | received_at                         | timestamp with time zone | YES
+ public       | orders                       |               52 | distributed_at                      | timestamp with time zone | YES
+ public       | orders                       |               53 | archived_at                         | timestamp with time zone | YES
+ public       | orders                       |               54 | delivery_phone                      | text                     | YES
+ public       | orders                       |               55 | delivery_email                      | text                     | YES
+ public       | payments                     |                1 | id                                  | uuid                     | NO
+ public       | payments                     |                2 | order_id                            | uuid                     | NO
+ public       | payments                     |                3 | participant_id                      | uuid                     | NO
+ public       | payments                     |                4 | provider                            | text                     | NO
+ public       | payments                     |                5 | provider_payment_id                 | text                     | YES
+ public       | payments                     |                6 | idempotency_key                     | text                     | YES
+ public       | payments                     |                7 | status                              | text                     | NO
+ public       | payments                     |                8 | amount_cents                        | integer                  | NO
+ public       | payments                     |                9 | fee_cents                           | integer                  | NO
+ public       | payments                     |               10 | refunded_amount_cents               | integer                  | NO
+ public       | payments                     |               11 | currency                            | text                     | NO
+ public       | payments                     |               12 | paid_at                             | timestamp with time zone | YES
+ public       | payments                     |               13 | failure_code                        | text                     | YES
+ public       | payments                     |               14 | failure_message                     | text                     | YES
+ public       | payments                     |               15 | raw                                 | jsonb                    | NO
+ public       | payments                     |               16 | created_at                          | timestamp with time zone | NO
+ public       | payments                     |               17 | updated_at                          | timestamp with time zone | NO
+ public       | payments                     |               18 | fee_vat_cents                       | integer                  | NO
+ public       | pending_documents_view       |                1 | profile_id                          | uuid                     | YES
+ public       | pending_documents_view       |                2 | handle                              | text                     | YES
+ public       | pending_documents_view       |                3 | legal_name                          | text                     | YES
+ public       | pending_documents_view       |                4 | doc_type                            | text                     | YES
+ public       | pending_documents_view       |                5 | submitted_at                        | timestamp with time zone | YES
+ public       | pending_documents_view       |                6 | signed_pdf_path                     | text                     | YES
+ public       | pending_documents_view       |                7 | status                              | text                     | YES
+ public       | platform_fee_costs           |                1 | id                                  | uuid                     | NO
+ public       | platform_fee_costs           |                2 | code                                | text                     | NO
+ public       | platform_fee_costs           |                3 | label                               | text                     | NO
+ public       | platform_fee_costs           |                4 | percent_of_platform_fee             | numeric                  | YES
+ public       | platform_fee_costs           |                5 | sort_order                          | integer                  | NO
+ public       | platform_fee_costs           |                6 | is_active                           | boolean                  | NO
+ public       | platform_fee_costs           |                7 | created_at                          | timestamp with time zone | NO
+ public       | platform_settings            |                1 | key                                 | text                     | NO
+ public       | platform_settings            |                2 | value_numeric                       | numeric                  | YES
+ public       | platform_settings            |                3 | updated_at                          | timestamp with time zone | NO
+ public       | product_images               |                1 | id                                  | uuid                     | NO
+ public       | product_images               |                2 | product_id                          | uuid                     | NO
+ public       | product_images               |                3 | path                                | text                     | NO
+ public       | product_images               |                4 | alt                                 | text                     | YES
+ public       | product_images               |                5 | sort_order                          | integer                  | NO
+ public       | product_images               |                6 | is_primary                          | boolean                  | NO
+ public       | product_images               |                7 | created_at                          | timestamp with time zone | NO
+ public       | product_ingredients          |                1 | id                                  | uuid                     | NO
+ public       | product_ingredients          |                2 | product_id                          | uuid                     | NO
+ public       | product_ingredients          |                3 | name                                | text                     | NO
+ public       | product_ingredients          |                4 | description                         | text                     | YES
+ public       | product_ingredients          |                5 | is_allergen                         | boolean                  | NO
+ public       | product_ingredients          |                6 | allergen_type                       | text                     | YES
+ public       | product_ingredients          |                7 | linked_product_url                  | text                     | YES
+ public       | product_ingredients          |                8 | created_at                          | timestamp with time zone | NO
+ public       | product_journey_steps        |                1 | id                                  | uuid                     | NO
+ public       | product_journey_steps        |                2 | product_id                          | uuid                     | NO
+ public       | product_journey_steps        |                3 | step_label                          | text                     | NO
+ public       | product_journey_steps        |                4 | description                         | text                     | YES
+ public       | product_journey_steps        |                5 | location                            | text                     | YES
+ public       | product_journey_steps        |                6 | sort_order                          | integer                  | NO
+ public       | product_journey_steps        |                7 | created_at                          | timestamp with time zone | NO
+ public       | product_journey_steps        |                8 | evidence_path                       | text                     | YES
+ public       | product_journey_steps        |                9 | evidence_label                      | text                     | YES
+ public       | product_journey_steps        |               10 | location_address                    | text                     | YES
+ public       | product_journey_steps        |               11 | location_details                    | text                     | YES
+ public       | product_journey_steps        |               12 | location_postcode                   | text                     | YES
+ public       | product_journey_steps        |               13 | location_city                       | text                     | YES
+ public       | product_journey_steps        |               14 | location_lat                        | double precision         | YES
+ public       | product_journey_steps        |               15 | location_lng                        | double precision         | YES
+ public       | product_journey_steps        |               16 | location_country                    | text                     | YES
+ public       | product_labels               |                1 | id                                  | uuid                     | NO
+ public       | product_labels               |                2 | product_id                          | uuid                     | NO
+ public       | product_labels               |                3 | label                               | text                     | NO
+ public       | product_labels               |                4 | description                         | text                     | YES
+ public       | product_labels               |                5 | label_type                          | text                     | YES
+ public       | product_labels               |                6 | created_at                          | timestamp with time zone | NO
+ public       | product_questions            |                1 | id                                  | uuid                     | NO
+ public       | product_questions            |                2 | product_id                          | uuid                     | NO
+ public       | product_questions            |                3 | question                            | text                     | NO
+ public       | product_questions            |                4 | answer                              | text                     | YES
+ public       | product_questions            |                5 | asked_at                            | timestamp with time zone | NO
+ public       | product_questions            |                6 | answered_at                         | timestamp with time zone | YES
+ public       | product_reviews              |                1 | id                                  | uuid                     | NO
+ public       | product_reviews              |                2 | product_id                          | uuid                     | NO
+ public       | product_reviews              |                3 | author_name                         | text                     | YES
+ public       | product_reviews              |                4 | rating                              | integer                  | NO
+ public       | product_reviews              |                5 | comment                             | text                     | YES
+ public       | product_reviews              |                6 | created_at                          | timestamp with time zone | NO
+ public       | products                     |                1 | id                                  | uuid                     | NO
+ public       | products                     |                2 | product_code                        | text                     | NO
+ public       | products                     |                3 | slug                                | text                     | NO
+ public       | products                     |                4 | name                                | text                     | NO
+ public       | products                     |                5 | sale_unit                           | USER-DEFINED             | NO
+ public       | products                     |                6 | packaging                           | text                     | NO
+ public       | products                     |                7 | unit_weight_kg                      | numeric                  | YES
+ public       | products                     |                8 | description                         | text                     | YES
+ public       | products                     |                9 | category                            | text                     | NO
+ public       | products                     |               10 | conservation_method                 | text                     | YES
+ public       | products                     |               11 | conservation_detail                 | text                     | YES
+ public       | products                     |               12 | conservation_after_opening          | text                     | YES
+ public       | products                     |               13 | default_price_cents                 | integer                  | YES
+ public       | products                     |               14 | producer_profile_id                 | uuid                     | YES
+ public       | products                     |               15 | producer_name                       | text                     | YES
+ public       | products                     |               16 | producer_location                   | text                     | YES
+ public       | products                     |               17 | is_active                           | boolean                  | NO
+ public       | products                     |               18 | created_at                          | timestamp with time zone | NO
+ public       | products                     |               19 | updated_at                          | timestamp with time zone | NO
+ public       | products                     |               20 | platform_fee_percent                | numeric                  | YES
+ public       | products                     |               21 | vat_rate                            | numeric                  | NO
+ public       | profiles                     |                1 | id                                  | uuid                     | NO
+ public       | profiles                     |                2 | handle                              | text                     | NO
+ public       | profiles                     |                3 | name                                | text                     | YES
+ public       | profiles                     |                4 | role                                | text                     | YES
+ public       | profiles                     |                5 | profile_visibility                  | text                     | YES
+ public       | profiles                     |                6 | address_visibility                  | text                     | YES
+ public       | profiles                     |                7 | tagline                             | text                     | YES
+ public       | profiles                     |                8 | website                             | text                     | YES
+ public       | profiles                     |                9 | address                             | text                     | YES
+ public       | profiles                     |               10 | producer_id                         | text                     | YES
+ public       | profiles                     |               11 | verified                            | boolean                  | YES
+ public       | profiles                     |               12 | created_at                          | timestamp with time zone | YES
+ public       | profiles                     |               13 | updated_at                          | timestamp with time zone | YES
+ public       | profiles                     |               14 | phone                               | text                     | YES
+ public       | profiles                     |               15 | city                                | text                     | YES
+ public       | profiles                     |               16 | postcode                            | text                     | YES
+ public       | profiles                     |               17 | account_type                        | text                     | NO
+ public       | profiles                     |               18 | social_links                        | jsonb                    | YES
+ public       | profiles                     |               19 | fresh_products_certified            | boolean                  | NO
+ public       | profiles                     |               20 | phone_public                        | text                     | YES
+ public       | profiles                     |               21 | contact_email_public                | text                     | YES
+ public       | profiles                     |               22 | offers_on_site_pickup               | boolean                  | NO
+ public       | profiles                     |               23 | opening_hours                       | jsonb                    | YES
+ public       | profiles                     |               24 | address_details                     | text                     | YES
+ public       | profiles                     |               25 | avatar_path                         | text                     | YES
+ public       | profiles                     |               26 | avatar_updated_at                   | timestamp with time zone | YES
+ public       | profiles                     |               27 | address_lat                         | double precision         | YES
+ public       | profiles                     |               28 | address_lng                         | double precision         | YES
+ public       | v_products_listing           |                1 | product_id                          | uuid                     | YES
+ public       | v_products_listing           |                2 | product_code                        | text                     | YES
+ public       | v_products_listing           |                3 | slug                                | text                     | YES
+ public       | v_products_listing           |                4 | name                                | text                     | YES
+ public       | v_products_listing           |                5 | category                            | text                     | YES
+ public       | v_products_listing           |                6 | sale_unit                           | USER-DEFINED             | YES
+ public       | v_products_listing           |                7 | packaging                           | text                     | YES
+ public       | v_products_listing           |                8 | unit_weight_kg                      | numeric                  | YES
+ public       | v_products_listing           |                9 | description                         | text                     | YES
+ public       | v_products_listing           |               10 | default_price_cents                 | integer                  | YES
+ public       | v_products_listing           |               11 | producer_profile_id                 | uuid                     | YES
+ public       | v_products_listing           |               12 | producer_name                       | text                     | YES
+ public       | v_products_listing           |               13 | producer_location                   | text                     | YES
+ public       | v_products_listing           |               14 | primary_image_path                  | text                     | YES
+ public       | v_products_listing           |               15 | active_lot_code                     | text                     | YES
+ public       | v_products_listing           |               16 | active_lot_price_cents              | integer                  | YES
+ public       | v_products_listing           |               17 | active_lot_stock_units              | integer                  | YES
+ public       | v_products_listing           |               18 | active_lot_stock_kg                 | numeric                  | YES
+ public       | v_products_listing           |               19 | display_price_cents                 | integer                  | YES
+(563 lignes)
+
+     schema     |                  function_name                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           args                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
+----------------+--------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ auth           | email                                            | 
+ auth           | jwt                                              | 
+ auth           | role                                             | 
+ auth           | uid                                              | 
+ cron           | alter_job                                        | job_id bigint, schedule text, command text, database text, username text, active boolean
+ cron           | job_cache_invalidate                             | 
+ cron           | schedule                                         | schedule text, command text
+ cron           | schedule                                         | job_name text, schedule text, command text
+ cron           | schedule_in_database                             | job_name text, schedule text, command text, database text, username text, active boolean
+ cron           | unschedule                                       | job_name text
+ cron           | unschedule                                       | job_id bigint
+ extensions     | armor                                            | bytea, text[], text[]
+ extensions     | armor                                            | bytea
+ extensions     | crypt                                            | text, text
+ extensions     | dearmor                                          | text
+ extensions     | decrypt                                          | bytea, bytea, text
+ extensions     | decrypt_iv                                       | bytea, bytea, bytea, text
+ extensions     | digest                                           | bytea, text
+ extensions     | digest                                           | text, text
+ extensions     | encrypt                                          | bytea, bytea, text
+ extensions     | encrypt_iv                                       | bytea, bytea, bytea, text
+ extensions     | gen_random_bytes                                 | integer
+ extensions     | gen_random_uuid                                  | 
+ extensions     | gen_salt                                         | text
+ extensions     | gen_salt                                         | text, integer
+ extensions     | grant_pg_cron_access                             | 
+ extensions     | grant_pg_graphql_access                          | 
+ extensions     | grant_pg_net_access                              | 
+ extensions     | hmac                                             | text, text, text
+ extensions     | hmac                                             | bytea, bytea, text
+ extensions     | pg_stat_statements                               | showtext boolean, OUT userid oid, OUT dbid oid, OUT toplevel boolean, OUT queryid bigint, OUT query text, OUT plans bigint, OUT total_plan_time double precision, OUT min_plan_time double precision, OUT max_plan_time double precision, OUT mean_plan_time double precision, OUT stddev_plan_time double precision, OUT calls bigint, OUT total_exec_time double precision, OUT min_exec_time double precision, OUT max_exec_time double precision, OUT mean_exec_time double precision, OUT stddev_exec_time double precision, OUT rows bigint, OUT shared_blks_hit bigint, OUT shared_blks_read bigint, OUT shared_blks_dirtied bigint, OUT shared_blks_written bigint, OUT local_blks_hit bigint, OUT local_blks_read bigint, OUT local_blks_dirtied bigint, OUT local_blks_written bigint, OUT temp_blks_read bigint, OUT temp_blks_written bigint, OUT shared_blk_read_time double precision, OUT shared_blk_write_time double precision, OUT local_blk_read_time double precision, OUT local_blk_write_time double precision, OUT temp_blk_read_time double precision, OUT temp_blk_write_time double precision, OUT wal_records bigint, OUT wal_fpi bigint, OUT wal_bytes numeric, OUT jit_functions bigint, OUT jit_generation_time double precision, OUT jit_inlining_count bigint, OUT jit_inlining_time double precision, OUT jit_optimization_count bigint, OUT jit_optimization_time double precision, OUT jit_emission_count bigint, OUT jit_emission_time double precision, OUT jit_deform_count bigint, OUT jit_deform_time double precision, OUT stats_since timestamp with time zone, OUT minmax_stats_since timestamp with time zone
+ extensions     | pg_stat_statements_info                          | OUT dealloc bigint, OUT stats_reset timestamp with time zone
+ extensions     | pg_stat_statements_reset                         | userid oid, dbid oid, queryid bigint, minmax_only boolean
+ extensions     | pgp_armor_headers                                | text, OUT key text, OUT value text
+ extensions     | pgp_key_id                                       | bytea
+ extensions     | pgp_pub_decrypt                                  | bytea, bytea, text, text
+ extensions     | pgp_pub_decrypt                                  | bytea, bytea, text
+ extensions     | pgp_pub_decrypt                                  | bytea, bytea
+ extensions     | pgp_pub_decrypt_bytea                            | bytea, bytea, text, text
+ extensions     | pgp_pub_decrypt_bytea                            | bytea, bytea
+ extensions     | pgp_pub_decrypt_bytea                            | bytea, bytea, text
+ extensions     | pgp_pub_encrypt                                  | text, bytea
+ extensions     | pgp_pub_encrypt                                  | text, bytea, text
+ extensions     | pgp_pub_encrypt_bytea                            | bytea, bytea, text
+ extensions     | pgp_pub_encrypt_bytea                            | bytea, bytea
+ extensions     | pgp_sym_decrypt                                  | bytea, text, text
+ extensions     | pgp_sym_decrypt                                  | bytea, text
+ extensions     | pgp_sym_decrypt_bytea                            | bytea, text
+ extensions     | pgp_sym_decrypt_bytea                            | bytea, text, text
+ extensions     | pgp_sym_encrypt                                  | text, text
+ extensions     | pgp_sym_encrypt                                  | text, text, text
+ extensions     | pgp_sym_encrypt_bytea                            | bytea, text
+ extensions     | pgp_sym_encrypt_bytea                            | bytea, text, text
+ extensions     | pgrst_ddl_watch                                  | 
+ extensions     | pgrst_drop_watch                                 | 
+ extensions     | set_graphql_placeholder                          | 
+ extensions     | uuid_generate_v1                                 | 
+ extensions     | uuid_generate_v1mc                               | 
+ extensions     | uuid_generate_v3                                 | namespace uuid, name text
+ extensions     | uuid_generate_v4                                 | 
+ extensions     | uuid_generate_v5                                 | namespace uuid, name text
+ extensions     | uuid_nil                                         | 
+ extensions     | uuid_ns_dns                                      | 
+ extensions     | uuid_ns_oid                                      | 
+ extensions     | uuid_ns_url                                      | 
+ extensions     | uuid_ns_x500                                     | 
+ graphql        | _internal_resolve                                | query text, variables jsonb, "operationName" text, extensions jsonb
+ graphql        | comment_directive                                | comment_ text
+ graphql        | exception                                        | message text
+ graphql        | get_schema_version                               | 
+ graphql        | increment_schema_version                         | 
+ graphql        | resolve                                          | query text, variables jsonb, "operationName" text, extensions jsonb
+ graphql_public | graphql                                          | "operationName" text, query text, variables jsonb, extensions jsonb
+ net            | _await_response                                  | request_id bigint
+ net            | _encode_url_with_params_array                    | url text, params_array text[]
+ net            | _http_collect_response                           | request_id bigint, async boolean
+ net            | _urlencode_string                                | string character varying
+ net            | check_worker_is_up                               | 
+ net            | http_collect_response                            | request_id bigint, async boolean
+ net            | http_delete                                      | url text, params jsonb, headers jsonb, timeout_milliseconds integer, body jsonb
+ net            | http_get                                         | url text, params jsonb, headers jsonb, timeout_milliseconds integer
+ net            | http_post                                        | url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer
+ net            | wait_until_running                               | 
+ net            | wake                                             | 
+ net            | worker_restart                                   | 
+ pgbouncer      | get_auth                                         | p_usename text
+ public         | admin_create_platform_invoice_and_send_for_order | p_order_id uuid
+ public         | apply_coop_gains                                 | p_order_id uuid
+ public         | approve_document                                 | p_doc_id uuid
+ public         | billing_email_config_healthcheck                 | 
+ public         | calc_ht_cents_from_ttc                           | p_ttc_cents integer, p_vat_rate numeric
+ public         | calc_participant_amount_due_cents                | p_order_id uuid, p_participant_id uuid
+ public         | calc_tva_cents_from_ttc                          | p_ttc_cents integer, p_vat_rate numeric
+ public         | call_process_emails_sortants                     | 
+ public         | can_view_order                                   | p_order_id uuid
+ public         | check_lot_stock_unit                             | 
+ public         | check_participant_slot_same_order                | 
+ public         | close_orders_at_deadline                         | 
+ public         | consume_coop_balance                             | p_profile_id uuid, p_order_id uuid, p_amount_cents integer
+ public         | create_auto_invoice_for_pro_sharer               | p_order_id uuid
+ public         | create_lock_close_package                        | p_order_id uuid, p_coop_cents integer
+ public         | create_lock_close_package                        | p_order_id uuid, p_use_coop_balance boolean
+ public         | create_notification                              | p_profile_id uuid, p_title text, p_message text, p_type text, p_event_key text, p_order_id uuid, p_data jsonb
+ public         | create_platform_invoice_and_send_for_order       | p_order_id uuid
+ public         | create_platform_invoice_for_order                | p_order_id uuid
+ public         | dequeue_emails_sortants                          | p_limit integer
+ public         | enforce_facture_ligne_coherence                  | 
+ public         | enforce_order_status_transition                  | 
+ public         | enforce_participant_self_update                  | 
+ public         | enforce_single_lot_per_order_product             | 
+ public         | ensure_order_code16                              | 
+ public         | ensure_payment_fees                              | p_payment_id uuid
+ public         | finalize_close_payment                           | p_payment_id uuid
+ public         | finalize_order_pricing                           | p_order_id uuid
+ public         | finalize_payment_simulation                      | p_payment_id uuid
+ public         | gen_hex16                                        | 
+ public         | generate_pickup_code8                            | 
+ public         | get_producer_statement_sources                   | p_order_id uuid
+ public         | is_order_owner                                   | p_order_id uuid
+ public         | is_order_participant                             | p_order_id uuid
+ public         | is_order_participant_accepted                    | p_order_id uuid
+ public         | is_participant_role_for_payment                  | p_order_id uuid, p_participant_id uuid
+ public         | issue_facture_client_from_payment                | p_payment_id uuid
+ public         | issue_participant_invoice_with_coop              | p_order_id uuid, p_profile_id uuid, p_coop_cents integer
+ public         | issue_sharer_invoice_after_lock                  | p_order_id uuid
+ public         | legal_documents_after_write                      | 
+ public         | legal_documents_before_write                     | 
+ public         | list_all_sql_functions                           | 
+ public         | log_order_status_change                          | 
+ public         | moddatetime                                      | 
+ public         | next_facture_numero_producteur                   | p_producer_profile_id uuid, p_serie text, p_issue_date date
+ public         | notify_order_created_from_products               | 
+ public         | notify_order_updates                             | 
+ public         | order_products_summary                           | p_order_id uuid
+ public         | prevent_lot_code_update                          | 
+ public         | prevent_non_admin_fee_override                   | 
+ public         | recompute_lot_price                              | p_lot_id uuid
+ public         | recompute_order_caches                           | p_order_id uuid, p_participant_id uuid
+ public         | reject_document                                  | p_doc_id uuid, p_reason text
+ public         | set_avatar_updated_at                            | 
+ public         | set_lot_code                                     | 
+ public         | set_order_status                                 | p_order_id uuid, p_status text
+ public         | set_pickup_code_on_accept                        | 
+ public         | set_updated_at                                   | 
+ public         | sync_legal_entities_public                       | 
+ public         | tg_payments_consume_coop_on_paid                 | 
+ public         | tg_payments_issue_invoice                        | 
+ public         | tg_recompute_lot_price_del_stmt                  | 
+ public         | tg_recompute_lot_price_ins_stmt                  | 
+ public         | tg_recompute_lot_price_upd_stmt                  | 
+ realtime       | apply_rls                                        | wal jsonb, max_record_bytes integer
+ realtime       | broadcast_changes                                | topic_name text, event_name text, operation text, table_name text, table_schema text, new record, old record, level text
+ realtime       | build_prepared_statement_sql                     | prepared_statement_name text, entity regclass, columns realtime.wal_column[]
+ realtime       | cast                                             | val text, type_ regtype
+ realtime       | check_equality_op                                | op realtime.equality_op, type_ regtype, val_1 text, val_2 text
+ realtime       | is_visible_through_filters                       | columns realtime.wal_column[], filters realtime.user_defined_filter[]
+ realtime       | list_changes                                     | publication name, slot_name name, max_changes integer, max_record_bytes integer
+ realtime       | quote_wal2json                                   | entity regclass
+ realtime       | send                                             | payload jsonb, event text, topic text, private boolean
+ realtime       | subscription_check_filters                       | 
+ realtime       | to_regrole                                       | role_name text
+ realtime       | topic                                            | 
+ storage        | can_insert_object                                | bucketid text, name text, owner uuid, metadata jsonb
+ storage        | delete_leaf_prefixes                             | bucket_ids text[], names text[]
+ storage        | enforce_bucket_name_length                       | 
+ storage        | extension                                        | name text
+ storage        | filename                                         | name text
+ storage        | foldername                                       | name text
+ storage        | get_common_prefix                                | p_key text, p_prefix text, p_delimiter text
+ storage        | get_level                                        | name text
+ storage        | get_prefix                                       | name text
+ storage        | get_prefixes                                     | name text
+ storage        | get_size_by_bucket                               | 
+ storage        | list_multipart_uploads_with_delimiter            | bucket_id text, prefix_param text, delimiter_param text, max_keys integer, next_key_token text, next_upload_token text
+ storage        | list_objects_with_delimiter                      | _bucket_id text, prefix_param text, delimiter_param text, max_keys integer, start_after text, next_token text, sort_order text
+ storage        | operation                                        | 
+ storage        | protect_delete                                   | 
+ storage        | search                                           | prefix text, bucketname text, limits integer, levels integer, offsets integer, search text, sortcolumn text, sortorder text
+ storage        | search_by_timestamp                              | p_prefix text, p_bucket_id text, p_limit integer, p_level integer, p_start_after text, p_sort_order text, p_sort_column text, p_sort_column_after text
+ storage        | search_legacy_v1                                 | prefix text, bucketname text, limits integer, levels integer, offsets integer, search text, sortcolumn text, sortorder text
+ storage        | search_v2                                        | prefix text, bucket_name text, limits integer, levels integer, start_after text, sort_order text, sort_column text, sort_column_after text
+ storage        | update_updated_at_column                         | 
+ vault          | _crypto_aead_det_decrypt                         | message bytea, additional bytea, key_id bigint, context bytea, nonce bytea
+ vault          | _crypto_aead_det_encrypt                         | message bytea, additional bytea, key_id bigint, context bytea, nonce bytea
+ vault          | _crypto_aead_det_noncegen                        | 
+ vault          | create_secret                                    | new_secret text, new_name text, new_description text, new_key_id uuid
+ vault          | update_secret                                    | secret_id uuid, new_secret text, new_name text, new_description text, new_key_id uuid
+(187 lignes)
+

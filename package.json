@@ -66,6 +66,7 @@
       "scripts": {
             "dev": "vite",
             "dev:https": "vite --mode https",
-            "build": "vite build"
+            "build": "vite build",
+            "db:introspect": "powershell -NoProfile -ExecutionPolicy Bypass -File supabase/scripts/introspect-db.ps1"
       }
 }

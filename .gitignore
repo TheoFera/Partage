@@ -8,7 +8,10 @@ build/
 
 # Supabase local artifacts
 supabase/.temp/
+supabase/scripts
 supabase/notifications.sql
+db-introspect.txt
+AGENTS.md
 
 # Logs
 npm-debug.log*
@@ -20,6 +23,7 @@ pnpm-debug.log*
 # Environment files
 .env
 .env.*
+.env.local
 !.env.example
 
 # Miscellaneous system/editor files
