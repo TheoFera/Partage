@@ -1275,8 +1275,26 @@ const sharerAvatarUpdatedAt =
   const deliveryFeeToProducerCents = order.deliveryOption === 'producer_delivery' ? baseDeliveryFeeCents : 0;
   const deliveryFeeToPlatformCents = order.deliveryOption === 'chronofresh' ? baseDeliveryFeeCents : 0;
   const deliveryFeeToSharerCents = order.deliveryOption === 'producer_pickup' ? pickupFeeCents : 0;
+  const deliveryAllocatedFromItemsCents = React.useMemo(
+    () =>
+      orderItems.reduce((sum, item) => {
+        const unitDeliveryCents = Math.max(0, Number(item.unitDeliveryCents ?? 0));
+        const quantityUnits = Math.max(0, Number(item.quantityUnits ?? 0));
+        return sum + unitDeliveryCents * quantityUnits;
+      }, 0),
+    [orderItems]
+  );
+  const deliveryBeneficiaryCents = React.useMemo(() => {
+    if (order.deliveryOption === 'producer_pickup') return pickupFeeCents;
+    if (order.deliveryOption === 'producer_delivery' || order.deliveryOption === 'chronofresh') {
+      return baseDeliveryFeeCents;
+    }
+    return 0;
+  }, [baseDeliveryFeeCents, order.deliveryOption, pickupFeeCents]);
+  const deliveryRoundingDeltaCents = deliveryAllocatedFromItemsCents - deliveryBeneficiaryCents;
   const sharerShareProductsCents = Math.max(0, Math.min(adjustedSharerShareCents, sharerProductsCents));
-  const platformShareWithFeesCents = platformShareCents + paymentFeeCents + deliveryFeeToPlatformCents;
+  const platformShareWithFeesCents =
+    platformShareCents + deliveryRoundingDeltaCents + paymentFeeCents + deliveryFeeToPlatformCents;
   const participantGainsEstimatedCents = React.useMemo(
     () =>
       orderFullValue.participants.reduce((sum, participant) => {
@@ -2209,7 +2227,7 @@ const sharerAvatarUpdatedAt =
     const platformCommissionCents =
       platformCommissionFromSource !== null && platformCommissionFromSource !== undefined
         ? Math.max(0, platformCommissionFromSource)
-        : Math.max(0, platformShareCents);
+        : Math.max(0, platformShareCents + deliveryRoundingDeltaCents);
     const sharerDiscountCents =
       sharerDiscountFromSource !== null && sharerDiscountFromSource !== undefined
         ? Math.max(0, sharerDiscountFromSource)
@@ -2280,6 +2298,7 @@ const sharerAvatarUpdatedAt =
     };
   }, [
     deliveryFeeToPlatformCents,
+    deliveryRoundingDeltaCents,
     isProducerStatementLoading,
     paymentFeeCents,
     paymentsReceivedCents,

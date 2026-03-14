@@ -8,13 +8,17 @@
 -- - Si les deux logiques divergent, l'utilisateur voit un ecart.
 --
 -- Principe applique ici:
--- - commission = platform_from_lots uniquement
+-- - commission = platform_from_lots + ajustement silencieux des deltas d'arrondi livraison
 -- - platform_from_lots:
 --   somme de toutes les lignes lot_price_breakdown(source='platform', value_type='cents')
 --   par lot utilise, multipliee par les unites commandees du lot
+-- - delivery_rounding_delta_cents:
+--   somme(order_items.unit_delivery_cents * quantity_units)
+--   moins le montant global de livraison du beneficiaire reel du mode de livraison
 -- - aucune ligne fallback
 -- - si une ligne de commande n'est pas couverte par un lot valide -> erreur explicite
--- - frais de paiement et frais livraison restent informatifs (non ajoutes a la commission).
+-- - frais de paiement restent informatifs
+-- - le delta d'arrondi livraison est absorbe dans la commission plateforme sans ligne visible dediee.
 --
 -- Important:
 -- - la creation SQL de la facture PLAT_PROD est correcte avec cette logique.
@@ -39,6 +43,9 @@ declare
   v_total_tva_cents integer := 0;
   v_platform_fee_cents integer := 0;
   v_platform_from_lots_cents integer := 0;
+  v_delivery_allocated_from_items_cents integer := 0;
+  v_delivery_beneficiary_cents integer := 0;
+  v_delivery_rounding_delta_cents integer := 0;
   v_platform_profile_id uuid := 'd1d67cf6-0d41-4a05-95a0-335c15b15a05';
   v_vat_regime text := 'unknown';
   v_vat_rate numeric := 0;
@@ -159,8 +166,22 @@ begin
     into v_platform_from_lots_cents
   from lot_platform_rows lpr;
 
+  select coalesce(sum(coalesce(oi.unit_delivery_cents, 0) * coalesce(oi.quantity_units, 0)), 0)::int
+    into v_delivery_allocated_from_items_cents
+  from public.order_items oi
+  where oi.order_id = v_order.id;
+
+  v_delivery_beneficiary_cents := case
+    when v_order.delivery_option = 'producer_pickup' then greatest(coalesce(v_order.pickup_delivery_fee_cents, 0), 0)
+    when v_order.delivery_option in ('producer_delivery', 'chronofresh') then greatest(coalesce(v_order.delivery_fee_cents, 0), 0)
+    else 0
+  end;
+
+  v_delivery_rounding_delta_cents :=
+    coalesce(v_delivery_allocated_from_items_cents, 0) - coalesce(v_delivery_beneficiary_cents, 0);
+
   v_platform_fee_cents :=
-    greatest(0, coalesce(v_platform_from_lots_cents, 0));
+    greatest(0, coalesce(v_platform_from_lots_cents, 0) + coalesce(v_delivery_rounding_delta_cents, 0));
 
   -- Informatif uniquement, non ajoute a la commission.
   select coalesce(sum(coalesce(pay.fee_cents, 0) + coalesce(pay.fee_vat_cents, 0)), 0)
@@ -299,9 +320,12 @@ begin
     v_total_tva_cents,
     jsonb_build_object(
       'component', 'platform_commission',
-      'source', 'lot_only_strict',
-      'generator_version', 'plat_prod_single_version_2026_03_13',
+      'source', 'lot_plus_delivery_rounding_delta',
+      'generator_version', 'plat_prod_single_version_2026_03_14_delivery_rounding',
       'lot_platform_cents', v_platform_from_lots_cents,
+      'delivery_allocated_from_items_cents', v_delivery_allocated_from_items_cents,
+      'delivery_beneficiary_cents', v_delivery_beneficiary_cents,
+      'delivery_rounding_delta_cents', v_delivery_rounding_delta_cents,
       'fallback_non_covered_cents', 0,
       'fallback_enabled', false,
       'payment_fees_ttc_cents', v_payment_fees_ttc_cents,
