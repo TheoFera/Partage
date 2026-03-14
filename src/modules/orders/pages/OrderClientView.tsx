@@ -1203,7 +1203,7 @@ const sharerAvatarUpdatedAt =
   );
   const sharerProductsCents = sharerParticipant?.totalAmountCents ?? 0;
   const sharerPercentage = Math.max(order.sharerPercentage ?? 0, 0);
-  const sharerShareFromItemsCents = React.useMemo(() => {
+  const participantSharerShareFromItemsCents = React.useMemo(() => {
     if (!orderItems.length) return 0;
     const sharerId = sharerParticipant?.id ?? null;
     return orderItems.reduce((sum, item) => {
@@ -1213,18 +1213,27 @@ const sharerAvatarUpdatedAt =
       return sum + unitSharerFee * qty;
     }, 0);
   }, [orderItems, sharerParticipant?.id]);
+  const settledSharerProductShareCents = React.useMemo(() => {
+    if (!orderItems.length) return 0;
+    return orderItems.reduce((sum, item) => {
+      const qty = Math.max(0, Number(item.quantityUnits ?? 0));
+      const unitSharerFee = Math.max(0, Number(item.unitSharerFeeCents ?? 0));
+      return sum + unitSharerFee * qty;
+    }, 0);
+  }, [orderItems]);
   const sharerShareCents = React.useMemo(() => {
     const storedShare = Math.max(0, Number.isFinite(order.sharerShareCents ?? NaN) ? order.sharerShareCents : 0);
     const percentShare = Math.max(0, Math.round(participantTotalsCents * (sharerPercentage / 100)));
-    const computedShare = sharerShareFromItemsCents > 0 ? sharerShareFromItemsCents : percentShare;
-    if (isLockedOrAfter && storedShare > 0) return storedShare;
-    return storedShare > 0 ? storedShare : computedShare;
+    const estimatedShare = participantSharerShareFromItemsCents > 0 ? participantSharerShareFromItemsCents : percentShare;
+    if (isLockedOrAfter && settledSharerProductShareCents > 0) return settledSharerProductShareCents;
+    return storedShare > 0 ? storedShare : estimatedShare;
   }, [
     isLockedOrAfter,
     order.sharerShareCents,
     participantTotalsCents,
     sharerPercentage,
-    sharerShareFromItemsCents,
+    participantSharerShareFromItemsCents,
+    settledSharerProductShareCents,
   ]);
   const pickupFeeCents = Math.max(
     0,

@@ -191,13 +191,23 @@ export function OrderCloseView({
 
   const feePerKg = effectiveWeightKg > 0 ? deliveryFeeCents / effectiveWeightKg : 0;
 
-  const recomputeUnitFinalCents = React.useCallback(
+  const recomputeUnitPricing = React.useCallback(
     (productId: string) => {
       const meta = productMetaById.get(productId);
-      if (!meta) return 0;
-      const unitDelivery = Math.round(feePerKg * meta.unitWeightKg);
-      const unitSharerFee = Math.round((meta.unitBasePriceCents + unitDelivery) * shareFraction);
-      return meta.unitBasePriceCents + unitDelivery + unitSharerFee;
+      if (!meta) {
+        return {
+          unitDeliveryCents: 0,
+          unitSharerFeeCents: 0,
+          unitFinalCents: 0,
+        };
+      }
+      const unitDeliveryCents = Math.round(feePerKg * meta.unitWeightKg);
+      const unitSharerFeeCents = Math.round((meta.unitBasePriceCents + unitDeliveryCents) * shareFraction);
+      return {
+        unitDeliveryCents,
+        unitSharerFeeCents,
+        unitFinalCents: meta.unitBasePriceCents + unitDeliveryCents + unitSharerFeeCents,
+      };
     },
     [feePerKg, productMetaById, shareFraction]
   );
@@ -209,8 +219,12 @@ export function OrderCloseView({
     });
 
     items.forEach((item) => {
-      const unitFinal = recomputeUnitFinalCents(item.productId);
+      const isSharerItem = Boolean(sharerParticipant && item.participantId === sharerParticipant.id);
+      if (isSharerItem) return;
       const qty = item.quantityUnits;
+      const unitFinal = Number.isFinite(item.unitFinalPriceCents ?? NaN)
+        ? Math.max(0, item.unitFinalPriceCents ?? 0)
+        : recomputeUnitPricing(item.productId).unitFinalCents;
       const currentTotal = totals.get(item.participantId) ?? 0;
       totals.set(item.participantId, currentTotal + unitFinal * qty);
     });
@@ -220,14 +234,14 @@ export function OrderCloseView({
       productsOffered.forEach((entry) => {
         const qty = mergedSharerQuantities[entry.productId] ?? 0;
         if (qty <= 0) return;
-        const unitFinal = recomputeUnitFinalCents(entry.productId);
+        const unitFinal = recomputeUnitPricing(entry.productId).unitFinalCents;
         sharerTotal += unitFinal * qty;
       });
       totals.set(sharerParticipant.id, sharerTotal);
     }
 
     return totals;
-  }, [items, mergedSharerQuantities, orderFull?.participants, productsOffered, recomputeUnitFinalCents, sharerParticipant]);
+  }, [items, mergedSharerQuantities, orderFull?.participants, productsOffered, recomputeUnitPricing, sharerParticipant]);
 
   const paidTotalsByParticipant = React.useMemo(() => {
     const totals = new Map<string, number>();
@@ -260,10 +274,28 @@ export function OrderCloseView({
   const sharerProductsFinalCents = sharerParticipant
     ? finalTotalsByParticipant.get(sharerParticipant.id) ?? 0
     : 0;
-  const baseSharerShareCents = order?.sharerShareCents ?? 0;
+  const participantSharerProductShareCents = React.useMemo(() => {
+    const sharerId = sharerParticipant?.id ?? null;
+    return items.reduce((sum, item) => {
+      if (sharerId && item.participantId === sharerId) return sum;
+      const qty = Math.max(0, item.quantityUnits ?? 0);
+      const unitSharerFee = Math.max(0, item.unitSharerFeeCents ?? 0);
+      return sum + unitSharerFee * qty;
+    }, 0);
+  }, [items, sharerParticipant?.id]);
+  const sharerOwnProductShareCents = React.useMemo(() => {
+    if (!sharerParticipant) return 0;
+    return productsOffered.reduce((sum, entry) => {
+      const qty = mergedSharerQuantities[entry.productId] ?? 0;
+      if (qty <= 0) return sum;
+      const unitSharerFee = recomputeUnitPricing(entry.productId).unitSharerFeeCents;
+      return sum + unitSharerFee * qty;
+    }, 0);
+  }, [mergedSharerQuantities, productsOffered, recomputeUnitPricing, sharerParticipant]);
+  const sharerProductShareCents = participantSharerProductShareCents + sharerOwnProductShareCents;
   const pickupShareBonusCents =
     order?.deliveryOption === 'producer_pickup' ? Math.max(0, order.pickupDeliveryFeeCents ?? 0) : 0;
-  const sharerShareCents = baseSharerShareCents + pickupShareBonusCents;
+  const sharerShareCents = sharerProductShareCents + pickupShareBonusCents;
   const sharerOrderGainCents = Math.max(0, sharerShareCents - sharerProductsFinalCents);
   const computeCloseSettlement = React.useCallback(
     (balanceCents: number) => {
@@ -445,7 +477,7 @@ export function OrderCloseView({
             {productsOffered.map((entry) => {
               const qty = mergedSharerQuantities[entry.productId] ?? 0;
               const extra = extraQuantities[entry.productId] ?? 0;
-              const unitFinal = recomputeUnitFinalCents(entry.productId);
+              const unitFinal = recomputeUnitPricing(entry.productId).unitFinalCents;
               return (
                 <div key={entry.productId} className="order-close-view__product-row">
                   <div className="order-close-view__product-info">
