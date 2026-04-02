@@ -96,6 +96,7 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
   const priceCents = row.active_lot_price_cents ?? 0;
   const imageUrl = buildImageUrl(client, row.primary_image_path);
+  const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
 
   return {
     id: row.product_code,
@@ -107,7 +108,7 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
     name: row.name,
     description: row.description ?? '',
     price: centsToEuros(priceCents),
-    unit: measurement === 'kg' ? 'kg' : row.packaging,
+    unit: packaging,
     quantity,
     category: row.category,
     imageUrl,
@@ -562,6 +563,7 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
   const imageUrl = buildImageUrl(client, primaryImage?.path);
   const quantity = measurement === 'kg' ? toNumber(selectedLot?.stock_kg) : toNumber(selectedLot?.stock_units);
   const priceCents = selectedLot?.price_cents ?? 0;
+  const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
 
   return {
     id: row.product_code,
@@ -573,7 +575,7 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
     name: row.name,
     description: row.description ?? '',
     price: centsToEuros(priceCents),
-    unit: measurement === 'kg' ? 'kg' : row.packaging,
+    unit: packaging,
     quantity,
     category: row.category,
     imageUrl: imageUrl || '',

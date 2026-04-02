@@ -484,6 +484,7 @@ const mapProductListingToProduct = (row: ProductListingRow, client: SupabaseClie
   const quantity =
     measurement === 'kg' ? Number(row.active_lot_stock_kg ?? 0) : Number(row.active_lot_stock_units ?? 0);
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
+  const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
   return {
     id: row.product_code,
     productCode: row.product_code,
@@ -494,7 +495,7 @@ const mapProductListingToProduct = (row: ProductListingRow, client: SupabaseClie
     name: row.name,
     description: row.description ?? '',
     price: centsToEuros(priceCents),
-    unit: measurement === 'kg' ? 'kg' : row.packaging,
+    unit: packaging,
     quantity,
     category: row.category,
     imageUrl: buildImageUrl(client, row.primary_image_path),
