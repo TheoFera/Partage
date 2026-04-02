@@ -136,7 +136,7 @@ const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']
     const salePeriodEnd =
       metadata && typeof metadata.sale_period_end === 'string' ? metadata.sale_period_end : null;
     const startDate = salePeriodStart ?? lot.produced_at ?? lot.created_at.slice(0, 10);
-    const endDate = salePeriodEnd ?? salePeriodStart ?? '';
+    const endDate = salePeriodEnd ?? '';
     return {
       id: lot.lot_code,
       lotDbId: lot.id,

@@ -128,6 +128,26 @@ const getLabelDescription = (label: string) => {
   return LABEL_DESCRIPTIONS[key] ?? `Cahier des charges à consulter pour "${label}".`;
 };
 
+const getErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' ? message : '';
+  }
+  return '';
+};
+
+const getLotSaveErrorMessage = (error: unknown) => {
+  const message = getErrorMessage(error);
+  if (message.includes('stock_kg must be set and stock_units must be null for kg products')) {
+    return "Produit vendu au kg : la base exige une quantite de lot en kg pour enregistrer ce lot. Laisser la quantite vide n'est pas accepte actuellement par la base.";
+  }
+  if (message.includes('stock_units must be set and stock_kg must be null for unit products')) {
+    return "Produit vendu a l'unite : la base exige une quantite de lot en nombre d'unites pour enregistrer ce lot. Laisser la quantite vide n'est pas accepte actuellement par la base.";
+  }
+  return message || "Impossible d'enregistrer le lot.";
+};
+
 const getPrimaryPickupLabel = (orders: GroupOrder[], fallback?: string) => {
   const primary = orders[0];
   const label =
@@ -224,7 +244,7 @@ const collectLocationParts = (step: TimelineStep) => {
 
 const formatStepLocationLabel = (step: TimelineStep) => {
   const parts = collectLocationParts(step);
-  return parts.length ? parts.join(', ') : 'A preciser';
+  return parts.length ? parts.join(', ') : 'A préciser';
 };
 
 const formatStepDateLabel = (step: TimelineStep) => {
@@ -556,7 +576,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [lotCarouselHover, setLotCarouselHover] = React.useState(false);
   const [lotVisibleCount, setLotVisibleCount] = React.useState(3);
   const [localMeasurement, setLocalMeasurement] = React.useState<Product['measurement']>(product.measurement);
-  const [localUnit, setLocalUnit] = React.useState(product.unit);
+  const [localUnit, setLocalUnit] = React.useState(isCreateMode ? '' : product.unit);
   const [overrideLotPriceCents, setOverrideLotPriceCents] = React.useState<number | null>(null);
   const [localWeightKg, setLocalWeightKg] = React.useState<number | ''>(product.weightKg ?? '');
   const [imageFile, setImageFile] = React.useState<File | null>(null);
@@ -960,9 +980,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   React.useEffect(() => {
     setLocalMeasurement(product.measurement);
-    setLocalUnit(product.unit);
+    setLocalUnit(isCreateMode ? '' : product.unit);
     setLocalWeightKg(product.weightKg ?? '');
-  }, [product.measurement, product.unit, product.weightKg]);
+  }, [isCreateMode, product.measurement, product.unit, product.weightKg]);
+
+  React.useEffect(() => {
+    if (localMeasurement === 'kg') {
+      setLocalWeightKg('');
+    }
+  }, [localMeasurement]);
 
   const display = editMode ? draft : detail;
   const resolvedVatRate = (editMode ? draft.vatRate : detail.vatRate) ?? DEFAULT_VAT_RATE;
@@ -1509,7 +1535,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   const createTimelineStep = React.useCallback(
     () => ({
       localId: generateBase62Code(8),
-      etape: 'Nouvelle etape',
+      etape: 'Nouvelle étape',
       description: '',
       address: '',
       addressDetails: '',
@@ -1841,7 +1867,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           .maybeSingle();
 
         if (createError || !created?.id) {
-          throw createError ?? new Error("Impossible de creer l'etape.");
+          throw createError ?? new Error("Impossible de créer l'étape.");
         }
         journeyStepId = created.id;
         createdStep = true;
@@ -1906,9 +1932,9 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           return next;
         });
         if (createdStep) {
-          toast.success('Etape ajoutee avec image.');
+          toast.success('Etape ajoutée avec image.');
         } else {
-          toast.success("Image de l'etape mise a jour.");
+          toast.success("Image de l'étape mise a jour.");
         }
       } catch (err) {
         if (uploadedPath) {
@@ -1976,7 +2002,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           .maybeSingle();
 
         if (createError || !created?.id) {
-          throw createError ?? new Error("Impossible de creer l'etape.");
+          throw createError ?? new Error("Impossible de créer l'étape.");
         }
         journeyStepId = created.id;
         updateTimelineStep(index, { journeyStepId: journeyStepId ?? undefined });
@@ -2133,8 +2159,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       <Info size={16} />
       <span>
         {isCreateMode
-          ? 'Creation du produit : renseignez les champs pour publier.'
-          : 'Mode editeur : editez le produit (actuellement sauvegarde fictive pour le prototype).'}
+          ? 'Création du produit : renseignez les champs pour publier.'
+          : 'Mode editeur : éditez le produit (actuellement sauvegarde fictive pour le prototype).'}
       </span>
     </div>
   );
@@ -2147,16 +2173,16 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     }
     const category = normalizedDraftCategory;
     if (!category) {
-      toast.error('Ajoutez une categorie.');
+      toast.error('Ajoutez une catégorie.');
       return null;
     }
     if (!availableCategories.includes(category)) {
-      toast.error('Choisissez une categorie dans la liste.');
+      toast.error('Choisissez une catégorie dans la liste.');
       return null;
     }
     const description = (draft.shortDescription || draft.longDescription || '').trim();
     const imageUrl = (draft.productImage?.url || product.imageUrl || '').trim();
-    const unitValue = (localUnit || '').trim() || (localMeasurement === 'kg' ? 'kg' : 'unit');
+    const unitValue = (localUnit || '').trim();
     const priceCents = sumPostsCents(activePosts);
     const priceValue = centsToEuros(priceCents);
     const weightValue =
@@ -2302,7 +2328,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         producerLocation,
         inStock: inStockValue,
         measurement: localMeasurement,
-        weightKg: weightValue && weightValue > 0 ? weightValue : undefined,
+        weightKg:
+          localMeasurement === 'unit' && weightValue && weightValue > 0 ? weightValue : undefined,
         vatRate: vatRateValue,
       } as CreateProductPayload['product'],
       detail: detailPayload,
@@ -2315,7 +2342,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   const resetCreateForm = () => {
     setDraft({ ...detail, vatRate: detail.vatRate ?? DEFAULT_VAT_RATE });
     setLocalMeasurement(product.measurement);
-    setLocalUnit(product.unit);
+    setLocalUnit('');
     setLocalWeightKg(product.weightKg ?? '');
     setProductPosts(detail.repartitionValeur?.postes ?? []);
     clearImagePreview();
@@ -2438,7 +2465,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             .select('id')
             .maybeSingle();
           if (createError || !created?.id) {
-            throw createError ?? new Error("Impossible de creer l'etape.");
+            throw createError ?? new Error("Impossible de créer l'étape.");
           }
           insertedSteps.push({ index: entry.index, id: created.id });
         }
@@ -2465,7 +2492,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     }
     if (DEMO_MODE || !supabaseClient) {
       setEditMode(false);
-      toast.success('Modifications enregistrees (demo).');
+      toast.success('Modifications enregistrées (demo).');
       if (notifyFollowers && !notificationMessage.trim()) {
         toast.error('Ajoutez un message de notification pour prevenir les abonnes.');
       }
@@ -2519,9 +2546,9 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       const persistedTimeline = await persistJourneySteps(productRow.id);
       setTimelineOverride(persistedTimeline ?? localTimeline);
       setEditMode(false);
-      toast.success('Modifications enregistrees.');
+      toast.success('Modifications enregistrées.');
       if (notifyFollowers && !notificationMessage.trim()) {
-        toast.error('Ajoutez un message de notification pour prevenir les abonnes.');
+        toast.error('Ajoutez un message de notification pour prevenir les abonnés.');
       }
     } catch (error) {
       console.error('Product update error:', error);
@@ -2709,8 +2736,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       toast.error('Ajoutez un nom de lot.');
       return;
     }
-    if (!lotDraft.debut || !lotDraft.fin) {
-      toast.error('Ajoutez des dates de debut et de fin.');
+    if (!lotDraft.debut) {
+      toast.error('Ajoutez une date de debut.');
       return;
     }
     const normalized = {
@@ -2733,7 +2760,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         setLotDraft(null);
         setLotEditMode(null);
       }
-      toast.success(lotEditMode === 'edit' ? 'Lot mis a jour (demo).' : 'Lot ajoute (demo).');
+      toast.success(lotEditMode === 'edit' ? 'Lot mis à jour (demo).' : 'Lot ajouté (demo).');
       return;
     }
     try {
@@ -2751,12 +2778,15 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         toast.error('Produit introuvable.');
         return;
       }
-      const stockValue =
-        typeof normalized.qteRestante === 'number'
-          ? normalized.qteRestante
-          : typeof normalized.qteTotale === 'number'
-            ? normalized.qteTotale
-            : null;
+      const resolvedTotalQuantity =
+        typeof normalized.qteTotale === 'number'
+          ? normalized.qteTotale
+          : typeof normalized.qteRestante === 'number'
+            ? normalized.qteRestante
+            : undefined;
+      const resolvedRemainingQuantity =
+        typeof normalized.qteRestante === 'number' ? normalized.qteRestante : resolvedTotalQuantity;
+      const stockValue = resolvedRemainingQuantity ?? null;
       const lotPosts = lotPriceBreakdownByLot[normalized.id] ?? [];
       const basePayload = {
         product_id: productRow.id,
@@ -2839,6 +2869,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         }
         const persisted = {
           ...normalized,
+          qteTotale: resolvedTotalQuantity,
+          qteRestante: resolvedRemainingQuantity,
           id: updated.lot_code,
           lotDbId: updated.id,
           numeroLot: updated.lot_reference ?? normalized.numeroLot,
@@ -2859,7 +2891,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           setLotDraft(null);
           setLotEditMode(null);
         }
-        toast.success('Lot mis a jour.');
+        toast.success('Lot mis à jour.');
         return;
       }
       const { data: created, error: createError } = await supabaseClient
@@ -2872,6 +2904,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       }
       const persisted = {
         ...normalized,
+        qteTotale: resolvedTotalQuantity,
+        qteRestante: resolvedRemainingQuantity,
         id: created.lot_code,
         lotDbId: created.id,
         numeroLot: created.lot_reference ?? normalized.numeroLot,
@@ -2908,7 +2942,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       toast.success('Lot ajoute.');
     } catch (err) {
       console.error('Lot save error:', err);
-      toast.error("Impossible d'enregistrer le lot.");
+      toast.error(getLotSaveErrorMessage(err));
     }
   };
 
@@ -3052,7 +3086,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       ? Math.max(0, Math.round(readonlyPriceCentsOverride ?? 0))
       : computedPriceCents;
   const displayPriceLabel =
-    resolvedDisplayPriceCents > 0 ? formatEurosFromCents(resolvedDisplayPriceCents) : 'Prix définie plus tard dans "Gestion des lots"';
+    resolvedDisplayPriceCents > 0 ? formatEurosFromCents(resolvedDisplayPriceCents) : 'Prix définie plus tard dans "Gérer les lots"';
   const displayCategory = display.category || product.category;
   const displayImage = display.productImage?.url || product.imageUrl;
   const displayProducer = display.producer ?? detail.producer;
@@ -3254,7 +3288,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       const periodLabel =
                         step.periodStart && step.periodEnd
                           ? `${step.periodStart} -> ${step.periodEnd}`
-                          : step.periodStart || step.periodEnd || 'A preciser';
+                          : step.periodStart || step.periodEnd || 'A préciser';
                       return (
                         <div key={step.localId ?? `${step.etape}-${index}`} className="pd-timeline__item">
                           <div className="pd-timeline__marker" />
@@ -3297,18 +3331,18 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 </div>
               ) : (
                 <p className="pd-text-sm pd-text-muted">
-                  Ajoutez des etapes dans Circuit-court pour renseigner les dates.
+                  Ajoutez des étapes dans Circuit-court pour renseigner les dates.
                 </p>
               )
             ) : (
-              <p className="pd-text-sm pd-text-muted">Selectionnez un lot pour renseigner les dates d'etapes.</p>
+              <p className="pd-text-sm pd-text-muted">Sélectionnez un lot pour renseigner les dates d'étapes.</p>
             )}
           </div>
         ) : (
           <div className="pd-card pd-stack pd-stack--md">
             <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
               <div>
-                <p className="pd-section-title">Étapes de fabrication et parcours du produit</p>
+                <p className="pd-section-title">Étapes de production et parcours du produit</p>
               </div>
               {editMode ? (
                 <button
@@ -3317,7 +3351,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   className="pd-btn pd-btn--ghost pd-btn--dashed"
                 >
                   <Plus size={16} />
-                  Ajouter une etape
+                  Ajouter une étape
                 </button>
               ) : null}
             </div>
@@ -3538,17 +3572,17 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       Quantités : {lot.qteRestante ?? '-'} / {lot.qteTotale ?? '-'}
                     </p>
                     <p>DLC / DDM : {lot.DLC_DDM || lot.DLC_aReceptionEstimee || '-'}</p>
-                    <p>Reference producteur : {lot.numeroLot || 'A preciser'}</p>
+                    <p>Reference producteur : {lot.numeroLot || 'A préciser'}</p>
                     <p>Code lot plateforme : {lot.id}</p>
                   </div>
                   {lot.commentaire ? <p className="pd-text-body">{lot.commentaire}</p> : null}
                 </div>
               );
             })}
-            <p className="pd-text-xs pd-text-muted">Selectionnez un lot pour renseigner ses dates d'etapes.</p>
+            <p className="pd-text-xs pd-text-muted">Sélectionnez un lot pour renseigner ses dates d'étapes.</p>
           </div>
         ) : (
-          <p className="pd-text-sm pd-text-muted">Pas encore de lots publies.</p>
+          <p className="pd-text-sm pd-text-muted">Pas encore de lots publiés.</p>
         )}
       </div>
 
@@ -3570,7 +3604,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   const periodLabel =
                     step.periodStart && step.periodEnd
                       ? `${step.periodStart} -> ${step.periodEnd}`
-                      : step.periodStart || step.periodEnd || 'A preciser';
+                      : step.periodStart || step.periodEnd || 'A préciser';
                   return (
                     <div key={step.localId ?? `${step.etape}-${index}`} className="pd-timeline__item">
                       <div className="pd-timeline__marker" />
@@ -3594,7 +3628,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                                   onChange={(e) => handleLotDateChange(step, index, { periodStart: e.target.value })}
                                 />
                               ) : (
-                                <p>{step.periodStart || step.date || 'A preciser'}</p>
+                                <p>{step.periodStart || step.date || 'A préciser'}</p>
                               )}
                             </div>
                             <div className="pd-stack pd-stack--xs">
@@ -3620,12 +3654,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             </div>
           ) : (
             <p className="pd-text-sm pd-text-muted">
-              Ajoutez des etapes dans Circuit-court pour renseigner les dates.
+              Ajoutez des étapes dans Circuit-court pour renseigner les dates.
             </p>
           )}
         </div>
       ) : (
-        <p className="pd-text-sm pd-text-muted">Selectionnez un lot pour renseigner les dates d'etapes.</p>
+        <p className="pd-text-sm pd-text-muted">Sélectionnez un lot pour renseigner les dates d'étapes.</p>
       )}
 
     </div>
@@ -3638,7 +3672,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         <div className="pd-row pd-gap-sm">
           <ShieldCheck className="pd-icon pd-icon--accent" />
           <p className="pd-section-title">
-            {isLotManagement ? 'Labels du produit (pour ce lot)' : 'Labels & caracteristiques du produit'}
+            {isLotManagement ? 'Labels du produit (pour ce lot)' : 'Labels & caractéristiques du produit'}
           </p>
         </div>
         {isLotManagement ? (
@@ -3699,7 +3733,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
               </>
             ) : (
               <p className="pd-text-sm pd-text-muted">
-                Selectionnez un lot pour modifier les labels.
+                Sélectionnez un lot pour modifier les labels.
               </p>
             )}
           </div>
@@ -3723,7 +3757,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   })}
                 </div>
               ) : (
-                <p className="pd-text-sm pd-text-muted">Aucun label produit renseigne.</p>
+                <p className="pd-text-sm pd-text-muted">Aucun label produit renseigné.</p>
               )}
             </div>
             <div className="pd-stack pd-stack--xs">
@@ -3736,7 +3770,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       {badge.description ? (
                         <p className="pd-text-xs pd-text-muted">{badge.description}</p>
                       ) : (
-                        <p className="pd-text-xs pd-text-muted">Aucune description renseignee.</p>
+                        <p className="pd-text-xs pd-text-muted">Aucune description renseignée.</p>
                       )}
                       {badge.obtentionYear ? (
                         <p className="pd-text-xs pd-text-muted">Obtenu en {badge.obtentionYear}</p>
@@ -3788,7 +3822,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   </button>
                 </div>
                 {activePosts.length === 0 ? (
-                  <p className="pd-text-sm pd-text-muted">Ajoutez des postes pour renseigner la repartition.</p>
+                  <p className="pd-text-sm pd-text-muted">Ajoutez des postes de dépenses pour renseigner la répartition et fixer le prix TTC du produit.</p>
                 ) : (
                   <div className="pd-table-wrap">
                     <table className="pd-table">
@@ -3881,7 +3915,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     <th className="pd-table__cell">Partie prenante</th>
                     <th className="pd-table__cell">Poste</th>
                     <th className="pd-table__cell">Coût (en €)</th>
-                    <th className="pd-table__cell">Details</th>
+                    <th className="pd-table__cell">Détails</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4025,14 +4059,14 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     placeholder="DLC / DDM du lot"
                   />
                 ) : (
-                  <p className="pd-text-sm pd-text-muted">Selectionnez un lot pour definir la DLC / DDM.</p>
+                  <p className="pd-text-sm pd-text-muted">Séléctionnez un lot pour définir la DLC / DDM.</p>
                 )
               ) : editMode ? (
                 <input
                   className="pd-input"
                   value={draft.dlcEstimee || ''}
                   onChange={(e) => setDraft((prev) => ({ ...prev, dlcEstimee: e.target.value }))}
-                  placeholder="DLC estimee"
+                  placeholder="DLC estimée"
                 />
               ) : (
                 <p className="pd-text-body">DLC estimée : {display.dlcEstimee || '-'}</p>
@@ -4055,13 +4089,13 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     value={draft.conservationMode || ''}
                     onChange={(e) => setDraft((prev) => ({ ...prev, conservationMode: e.target.value as any }))}
                   >
-                    <option value="">A preciser</option>
+                    <option value="">A préciser</option>
                     <option value="frais">Frais</option>
                     <option value="ambiant">Ambiant</option>
-                    <option value="congele">Congele</option>
+                    <option value="congele">Congelé</option>
                   </select>
                 ) : (
-                  <span>{display.conservationMode ? `${display.conservationMode} (0-4C si frais)` : 'A preciser'}</span>
+                  <span>{display.conservationMode ? `${display.conservationMode} (0-4C si frais)` : 'A préciser'}</span>
                 )}
               </div>
               {display.compositionEtiquette?.conservationDetaillee ? (
@@ -4069,7 +4103,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
               ) : null}
             </div>
             <div className="pd-info-card pd-stack pd-stack--xs">
-              <p className="pd-label">Apres ouverture</p>
+              <p className="pd-label">Après ouverture</p>
               {editMode ? (
                 <textarea
                   className="pd-textarea"
@@ -4102,7 +4136,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           </div>
         </div>
         <div className="pd-card pd-stack pd-stack--md">
-          <p className="pd-section-title">Ingredients & allergenes</p>
+          <p className="pd-section-title">Ingrédients & allergènes</p>
           <div className="pd-stack pd-stack--sm">
             {editMode ? (
               <div className="pd-stack pd-stack--sm">
@@ -4110,8 +4144,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   <table className="pd-table">
                     <thead className="pd-table__head">
                       <tr>
-                        <th className="pd-table__cell">Ingredient</th>
-                        <th className="pd-table__cell">Allergene</th>
+                        <th className="pd-table__cell">Ingrédient</th>
+                        <th className="pd-table__cell">Allergène</th>
                         <th className="pd-table__cell">Type</th>
                         <th className="pd-table__cell" />
                       </tr>
@@ -4140,7 +4174,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                               className="pd-input"
                               value={ingredient.allergenType || ''}
                               onChange={(e) => handleIngredientChange(idx, { allergenType: e.target.value })}
-                              placeholder="Type d'allergene"
+                              placeholder="Type d'allergène"
                               disabled={!ingredient.isAllergen}
                             />
                           </td>
@@ -4164,7 +4198,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   className="pd-btn pd-btn--ghost pd-btn--dashed"
                 >
                   <Plus size={16} />
-                  Ajouter un ingredient
+                  Ajouter un ingrédient
                 </button>
               </div>
             ) : display.compositionEtiquette?.ingredients?.length ? (
@@ -4176,10 +4210,10 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 ))}
               </div>
             ) : (
-              <p className="pd-text-sm pd-text-muted">Ingredients a preciser.</p>
+              <p className="pd-text-sm pd-text-muted">Ingrédients a préciser.</p>
             )}
             <div className="pd-stack pd-stack--xs">
-              <p className="pd-label">Allergenes</p>
+              <p className="pd-label">Allergènes</p>
               {displayAllergens.length ? (
                 <div className="pd-row pd-row--wrap pd-gap-xs">
                   {displayAllergens.map((allergene) => (
@@ -4189,7 +4223,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   ))}
                 </div>
               ) : (
-                <p className="pd-text-sm pd-text-muted">Aucun allergene mentionne.</p>
+                <p className="pd-text-sm pd-text-muted">Aucun allergène mentionné.</p>
               )}
             </div>
           </div>
@@ -4373,7 +4407,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                     <div className="pd-preview pd-stack pd-stack--xs">
                       <p className="pd-text-strong">Apercu de la notification</p>
                       <p className="pd-text-body">{detail.name}</p>
-                      <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnes.'}</p>
+                      <p>{notificationMessage || 'Message a ajouter pour notifier vos abonnés.'}</p>
                       <p className="pd-link-accent">Lien vers le produit</p>
                     </div>
                   </div>
@@ -4385,7 +4419,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 {isCreateMode ? 'Publier le produit' : 'Enregistrer'}
               </button>
               <button type="button" onClick={handleCancelEdit} className="pd-btn pd-btn--outline pd-btn--pill">
-                {isCreateMode ? 'Reinitialiser' : 'Annuler'}
+                {isCreateMode ? 'Réinitialiser' : 'Annuler'}
               </button>
             </div>
           </div>
@@ -4440,20 +4474,20 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                         className="pd-input"
                         value={lotDraft.nomLot}
                         onChange={(e) => handleLotDraftChange({ nomLot: e.target.value })}
-                        placeholder="Ex : Mars S1"
+                        placeholder="Ex : Récolte de printemps 2026"
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
                       <span className="pd-label">Code du lot plateforme</span>
                       <input
                         className="pd-input"
-                        value={lotDraft.lotDbId ? lotDraft.id : 'Genere apres enregistrement'}
+                        value={lotDraft.lotDbId ? lotDraft.id : 'Généré automatiquement après le 1er enregistrement'}
                         readOnly
                         disabled
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Réference lot producteur</span>
+                      <span className="pd-label">Réference lot producteur (facultative)</span>
                       <input
                         className="pd-input"
                         value={lotDraft.numeroLot || ''}
@@ -4483,7 +4517,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Fin de la période de vente du lot</span>
+                      <span className="pd-label">Fin de la période de vente du lot (Facultative)</span>
                       <input
                         type="date"
                         className="pd-input"
@@ -4505,7 +4539,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       />
                     </label>
                     <label className="pd-stack pd-stack--xs">
-                      <span className="pd-label">Quantité restante (en unité ou Kg)</span>
+                      <span className="pd-label">Quantité restante (en unité ou Kg) (facultative)</span>
                       <input
                         type="number"
                         className="pd-input"
@@ -4603,7 +4637,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                           </div>
                           <p className="pd-text-strong">{displayLot.nomLot || 'Lot sans nom'}</p>
                           <p className="pd-text-xs pd-text-muted">
-                            Réference producteur : {displayLot.numeroLot || 'A preciser'}
+                            Réference producteur : {displayLot.numeroLot || 'A préciser'}
                           </p>
                           <p className="pd-text-xs pd-text-muted">Code lot plateforme : {lot.id}</p>
                           <p className="pd-text-xs pd-text-muted">
@@ -4650,9 +4684,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           <div className="pd-grid pd-grid--hero pd-gap-lg">
           <div className="pd-stack pd-stack--md">
             <div className="pd-row pd-row--wrap pd-gap-sm">
-              <span className="pd-badge pd-badge--category">
-                {displayCategory}
-              </span>
+              {displayCategory ? <span className="pd-badge pd-badge--category">{displayCategory}</span> : null}
               {displayOfficialBadges.map((badge) => (
                 <span key={badge} className="pd-badge pd-badge--official">
                   {badge}
@@ -4670,6 +4702,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   className="pd-input pd-input--title"
                   value={draft.name}
                   onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Nom du produit"
                 />
                 <select
                   className="pd-select"
@@ -4678,7 +4711,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   aria-label="Categorie"
                 >
                   <option value="" disabled>
-                    Choisir une categorie
+                    Choisir une catégorie
                   </option>
                   {availableCategories.map((category) => (
                     <option key={category} value={category}>
@@ -4752,7 +4785,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       className="pd-input"
                       value={localUnit}
                       onChange={(e) => setLocalUnit(e.target.value)}
-                      placeholder="Ex : colis, bouteille"
+                      placeholder="Sachet / Pot / etc."
                     />
                   </label>
                   <label className="pd-stack pd-stack--xs" htmlFor="product-weight">
@@ -4763,10 +4796,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       step="0.01"
                       className="pd-input"
                       value={localWeightKg}
+                      disabled={localMeasurement === 'kg'}
                       onChange={(e) =>
                         setLocalWeightKg(e.target.value ? Number(e.target.value) : '')
                       }
-                      placeholder="Ex : 0.25"
+                      placeholder={localMeasurement === 'kg' ? 'Non applicable' : 'Ex : 0.25'}
                     />
                   </label>
                   {isOwner ? (
@@ -4803,7 +4837,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 className="pd-textarea"
                 value={draft.longDescription || ''}
                 onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value }))}
-                placeholder="Description detaillée"
+                placeholder="Description"
                 rows={3}
               />
             ) : display.longDescription ? (

@@ -89,16 +89,16 @@ const tabRoutes = {
 type SearchScope = 'products' | 'producers' | 'combined';
 
 const productFilterOptions = [
-  { id: 'fruits-legumes', label: 'Fruits & Legumes' },
+  { id: 'fruits-legumes', label: 'Fruits & Légumes' },
   { id: 'poissons-fruits-de-mer', label: 'Poissons & Fruits de mer' },
   { id: 'viandes', label: 'Viandes' },
   { id: 'charcuteries', label: 'Charcuteries' },
   { id: 'traiteurs', label: 'Traiteurs' },
-  { id: 'fromages-cremerie', label: 'Fromages & Cremerie' },
-  { id: 'epicerie-sucree', label: 'Epicerie Sucree' },
-  { id: 'epicerie-salee', label: 'Epicerie Salee' },
+  { id: 'fromages-cremerie', label: 'Fromages & Crémerie' },
+  { id: 'epicerie-sucree', label: 'Epicerie Sucrée' },
+  { id: 'epicerie-salee', label: 'Epicerie Salée' },
   { id: 'boissons', label: 'Boissons' },
-  { id: 'beaute-bien-etre', label: 'Beaute & Bien-etre' },
+  { id: 'beaute-bien-etre', label: 'Beauté & Bien-être' },
 ];
 
 const attributeFilterOptions = [
@@ -592,16 +592,16 @@ const collectLocationParts = (step: TimelineStep) => {
 const slugify = (value: string) => normalizeText(value).replace(/[^a-z0-9]+/g, '-');
 const normalizeLabelKey = (value?: string | null) => (value ?? '').trim().toLowerCase();
 const DB_PRODUCT_CATEGORIES = [
-  'Fruits & Legumes',
+  'Fruits & Légumes',
   'Poissons & Fruits de mer',
   'Viandes',
   'Charcuteries',
   'Traiteurs',
-  'Fromages & Cremerie',
-  'Epicerie Sucree',
-  'Epicerie Salee',
+  'Fromages & Crémerie',
+  'Epicerie Sucrée',
+  'Epicerie Salée',
   'Boissons',
-  'Beaute & Bien-etre',
+  'Beaute & Bien-être',
 ];
 const resolveDbCategory = (value: string) => {
   const normalized = normalizeText(value);

@@ -29,7 +29,7 @@ export function AddProductForm({ onAddProduct, supabaseClient, currentUser }: Ad
       name: '',
       description: '',
       price: 0,
-      unit: 'kg',
+      unit: '',
       category: '',
       imageUrl: '',
       producerId: producerProfile.id,
