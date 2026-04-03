@@ -28,6 +28,7 @@ import { ProductResultCard } from '../components/ProductGroup';
 import './ProductDetailView.css';
 import { generateBase62Code } from '../utils/codeGenerator';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
+import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from '../../../shared/lib/storageObjectPath';
 import { formatUnitWeightLabel } from '../utils/weight';
 import { fetchLotBreakdown, saveProducerLotBreakdown } from '../utils/pricing';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
@@ -1700,8 +1701,13 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       }
 
       const productId = productRow.id as string;
+      const storageOwnerId = await getAuthenticatedStorageOwnerId(supabaseClient);
       const fileExtension = file.type === 'image/webp' ? 'webp' : 'webp';
-      const targetPath = `${productId}/product-${Date.now()}.${fileExtension}`;
+      const targetPath = buildOwnedStorageObjectPath(
+        storageOwnerId,
+        productId,
+        `product-${Date.now()}.${fileExtension}`
+      );
       let uploadedPath: string | null = null;
 
       try {
@@ -1841,6 +1847,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       }
 
       const productId = productRow.id as string;
+      const storageOwnerId = await getAuthenticatedStorageOwnerId(supabaseClient);
       let journeyStepId = currentStep?.journeyStepId ?? null;
       let createdStep = false;
 
@@ -1874,7 +1881,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         updateTimelineStep(index, { journeyStepId: journeyStepId ?? undefined, localId: nextLocalId });
       }
 
-      const targetPath = `${productId}/journey-${journeyStepId}-${Date.now()}.webp`;
+      const targetPath = buildOwnedStorageObjectPath(
+        storageOwnerId,
+        productId,
+        `journey-${journeyStepId}-${Date.now()}.webp`
+      );
       let uploadedPath: string | null = null;
       try {
         const { error: uploadError } = await supabaseClient.storage

@@ -52,7 +52,7 @@ export const mockProducts: Product[] = [
     price: 3.9,
     unit: '120g',
     quantity: 30,
-    category: 'Fromages & Crèmerie',
+    category: 'Fromages & Crémerie',
     imageUrl: demoImage('chevre-frais.jpg'),
     producerId: 'p2',
     producerName: 'La Chèvrerie du Bois',
@@ -159,7 +159,7 @@ export const mockProducts: Product[] = [
     price: 6.4,
     unit: '200g',
     quantity: 28,
-    category: 'Fromages & Crèmerie',
+    category: 'Fromages & Crémerie',
     imageUrl:
       'https://images.unsplash.com/photo-1654184750621-1110fe5afcdc?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjaGVlc2UlMjB3aGVlbHxlbnwxfHx8fDE3NjM5OTQ4ODB8MA&ixlib=rb-4.1.0&q=80&w=1080',
     producerId: 'p2',
@@ -263,7 +263,7 @@ export const mockProducts: Product[] = [
     price: 2.2,
     unit: '2x125g',
     quantity: 50,
-    category: 'Fromages & Crèmerie',
+    category: 'Fromages & Crémerie',
     imageUrl:
       'https://images.unsplash.com/photo-1481391047010-7830c52f5669?auto=format&fit=crop&w=1080&q=80',
     producerId: 'p2',

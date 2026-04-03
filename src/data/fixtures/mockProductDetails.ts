@@ -4,7 +4,7 @@ export const mockProductDetails: Record<string, ProductDetail> = {
   '2': {
     productId: '2',
     name: 'Fromage de chevre frais',
-    category: 'Fromages & Cremerie',
+    category: 'Fromages & Crémerie',
     shortDescription: 'Fromage artisanal au lait cru, moule a la louche.',
     longDescription:
       'Fromage de chevre frais, texture fondante, legerement lactee avec une pointe acidulee. Lait cru collecte quotidiennement, caillage lent, egouttage gravitaire. Ideal cru en salade, sur tartine, ou ajoute en fin de cuisson sur une pizza.',
@@ -184,7 +184,7 @@ export const mockProductDetails: Record<string, ProductDetail> = {
         { id: 'chevre-1kg', name: 'Bac 1kg restauration', category: 'Fromages frais', producerName: 'La Chevrerie du Bois', city: 'Lyon' },
       ],
       autresDuProducteur: [
-        { id: '8', name: 'Tomme affinee 6 mois', category: 'Fromages & Cremerie', producerName: 'La Chevrerie du Bois', city: 'Lyon' },
+        { id: '8', name: 'Tomme affinee 6 mois', category: 'Fromages & Crémerie', producerName: 'La Chevrerie du Bois', city: 'Lyon' },
       ],
       similaires: [
         { id: 'burrata', name: 'Burrata artisanale', category: 'Fromages frais', producerName: 'Caseificio Verde', city: 'Bourg-en-Bresse' },

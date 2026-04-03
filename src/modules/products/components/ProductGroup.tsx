@@ -55,11 +55,12 @@ const productFilterOptions = [
   { id: 'viandes', label: 'Viandes' },
   { id: 'charcuteries', label: 'Charcuteries' },
   { id: 'traiteurs', label: 'Traiteurs' },
-  { id: 'fromages-cremerie', label: 'Fromages & Crèmerie' },
+  { id: 'fromages-cremerie', label: 'Fromages & Crémerie' },
   { id: 'epicerie-sucree', label: 'Épicerie Sucrée' },
   { id: 'epicerie-salee', label: 'Épicerie Salée' },
   { id: 'boissons', label: 'Boissons' },
   { id: 'beaute-bien-etre', label: 'Beauté & Bien-être' },
+  { id: 'autres', label: 'Autres' },
 ];
 
 const heroCategoryFilters = [

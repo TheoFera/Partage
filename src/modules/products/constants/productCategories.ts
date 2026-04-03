@@ -4,7 +4,7 @@ export const PRODUCT_CATEGORIES = [
   'Viandes',
   'Charcuteries',
   'Traiteurs',
-  'Fromages & Cr\u00e8merie',
+  'Fromages & Cr\u00e9merie',
   '\u00c9picerie Sucr\u00e9e',
   '\u00c9picerie Sal\u00e9e',
   'Boissons',

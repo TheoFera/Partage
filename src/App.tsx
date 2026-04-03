@@ -47,6 +47,7 @@ import {
   setStoredAuthRedirect,
 } from './shared/lib/authRedirect';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
+import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from './shared/lib/storageObjectPath';
 import { DEMO_MODE } from './shared/config/demoMode';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
@@ -95,10 +96,11 @@ const productFilterOptions = [
   { id: 'charcuteries', label: 'Charcuteries' },
   { id: 'traiteurs', label: 'Traiteurs' },
   { id: 'fromages-cremerie', label: 'Fromages & Crémerie' },
-  { id: 'epicerie-sucree', label: 'Epicerie Sucrée' },
-  { id: 'epicerie-salee', label: 'Epicerie Salée' },
+  { id: 'epicerie-sucree', label: 'Épicerie Sucrée' },
+  { id: 'epicerie-salee', label: 'Épicerie Salée' },
   { id: 'boissons', label: 'Boissons' },
   { id: 'beaute-bien-etre', label: 'Beauté & Bien-être' },
+  { id: 'autres', label: 'Autres' },
 ];
 
 const attributeFilterOptions = [
@@ -598,10 +600,11 @@ const DB_PRODUCT_CATEGORIES = [
   'Charcuteries',
   'Traiteurs',
   'Fromages & Crémerie',
-  'Epicerie Sucrée',
-  'Epicerie Salée',
+  'Épicerie Sucrée',
+  'Épicerie Salée',
   'Boissons',
-  'Beaute & Bien-être',
+  'Beauté & Bien-être',
+  'Autres',
 ];
 const resolveDbCategory = (value: string) => {
   const normalized = normalizeText(value);
@@ -3559,12 +3562,20 @@ export default function App() {
 
         const productId = createdProduct.id as string;
         let primaryImageUrl = payload.product.imageUrl?.trim() || '';
+        const needsStorageUpload = Boolean(payload.imageFile || payload.journeyImageFiles?.length);
+        const storageOwnerId = needsStorageUpload
+          ? await getAuthenticatedStorageOwnerId(supabaseClient)
+          : null;
 
         if (payload.imageFile) {
           const file = payload.imageFile;
           const fileType = file.type || 'image/webp';
           const extension = fileType.split('/')[1] || 'webp';
-          const targetPath = `${productId}/product-${Date.now()}.${extension}`;
+          const targetPath = buildOwnedStorageObjectPath(
+            storageOwnerId ?? productId,
+            productId,
+            `product-${Date.now()}.${extension}`
+          );
           const { error: uploadError } = await supabaseClient.storage
             .from(PRODUCT_IMAGE_BUCKET)
             .upload(targetPath, file, {
@@ -3702,7 +3713,11 @@ export default function App() {
 
             const fileType = entry.file.type || 'image/webp';
             const extension = fileType.split('/')[1] || 'webp';
-            const targetPath = `${productId}/journey-${targetStep.id}-${Date.now()}.${extension}`;
+            const targetPath = buildOwnedStorageObjectPath(
+              storageOwnerId ?? productId,
+              productId,
+              `journey-${targetStep.id}-${Date.now()}.${extension}`
+            );
             const { error: uploadError } = await supabaseClient.storage
               .from(JOURNEY_IMAGE_BUCKET)
               .upload(targetPath, entry.file, {
