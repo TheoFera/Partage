@@ -2,6 +2,7 @@ import React from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { useLocation } from 'react-router-dom';
 import {
   MapPin,
   Shield,
@@ -42,6 +43,11 @@ type LegalDocumentType =
   | 'producer_mandat'
   | 'sharer_autofacturation';
 type LegalDocumentStatus = 'draft' | 'uploaded' | 'pending_review' | 'approved' | 'rejected';
+type StripeConnectionStatus = 'not_connected' | 'action_required' | 'connected';
+type EdgeInvokeErrorLike = {
+  context?: unknown;
+  message?: string;
+};
 
 type LegalDocumentRow = {
   id: string;
@@ -58,6 +64,15 @@ type LegalDocumentRow = {
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type StripeConnectionState = {
+  status: StripeConnectionStatus;
+  accountId: string | null;
+  country: string | null;
+  dueCount: number;
+  lastSyncedAt: string | null;
+  outstandingRequirements: string[];
 };
 
 const LEGAL_DOCUMENT_TEMPLATE_VERSION = 'v1';
@@ -81,6 +96,68 @@ const getLegalDocumentStatusClassName = (status?: LegalDocumentStatus) => {
   if (status === 'uploaded' || status === 'pending_review') return 'bg-[#FFF7ED] text-[#B45309]';
   if (status === 'approved') return 'bg-[#E6F6F0] text-[#0F5132]';
   return 'bg-[#FEE2E2] text-[#B91C1C]';
+};
+
+const getStripeConnectionStatusLabel = (status: StripeConnectionStatus) => {
+  if (status === 'connected') return 'Connecté';
+  if (status === 'action_required') return 'Action requise';
+  return 'Non connecte';
+};
+
+const getStripeConnectionStatusClassName = (status: StripeConnectionStatus) => {
+  if (status === 'connected') return 'bg-[#E6F6F0] text-[#0F5132]';
+  if (status === 'action_required') return 'bg-[#FFF7ED] text-[#B45309]';
+  return 'bg-gray-100 text-[#6B7280]';
+};
+
+const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined;
+const STRIPE_V2_API_VERSION = '2026-03-25.preview';
+
+const extractEdgeInvokeErrorMessage = async (error: unknown, fallback: string) => {
+  const maybeContext = (error as EdgeInvokeErrorLike | null)?.context;
+  if (maybeContext instanceof Response) {
+    try {
+      const payload = (await maybeContext.clone().json()) as {
+        error?: string;
+        stripe_message?: string | null;
+        details?: {
+          error?: {
+            message?: string;
+          };
+        };
+      };
+      const message = payload?.error ?? payload?.stripe_message ?? payload?.details?.error?.message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim();
+      }
+    } catch {
+      try {
+        const text = await maybeContext.clone().text();
+        if (text.trim()) return text.trim();
+      } catch {
+        // Ignore response parsing fallback failures.
+      }
+    }
+  }
+
+  const directMessage = (error as { message?: string } | null)?.message;
+  if (typeof directMessage === 'string' && directMessage.trim()) {
+    return directMessage.trim();
+  }
+  return fallback;
+};
+
+const buildInitialStripeConnectionState = (legalEntity?: LegalEntity): StripeConnectionState => {
+  const accountId = legalEntity?.stripeAccountId?.trim() || null;
+  const onboardingComplete = Boolean(legalEntity?.stripeOnboardingComplete);
+  return {
+    status: accountId ? (onboardingComplete ? 'connected' : 'action_required') : 'not_connected',
+    accountId,
+    country: legalEntity?.stripeAccountCountry?.trim() || null,
+    dueCount: legalEntity?.stripeRequirementsDueCount ?? 0,
+    lastSyncedAt: legalEntity?.stripeLastSyncedAt ?? null,
+    outstandingRequirements: [],
+  };
 };
 
 const getSignedDocumentPath = (docType: LegalDocumentType, profileId: string, docId: string) => {
@@ -832,6 +909,7 @@ function ProfileEditPanel({
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
   onRegisterSave?: (handler: (() => void) | null) => void;
 }) {
+  const location = useLocation();
   const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const [name, setName] = React.useState(user.name);
   const [address, setAddress] = React.useState(user.address || '');
@@ -959,6 +1037,11 @@ function ProfileEditPanel({
   const [legalDocumentsLoading, setLegalDocumentsLoading] = React.useState(false);
   const [downloadingDocType, setDownloadingDocType] = React.useState<LegalDocumentType | null>(null);
   const [uploadingDocType, setUploadingDocType] = React.useState<LegalDocumentType | null>(null);
+  const [stripeConnection, setStripeConnection] = React.useState<StripeConnectionState>(() =>
+    buildInitialStripeConnectionState(user.legalEntity)
+  );
+  const [stripeStatusLoading, setStripeStatusLoading] = React.useState(false);
+  const [stripeOnboardingLoading, setStripeOnboardingLoading] = React.useState(false);
   const deliveryAddressQuery = React.useMemo(() => {
     const trimmedPostcode = postcode.trim();
     const trimmedCity = city.trim();
@@ -1108,6 +1191,267 @@ function ProfileEditPanel({
         return status === 'pending_review' || status === 'uploaded' || status === 'approved';
       }) && !producerDocsApproved
     : false;
+  const savedStripeLegalFingerprint = React.useMemo(
+    () =>
+      JSON.stringify({
+        accountType: user.accountType ?? 'individual',
+        legalName: user.legalEntity?.legalName?.trim() ?? '',
+        siret: user.legalEntity?.siret?.trim() ?? '',
+        vatNumber: user.legalEntity?.vatNumber?.trim() ?? '',
+        vatRegime: user.legalEntity?.vatRegime ?? 'unknown',
+        iban: user.legalEntity?.iban?.trim() ?? '',
+        accountHolderName: user.legalEntity?.accountHolderName?.trim() ?? '',
+      }),
+    [user.accountType, user.legalEntity]
+  );
+  const draftStripeLegalFingerprint = React.useMemo(
+    () =>
+      JSON.stringify({
+        accountType: accountType ?? 'individual',
+        legalName: legalName.trim(),
+        siret: siret.trim(),
+        vatNumber: vatNumber.trim(),
+        vatRegime: vatRegime ?? 'unknown',
+        iban: iban.trim(),
+        accountHolderName: accountHolderName.trim(),
+      }),
+    [accountHolderName, accountType, iban, legalName, siret, vatNumber, vatRegime]
+  );
+  const stripeLegalInfoNeedsSave = savedStripeLegalFingerprint !== draftStripeLegalFingerprint;
+  const stripeReturnUrl = React.useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const basePath = user.handle ? `/profil/${user.handle}` : '/profil';
+    const nextUrl = new URL(basePath, window.location.origin);
+    nextUrl.searchParams.set('profileEdit', '1');
+    nextUrl.searchParams.set('profileEditTab', 'structure');
+    return nextUrl.toString();
+  }, [user.handle]);
+  const createStripeAccountToken = React.useCallback(async () => {
+    if (!STRIPE_PUBLISHABLE_KEY) {
+      throw new Error('Configurez VITE_STRIPE_PUBLISHABLE_KEY pour l onboarding Stripe des structures francaises.');
+    }
+
+    const trimmedContactEmail = (user.email?.trim() || user.contactEmailPublic?.trim() || '').trim();
+
+    // Accounts v2 expects a v2 account token (`accttok_...`), not the legacy Stripe.js v1 account token (`ct_...`).
+    const response = await fetch('https://api.stripe.com/v2/core/account_tokens', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${STRIPE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+        'Stripe-Version': STRIPE_V2_API_VERSION,
+      },
+      body: JSON.stringify({
+        ...(trimmedContactEmail ? { contact_email: trimmedContactEmail } : {}),
+        display_name: legalName.trim(),
+        identity: {
+          business_details: {
+            registered_name: legalName.trim(),
+          },
+        },
+      }),
+    });
+
+    const result = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      error?: {
+        message?: string;
+      };
+    };
+
+    if (!response.ok) {
+      const message =
+        typeof result?.error?.message === 'string' && result.error.message.trim()
+          ? result.error.message.trim()
+          : 'Creation du token Stripe v2 impossible.';
+      throw new Error(message);
+    }
+
+    const accountToken = typeof result?.id === 'string' ? result.id.trim() : '';
+    if (!accountToken) {
+      throw new Error('Stripe n a pas retourne de token de compte v2.');
+    }
+
+    return accountToken;
+  }, [
+    legalName,
+    user.contactEmailPublic,
+    user.email,
+  ]);
+
+  const applyStripeConnectionPayload = React.useCallback((payload: {
+    status?: string | null;
+    stripe_account_id?: string | null;
+    stripe_account_country?: string | null;
+    stripe_onboarding_complete?: boolean | null;
+    stripe_requirements_due_count?: number | null;
+    stripe_last_synced_at?: string | null;
+    outstanding_requirements?: string[] | null;
+  }) => {
+    const accountId =
+      typeof payload.stripe_account_id === 'string' && payload.stripe_account_id.trim()
+        ? payload.stripe_account_id.trim()
+        : null;
+    const onboardingComplete = Boolean(payload.stripe_onboarding_complete);
+    const mappedStatus: StripeConnectionStatus =
+      payload.status === 'connected' || onboardingComplete
+        ? 'connected'
+        : accountId
+          ? 'action_required'
+          : 'not_connected';
+
+    setStripeConnection({
+      status: mappedStatus,
+      accountId,
+      country:
+        typeof payload.stripe_account_country === 'string' && payload.stripe_account_country.trim()
+          ? payload.stripe_account_country.trim()
+          : null,
+      dueCount:
+        typeof payload.stripe_requirements_due_count === 'number' && Number.isFinite(payload.stripe_requirements_due_count)
+          ? payload.stripe_requirements_due_count
+          : 0,
+      lastSyncedAt:
+        typeof payload.stripe_last_synced_at === 'string' && payload.stripe_last_synced_at.trim()
+          ? payload.stripe_last_synced_at
+          : null,
+      outstandingRequirements: Array.isArray(payload.outstanding_requirements)
+        ? payload.outstanding_requirements.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+        : [],
+    });
+  }, []);
+
+  const refreshStripeConnectionStatus = React.useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!supabaseClient || !canBeProducer) return;
+
+      setStripeStatusLoading(true);
+      const { data, error } = await supabaseClient.functions.invoke('stripe_connected_account_status', {
+        body: {},
+      });
+      setStripeStatusLoading(false);
+
+      if (error) {
+        if (!options?.silent) {
+          toast.error(await extractEdgeInvokeErrorMessage(error, 'Impossible de verifier le statut Stripe.'));
+        }
+        return;
+      }
+
+      const payload = (data as Record<string, unknown> | null) ?? null;
+      if (payload && typeof payload.error === 'string') {
+        if (!options?.silent) {
+          toast.error(payload.error);
+        }
+        return;
+      }
+
+      applyStripeConnectionPayload({
+        status: typeof payload?.status === 'string' ? payload.status : null,
+        stripe_account_id: typeof payload?.stripe_account_id === 'string' ? payload.stripe_account_id : null,
+        stripe_account_country:
+          typeof payload?.stripe_account_country === 'string' ? payload.stripe_account_country : null,
+        stripe_onboarding_complete:
+          typeof payload?.stripe_onboarding_complete === 'boolean' ? payload.stripe_onboarding_complete : null,
+        stripe_requirements_due_count:
+          typeof payload?.stripe_requirements_due_count === 'number' ? payload.stripe_requirements_due_count : null,
+        stripe_last_synced_at:
+          typeof payload?.stripe_last_synced_at === 'string' ? payload.stripe_last_synced_at : null,
+        outstanding_requirements: Array.isArray(payload?.outstanding_requirements)
+          ? (payload.outstanding_requirements as string[])
+          : null,
+      });
+    },
+    [applyStripeConnectionPayload, canBeProducer, supabaseClient]
+  );
+
+  const handleStartStripeOnboarding = React.useCallback(async () => {
+    if (!supabaseClient) {
+      toast.error('Supabase non configure.');
+      return;
+    }
+    if (!canBeProducer) {
+      toast.info('Ce type de structure ne peut pas etre connecte a Stripe.');
+      return;
+    }
+    if (!hasLegalInfo) {
+      toast.info('Renseignez au minimum la raison sociale et le SIRET.');
+      return;
+    }
+    if (stripeLegalInfoNeedsSave) {
+      toast.info('Enregistrez vos informations legales avant de lancer Stripe.');
+      return;
+    }
+    if (!stripeReturnUrl) {
+      toast.error('URL de retour Stripe indisponible.');
+      return;
+    }
+
+    let accountToken: string | null = null;
+    const shouldCreateFrenchAccountToken =
+      !stripeConnection.accountId &&
+      (stripeConnection.country?.trim().toUpperCase() || user.legalEntity?.stripeAccountCountry?.trim().toUpperCase() || 'FR') === 'FR';
+
+    if (shouldCreateFrenchAccountToken) {
+      try {
+        accountToken = await createStripeAccountToken();
+      } catch (tokenError) {
+        toast.error(await extractEdgeInvokeErrorMessage(tokenError, 'Creation du token Stripe impossible.'));
+        return;
+      }
+    }
+
+    setStripeOnboardingLoading(true);
+    const { data, error } = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
+      body: {
+        return_url: stripeReturnUrl,
+        refresh_url: stripeReturnUrl,
+        ...(accountToken ? { account_token: accountToken } : {}),
+      },
+    });
+    setStripeOnboardingLoading(false);
+
+    if (error) {
+      toast.error(await extractEdgeInvokeErrorMessage(error, 'Creation du lien Stripe impossible.'));
+      return;
+    }
+
+    const payload = (data as Record<string, unknown> | null) ?? null;
+    if (payload && typeof payload.error === 'string') {
+      toast.error(payload.error);
+      return;
+    }
+
+    applyStripeConnectionPayload({
+      status: 'action_required',
+      stripe_account_id: typeof payload?.stripe_account_id === 'string' ? payload.stripe_account_id : null,
+      stripe_account_country: stripeConnection.country,
+      stripe_onboarding_complete: false,
+      stripe_requirements_due_count: stripeConnection.dueCount,
+      stripe_last_synced_at: new Date().toISOString(),
+      outstanding_requirements: stripeConnection.outstandingRequirements,
+    });
+
+    const nextUrl = typeof payload?.url === 'string' ? payload.url.trim() : '';
+    if (!nextUrl) {
+      toast.error("Lien d'onboarding Stripe indisponible.");
+      return;
+    }
+
+    window.location.assign(nextUrl);
+  }, [
+    applyStripeConnectionPayload,
+    canBeProducer,
+    hasLegalInfo,
+    stripeConnection.country,
+    stripeConnection.dueCount,
+    stripeConnection.outstandingRequirements,
+    createStripeAccountToken,
+    stripeLegalInfoNeedsSave,
+    stripeReturnUrl,
+    supabaseClient,
+    user.legalEntity?.stripeAccountCountry,
+  ]);
 
   const loadLegalDocuments = React.useCallback(async () => {
     if (!supabaseClient) {
@@ -1362,6 +1706,19 @@ function ProfileEditPanel({
     if (editTabs.some((tab) => tab.id === editTab)) return;
     setEditTab('general');
   }, [editTab, editTabs]);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const requestedTab = params.get('profileEditTab');
+    if (!requestedTab) return;
+    if (!editTabs.some((tab) => tab.id === requestedTab)) return;
+    setEditTab(requestedTab as EditTabKey);
+  }, [editTabs, location.search]);
+
+  React.useEffect(() => {
+    if (editTab !== 'structure' || !supabaseClient || !canBeProducer) return;
+    void refreshStripeConnectionStatus({ silent: true });
+  }, [canBeProducer, editTab, refreshStripeConnectionStatus, supabaseClient]);
 
   const getDocumentRecord = React.useCallback(
     (docType: LegalDocumentType) => legalDocumentsByType[docType] ?? null,
@@ -2066,13 +2423,13 @@ function ProfileEditPanel({
                   onChange={(e) => setVatRegime(e.target.value as LegalEntity['vatRegime'])}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
                 >
-                  <option value="unknown">Selectionner un regime</option>
+                  <option value="unknown">Sélectionner un régime</option>
                   <option value="franchise">Franchise de base (TVA non applicable)</option>
-                  <option value="assujetti">Assujetti a la TVA</option>
+                  <option value="assujetti">Assujetti à la TVA</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm text-[#6B7280]">Numero de TVA</label>
+                <label className="block text-sm text-[#6B7280]">Numéro de TVA</label>
                 <input
                   type="text"
                   value={vatNumber}
@@ -2082,16 +2439,16 @@ function ProfileEditPanel({
                 />
                 {vatRegime === 'assujetti' && !vatNumber.trim() ? (
                   <p className="mt-2 text-xs text-[#B45309]">
-                    Le numero de TVA est requis pour un regime assujetti.
+                    Le numéro de TVA est requis pour un régime assujetti.
                   </p>
                 ) : null}
               </div>
             </div>
             <div className="space-y-2">
-              <label className="block text-sm text-[#6B7280]">Coordonnees bancaires</label>
+              <label className="block text-sm text-[#6B7280]">Coordonnées bancaires</label>
               <div className="grid md:grid-cols-1 lg:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm text-[#6B7280]">Identite du compte</label>
+                  <label className="block text-sm text-[#6B7280]">Identité du compte</label>
                   <input
                     type="text"
                     value={accountHolderName}
@@ -2114,10 +2471,119 @@ function ProfileEditPanel({
             </div>
           </section>
 
+          <section className="rounded-2xl border border-[#D9E7F9] bg-[#F8FBFF] p-4 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="space-y-1">
+                <h3 className="text-[#1F2937] font-semibold">Compte Stripe producteur</h3>
+                <p className="text-sm text-[#6B7280]">
+                  Reliez votre structure a Stripe pour encaisser les paiements.
+                </p>
+              </div>
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold ${getStripeConnectionStatusClassName(stripeConnection.status)}`}
+              >
+                {getStripeConnectionStatusLabel(stripeConnection.status)}
+              </span>
+            </div>
+
+            <div className="rounded-xl border border-[#D7E3FF] bg-white p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#1F2937]">
+                    <Link2 className="h-4 w-4 text-[#2563EB]" />
+                    {stripeConnection.accountId ? 'Compte Connect déjà crée' : 'Compte Connect à créer'}
+                  </div>
+                  <p className="text-sm text-[#6B7280]">
+                    {stripeConnection.status === 'connected'
+                      ? 'Le compte Stripe du producteur est prêt pour les encaissements directs.'
+                      : stripeConnection.accountId
+                        ? 'Le compte Stripe existe déjà. Reprenez l onboarding si Stripe demande encore des informations.'
+                        : 'Stripe créera le compte connecté du producteur puis ouvrira le parcours d onboarding hébergé.'}
+                  </p>
+                </div>
+                {stripeConnection.accountId && (
+                  <div className="text-xs text-[#6B7280]">
+                    <span className="font-semibold text-[#1F2937]">ID</span>{' '}
+                    <span className="font-mono">{stripeConnection.accountId}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
+                  <div className="text-xs text-[#6B7280]">Pays du compte</div>
+                  <div className="mt-1 flex items-center gap-2 text-[#1F2937] font-medium">
+                    <Globe className="h-4 w-4 text-[#2563EB]" />
+                    {stripeConnection.country || 'FR par defaut'}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
+                  <div className="text-xs text-[#6B7280]">Informations encore attendues</div>
+                  <div className="mt-1 text-[#1F2937] font-medium">{stripeConnection.dueCount}</div>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
+                  <div className="text-xs text-[#6B7280]">Dernière synchro</div>
+                  <div className="mt-1 text-[#1F2937] font-medium">
+                    {stripeConnection.lastSyncedAt
+                      ? new Date(stripeConnection.lastSyncedAt).toLocaleString('fr-FR')
+                      : 'Jamais'}
+                  </div>
+                </div>
+              </div>
+
+              {stripeLegalInfoNeedsSave && (
+                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
+                  Enregistrez d'abord cette section pour que Stripe lise la dernière version de vos informations
+                  légales.
+                </div>
+              )}
+
+              {!hasLegalInfo && (
+                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
+                  La raison sociale et le SIRET sont requis avant de lancer l'onboarding Stripe.
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => void handleStartStripeOnboarding()}
+                  disabled={stripeOnboardingLoading || stripeLegalInfoNeedsSave || !canBeProducer || !hasLegalInfo}
+                  className="rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ backgroundColor: '#2563EB' }}
+                  onMouseEnter={(event) => {
+                    if ((event.currentTarget as HTMLButtonElement).disabled) return;
+                    event.currentTarget.style.backgroundColor = '#1D4ED8';
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.backgroundColor = '#2563EB';
+                  }}
+                >
+                  {stripeOnboardingLoading
+                    ? 'Ouverture de Stripe...'
+                    : stripeConnection.status === 'connected'
+                      ? 'Mettre à jour les informations Stripe'
+                      : stripeConnection.accountId
+                        ? 'Continuer l onboarding Stripe'
+                        : 'Connecter la structure à Stripe'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void refreshStripeConnectionStatus()}
+                  disabled={stripeStatusLoading || stripeOnboardingLoading || !canBeProducer}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-[#1F2937] transition-colors hover:border-[#2563EB] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {stripeStatusLoading ? 'Vérification Stripe...' : 'Actualiser le statut'}
+                </button>
+              </div>
+
+            </div>
+          </section>
+
           {requestedLegalDocumentTypes.length > 0 && (
             <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <h3 className="text-[#1F2937] font-semibold">Documents légaux</h3>
+                <h3 className="text-[#1F2937] font-semibold">Documents légaux (Pas encore opérationnel)</h3>
                 {legalDocumentsLoading && (
                   <span className="text-xs text-[#6B7280]">Chargement...</span>
                 )}
@@ -2128,7 +2594,7 @@ function ProfileEditPanel({
                     ? 'Mandats producteur validés.'
                     : producerDocsPendingReview
                     ? 'Mandats de faturation et d encaissement en attente de validation.'
-                    : 'Afin Mandats producteur à signer.'}
+                    : 'Mandats producteur à signer.'}
                 </div>
               )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -2174,7 +2640,7 @@ function ProfileEditPanel({
 
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Charte du partageur</h3>
+              <h3 className="text-[#1F2937] font-semibold">Charte du partageur (Pas encore finalisée)</h3>
               {sharerCharterAccepted && (
                 <span className="px-3 py-1 bg-[#E6F6F0] text-[#0F5132] text-xs rounded-full flex items-center gap-1">
                   <Check className="w-3 h-3" />
@@ -2183,7 +2649,7 @@ function ProfileEditPanel({
               )}
             </div>
             <p className="text-xs text-[#6B7280]">
-              Vous devez valider ces engagements pour créer une commande.
+              Vous devez valider chacun de ces engagements pour pouvoir créer des commandes.
             </p>
             <div className="space-y-4">
               {sharerCharterSections.map((section) => (
@@ -2216,7 +2682,6 @@ function ProfileEditPanel({
           <section className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Eligibilité créateur de commande</h3>
-              <span className="text-xs text-[#6B7280]">Lecture seule.</span>
             </div>
             <div className="space-y-2">
               {renderEligibilityItem('Identité vérifiée', Boolean(user.verified))}
@@ -2232,7 +2697,6 @@ function ProfileEditPanel({
           <section className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Eligibilité producteur</h3>
-              <span className="text-xs text-[#6B7280]">Lecture seule.</span>
             </div>
             <div className="space-y-2">
               {renderEligibilityItem('Type de compte éligible (entreprise / association / collectivité)', canBeProducer)}

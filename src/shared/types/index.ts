@@ -66,6 +66,11 @@ export interface LegalEntity {
   producerPickupEndTime?: string;
   producerPickupMinWeight?: number;
   producerPickupMaxWeight?: number;
+  stripeAccountId?: string;
+  stripeAccountCountry?: string;
+  stripeOnboardingComplete?: boolean;
+  stripeRequirementsDueCount?: number;
+  stripeLastSyncedAt?: string;
 }
 
 export interface Product {

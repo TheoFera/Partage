@@ -247,10 +247,10 @@ export function OrderPaymentView({
           return;
         }
 
-        setPaymentError('Le paiement est en attente ou a echoue. Merci de relancer.');
+        setPaymentError('Le paiement est en attente ou a échoué. Merci de relancer.');
       } catch (error) {
         console.error('Stripe payment confirm error:', error);
-        setPaymentError('Impossible de verifier le paiement. Merci de reessayer.');
+        setPaymentError('Impossible de verifier le paiement. Merci de réessayer.');
       } finally {
         setIsVerifying(false);
       }
@@ -449,7 +449,7 @@ export function OrderPaymentView({
           </div>
           <div className="order-payment-view__summary-list">
             <div className="order-payment-view__summary-row">
-              <span>Participation a la commande</span>
+              <span>Participation à la commande</span>
               <span className="order-payment-view__summary-value">{order.title}</span>
             </div>
             {selectedItems.map((item) => (
@@ -471,7 +471,7 @@ export function OrderPaymentView({
               </div>
             ) : null}
             <div className="order-payment-view__summary-row">
-              <span>{isClosePayment ? 'Reste a payer' : 'Total'}</span>
+              <span>{isClosePayment ? 'Reste à payer' : 'Total'}</span>
               <span className="order-payment-view__summary-value">{formatPrice(draft.total)}</span>
             </div>
             {!isClosePayment ? (

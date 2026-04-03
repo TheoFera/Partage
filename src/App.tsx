@@ -711,6 +711,11 @@ type LegalEntityRow = {
   producer_pickup_end_time?: string | null;
   producer_pickup_min_weight?: number | null;
   producer_pickup_max_weight?: number | null;
+  stripe_account_id?: string | null;
+  stripe_account_country?: string | null;
+  stripe_onboarding_complete?: boolean | null;
+  stripe_requirements_due_count?: number | null;
+  stripe_last_synced_at?: string | null;
 };
 
 type GeoPoint = {
@@ -790,6 +795,11 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   producerPickupEndTime: row.producer_pickup_end_time ?? undefined,
   producerPickupMinWeight: toNumberOrUndefined(row.producer_pickup_min_weight),
   producerPickupMaxWeight: toNumberOrUndefined(row.producer_pickup_max_weight),
+  stripeAccountId: row.stripe_account_id ?? undefined,
+  stripeAccountCountry: row.stripe_account_country ?? undefined,
+  stripeOnboardingComplete: row.stripe_onboarding_complete ?? undefined,
+  stripeRequirementsDueCount: toNumberOrUndefined(row.stripe_requirements_due_count),
+  stripeLastSyncedAt: row.stripe_last_synced_at ?? undefined,
 });
 
 const mapProfileRowToUser = (
@@ -4345,6 +4355,13 @@ export default function App() {
     isAuthenticated &&
     (location.pathname === '/profil' ||
       (!!user?.handle && location.pathname === `/profil/${user.handle}`));
+  React.useEffect(() => {
+    if (!isOwnProfileView) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get('profileEdit') === '1') {
+      setProfileMode('edit');
+    }
+  }, [isOwnProfileView, location.search]);
   const isHome = activeTab === 'home';
   const mainPadding = activeTab === 'deck' || isAuthLayout ? 'pb-0' : 'pb-24';
   const shouldUseProfilePadding = hideAuthTitle;

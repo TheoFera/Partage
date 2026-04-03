@@ -30,3 +30,13 @@ entrypoint = "./functions/stripe_create_checkout_session/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/stripe_checkout_session_status/index.ts"
+
+[functions.stripe_create_connected_account_link]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_create_connected_account_link/index.ts"
+
+[functions.stripe_connected_account_status]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_connected_account_status/index.ts"
