@@ -68,6 +68,10 @@
   pointer-events: none;
 }
 
+.products-landing__hero-keep-together {
+  white-space: nowrap;
+}
+
 .products-landing__section-intro {
   max-width: 820px;
   margin: 4px auto 10px;
@@ -258,6 +262,10 @@
 }
 
 @media (max-width: 640px) {
+  .products-landing__hero-keep-together {
+    white-space: normal;
+  }
+
   .products-landing__category-bar {
     margin-top: -20px;
     padding: 8px 10px;

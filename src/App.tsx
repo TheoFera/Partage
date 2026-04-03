@@ -3493,10 +3493,14 @@ export default function App() {
     const packaging =
       (payload.product.unit || payload.detail.conditionnementPrincipal || (saleUnit === 'kg' ? 'kg' : 'piece')).trim();
     const producerProfileId =
-      [payload.product.producerId, user.producerId, user.id].find(isUuid) ?? null;
+      [user.id, payload.product.producerId, user.producerId].find(isUuid) ?? null;
     const dbCategory = resolveDbCategory(payload.product.category);
     if (!dbCategory) {
       toast.error("Categorie non prise en charge par la base.");
+      return;
+    }
+    if (!producerProfileId) {
+      toast.error('Profil producteur introuvable.');
       return;
     }
 

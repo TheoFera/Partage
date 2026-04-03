@@ -684,7 +684,7 @@ export function ProductsLanding({
             }}
           >
             Moins d’intermédiaires,{' '}
-            <span style={{ whiteSpace: 'nowrap' }}>plus de qualité</span>
+            <span className="products-landing__hero-keep-together">plus de qualité</span>
           </h2>
           <p
             style={{
@@ -697,7 +697,9 @@ export function ProductsLanding({
             }}
           >
             Participe à des commandes ou{' '}
-            <span style={{ whiteSpace: 'nowrap' }}>crée la tienne et reçoit une part</span>
+            <span className="products-landing__hero-keep-together">
+              crée la tienne et reçoit une part
+            </span>
           </p>
 
           <div className="products-landing__quick-links">
