@@ -68,7 +68,8 @@ interface ProductDetailViewProps {
   initialLotId?: string;
   timelineExtraSteps?: TimelineStep[];
   mode?: 'view' | 'create';
-  onCreateProduct?: (payload: CreateProductPayload) => void;
+  onCreateProduct?: (payload: CreateProductPayload) => Promise<void> | void;
+  createDraftStorageKey?: string;
   categoryOptions?: string[];
   producerProfileLabels?: ProducerLabelDetail[];
   readonlyPriceCentsOverride?: number | null;
@@ -175,6 +176,53 @@ type LotStepDates = {
   periodEnd?: string;
   dateType?: 'date' | 'period';
 };
+
+type CreateProductDraftSnapshot = {
+  draft: ProductDetail;
+  notifyFollowers: boolean;
+  notificationMessage: string;
+  selectedLotId: string | null;
+  lotList: ProductionLot[];
+  lotDraft: ProductionLot | null;
+  lotEditMode: 'create' | 'edit' | null;
+  productPosts: RepartitionPoste[];
+  lotPriceBreakdownByLot: Record<string, RepartitionPoste[]>;
+  lotLabelsByLot: Record<string, ProducerLabelDetail[]>;
+  activeTab: DetailTabKey;
+  lotMode: boolean;
+  localMeasurement: Product['measurement'];
+  localUnit: string;
+  localWeightKg: number | '';
+  localTimeline: TimelineStep[];
+  lotStepDatesByLot: Record<string, Record<string, LotStepDates>>;
+};
+
+const parseCreateProductDraftSnapshot = (value: string | null): CreateProductDraftSnapshot | null => {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as CreateProductDraftSnapshot;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const sanitizeStoredProductImage = (productImage?: ProductDetail['productImage']) => {
+  if (!productImage) return productImage;
+  if (productImage.url?.startsWith('blob:')) {
+    return { ...productImage, url: '' };
+  }
+  return productImage;
+};
+
+const sanitizeStoredTimeline = (steps: TimelineStep[]) =>
+  steps.map((step) => {
+    if (step.preuve?.type === 'lien' && step.preuve.url?.startsWith('blob:')) {
+      const { preuve, ...rest } = step;
+      return rest;
+    }
+    return step;
+  });
 
 const resolveStepKey = (step: TimelineStep) => step.localId ?? step.journeyStepId ?? step.etape;
 
@@ -543,43 +591,71 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   timelineExtraSteps,
   mode = 'view',
   onCreateProduct,
+  createDraftStorageKey,
   categoryOptions,
   producerProfileLabels,
   readonlyPriceCentsOverride,
 }) => {
   const isCreateMode = mode === 'create';
-  const [draft, setDraft] = React.useState<ProductDetail>(() => ({
-    ...detail,
-    vatRate: detail.vatRate ?? DEFAULT_VAT_RATE,
-  }));
+  const initialCreateDraftSnapshot = React.useMemo(
+    () =>
+      isCreateMode && createDraftStorageKey && typeof window !== 'undefined'
+        ? parseCreateProductDraftSnapshot(sessionStorage.getItem(createDraftStorageKey))
+        : null,
+    [createDraftStorageKey, isCreateMode]
+  );
+  const hasCreateDraftSnapshot = Boolean(initialCreateDraftSnapshot);
+  const [draft, setDraft] = React.useState<ProductDetail>(() =>
+    initialCreateDraftSnapshot?.draft ?? {
+      ...detail,
+      vatRate: detail.vatRate ?? DEFAULT_VAT_RATE,
+    }
+  );
   const [isFollowing, setIsFollowing] = React.useState(false);
   const [editMode, setEditMode] = React.useState(isCreateMode);
-  const [lotMode, setLotMode] = React.useState(false);
-  const [notifyFollowers, setNotifyFollowers] = React.useState(false);
-  const [notificationMessage, setNotificationMessage] = React.useState('');
+  const [lotMode, setLotMode] = React.useState(initialCreateDraftSnapshot?.lotMode ?? false);
+  const [notifyFollowers, setNotifyFollowers] = React.useState(initialCreateDraftSnapshot?.notifyFollowers ?? false);
+  const [notificationMessage, setNotificationMessage] = React.useState(
+    initialCreateDraftSnapshot?.notificationMessage ?? ''
+  );
   const [selectedLotId, setSelectedLotId] = React.useState<string | null>(() => {
+    if (initialCreateDraftSnapshot?.selectedLotId !== undefined) {
+      return initialCreateDraftSnapshot.selectedLotId;
+    }
     if (initialLotId) return initialLotId;
     return detail.productions?.find((lot) => lot.statut !== 'epuise')?.id ?? null;
   });
-  const [lotList, setLotList] = React.useState<ProductionLot[]>(detail.productions ?? []);
-  const [lotDraft, setLotDraft] = React.useState<ProductionLot | null>(null);
-  const [lotEditMode, setLotEditMode] = React.useState<'create' | 'edit' | null>(null);
+  const [lotList, setLotList] = React.useState<ProductionLot[]>(
+    initialCreateDraftSnapshot?.lotList ?? detail.productions ?? []
+  );
+  const [lotDraft, setLotDraft] = React.useState<ProductionLot | null>(initialCreateDraftSnapshot?.lotDraft ?? null);
+  const [lotEditMode, setLotEditMode] = React.useState<'create' | 'edit' | null>(
+    initialCreateDraftSnapshot?.lotEditMode ?? null
+  );
   const [productPosts, setProductPosts] = React.useState<RepartitionPoste[]>(
-    detail.repartitionValeur?.postes ?? []
+    initialCreateDraftSnapshot?.productPosts ?? detail.repartitionValeur?.postes ?? []
   );
   const [lotPriceBreakdownByLot, setLotPriceBreakdownByLot] = React.useState<
     Record<string, RepartitionPoste[]>
-  >({});
-  const [lotLabelsByLot, setLotLabelsByLot] = React.useState<Record<string, ProducerLabelDetail[]>>({});
+  >(initialCreateDraftSnapshot?.lotPriceBreakdownByLot ?? {});
+  const [lotLabelsByLot, setLotLabelsByLot] = React.useState<Record<string, ProducerLabelDetail[]>>(
+    initialCreateDraftSnapshot?.lotLabelsByLot ?? {}
+  );
   const [lotOrderUsageByLot, setLotOrderUsageByLot] = React.useState<Record<string, boolean>>({});
-  const [activeTab, setActiveTab] = React.useState<DetailTabKey>('circuit');
+  const [activeTab, setActiveTab] = React.useState<DetailTabKey>(initialCreateDraftSnapshot?.activeTab ?? 'circuit');
   const [lotCarouselIndex, setLotCarouselIndex] = React.useState(0);
   const [lotCarouselHover, setLotCarouselHover] = React.useState(false);
   const [lotVisibleCount, setLotVisibleCount] = React.useState(3);
-  const [localMeasurement, setLocalMeasurement] = React.useState<Product['measurement']>(product.measurement);
-  const [localUnit, setLocalUnit] = React.useState(isCreateMode ? '' : product.unit);
+  const [localMeasurement, setLocalMeasurement] = React.useState<Product['measurement']>(
+    initialCreateDraftSnapshot?.localMeasurement ?? product.measurement
+  );
+  const [localUnit, setLocalUnit] = React.useState(
+    initialCreateDraftSnapshot?.localUnit ?? (isCreateMode ? '' : product.unit)
+  );
   const [overrideLotPriceCents, setOverrideLotPriceCents] = React.useState<number | null>(null);
-  const [localWeightKg, setLocalWeightKg] = React.useState<number | ''>(product.weightKg ?? '');
+  const [localWeightKg, setLocalWeightKg] = React.useState<number | ''>(
+    initialCreateDraftSnapshot?.localWeightKg ?? product.weightKg ?? ''
+  );
   const [imageFile, setImageFile] = React.useState<File | null>(null);
   const [, setImagePreviewUrl] = React.useState<string | null>(null);
   const [pendingJourneyImages, setPendingJourneyImages] = React.useState<
@@ -587,7 +663,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   >({});
   const [timelineOverride, setTimelineOverride] = React.useState<TimelineStep[] | null>(null);
   const [lotStepDatesByLot, setLotStepDatesByLot] = React.useState<Record<string, Record<string, LotStepDates>>>(
-    {}
+    initialCreateDraftSnapshot?.lotStepDatesByLot ?? {}
   );
   const [draggedStepIndex, setDraggedStepIndex] = React.useState<number | null>(null);
   const [dragOverStepIndex, setDragOverStepIndex] = React.useState<number | null>(null);
@@ -595,7 +671,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [producerAvatarUpdatedAt, setProducerAvatarUpdatedAt] = React.useState<string | null>(null);
   const [producerProfileName, setProducerProfileName] = React.useState<string | null>(null);
   const [producerProfileCity, setProducerProfileCity] = React.useState<string | null>(null);
+  const [isCreateSubmitting, setIsCreateSubmitting] = React.useState(false);
   const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
+  const createSubmitLockRef = React.useRef(false);
   const imagePreviewRef = React.useRef<string | null>(null);
   const journeyMapContainerRef = React.useRef<HTMLDivElement | null>(null);
   const journeyMapRef = React.useRef<L.Map | null>(null);
@@ -608,6 +686,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const initialLotIdRef = React.useRef<string | undefined>(initialLotId);
   const PRODUCT_IMAGE_BUCKET = 'product-images';
   const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';
+  const clearPersistedCreateDraft = React.useCallback(() => {
+    if (!isCreateMode || !createDraftStorageKey || typeof window === 'undefined') return;
+    sessionStorage.removeItem(createDraftStorageKey);
+  }, [createDraftStorageKey, isCreateMode]);
 
   const ensureTimelineIds = React.useCallback(
     (steps: TimelineStep[]) =>
@@ -681,7 +763,10 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [producerProfileId, supabaseClient]);
   const fallbackTimeline = React.useMemo(() => buildFallbackTimeline(detail, pickupLabel), [detail, pickupLabel]);
   const [localTimeline, setLocalTimeline] = React.useState<TimelineStep[]>(() =>
-    ensureTimelineIds(detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
+    ensureTimelineIds(
+      initialCreateDraftSnapshot?.localTimeline ??
+        (detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline)
+    )
   );
   const resetTimelineEdits = React.useCallback(() => {
     setLocalTimeline(
@@ -698,6 +783,58 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     });
     setTimelineOverride(null);
   }, [detail, ensureTimelineIds, fallbackTimeline]);
+  React.useEffect(() => {
+    if (!isCreateMode || !createDraftStorageKey || typeof window === 'undefined') return;
+    const snapshot: CreateProductDraftSnapshot = {
+      draft: {
+        ...draft,
+        productImage: sanitizeStoredProductImage(draft.productImage),
+        tracabilite: draft.tracabilite
+          ? {
+              ...draft.tracabilite,
+              timeline: sanitizeStoredTimeline(draft.tracabilite.timeline ?? []),
+            }
+          : draft.tracabilite,
+      },
+      notifyFollowers,
+      notificationMessage,
+      selectedLotId,
+      lotList,
+      lotDraft,
+      lotEditMode,
+      productPosts,
+      lotPriceBreakdownByLot,
+      lotLabelsByLot,
+      activeTab,
+      lotMode,
+      localMeasurement,
+      localUnit,
+      localWeightKg,
+      localTimeline: sanitizeStoredTimeline(localTimeline),
+      lotStepDatesByLot,
+    };
+    sessionStorage.setItem(createDraftStorageKey, JSON.stringify(snapshot));
+  }, [
+    activeTab,
+    createDraftStorageKey,
+    draft,
+    isCreateMode,
+    localMeasurement,
+    localTimeline,
+    localUnit,
+    localWeightKg,
+    lotDraft,
+    lotEditMode,
+    lotLabelsByLot,
+    lotList,
+    lotMode,
+    lotPriceBreakdownByLot,
+    lotStepDatesByLot,
+    notificationMessage,
+    notifyFollowers,
+    productPosts,
+    selectedLotId,
+  ]);
   const loadLotTraceSteps = React.useCallback(
     async (lotCode: string, lotDbId?: string | null) => {
       if (lotStepDatesByLot[lotCode]) return;
@@ -822,6 +959,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   );
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     const posts = detail.repartitionValeur?.postes ?? [];
     setProductPosts(
       posts.map((post, index) => ({
@@ -834,6 +972,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [detail.repartitionValeur?.postes]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     if (seededLotPriceRef.current) return;
     const posts = detail.repartitionValeur?.postes ?? [];
     if (!posts.length || !selectedLotId) return;
@@ -850,13 +989,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       };
     });
     seededLotPriceRef.current = true;
-  }, [detail.repartitionValeur?.postes, selectedLotId]);
+  }, [detail.repartitionValeur?.postes, hasCreateDraftSnapshot, isCreateMode, selectedLotId]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     setDraft({ ...detail, vatRate: detail.vatRate ?? DEFAULT_VAT_RATE });
-  }, [detail]);
+  }, [detail, hasCreateDraftSnapshot, isCreateMode]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     seededLotPriceRef.current = false;
     setLotLabelsByLot({});
     setLotPriceBreakdownByLot({});
@@ -865,7 +1006,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     setLotDraft(null);
     setLotEditMode(null);
     setOverrideLotPriceCents(null);
-  }, [detail.productId]);
+  }, [detail.productId, hasCreateDraftSnapshot, isCreateMode]);
 
   React.useEffect(() => {
     if (initialLotIdRef.current === initialLotId) return;
@@ -883,8 +1024,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [initialLotId]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     setLotList(detail.productions ?? []);
-  }, [detail.productions]);
+  }, [detail.productions, hasCreateDraftSnapshot, isCreateMode]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -966,8 +1108,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [onToggleSave]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     resetTimelineEdits();
-  }, [resetTimelineEdits]);
+  }, [hasCreateDraftSnapshot, isCreateMode, resetTimelineEdits]);
 
   React.useEffect(() => {
     if (!activeLotId || !activeLotPersisted) return;
@@ -980,10 +1123,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   }, [activeLotId, activeLotPersisted, detail.tracabilite?.lotTimeline, localTimeline, lotStepDatesByLot]);
 
   React.useEffect(() => {
+    if (isCreateMode && hasCreateDraftSnapshot) return;
     setLocalMeasurement(product.measurement);
     setLocalUnit(isCreateMode ? '' : product.unit);
     setLocalWeightKg(product.weightKg ?? '');
-  }, [isCreateMode, product.measurement, product.unit, product.weightKg]);
+  }, [hasCreateDraftSnapshot, isCreateMode, product.measurement, product.unit, product.weightKg]);
 
   React.useEffect(() => {
     if (localMeasurement === 'kg') {
@@ -2351,6 +2495,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   };
 
   const resetCreateForm = () => {
+    clearPersistedCreateDraft();
     setDraft({ ...detail, vatRate: detail.vatRate ?? DEFAULT_VAT_RATE });
     setLocalMeasurement(product.measurement);
     setLocalUnit('');
@@ -2496,9 +2641,20 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   const handleSaveEdit = async () => {
     if (isCreateMode) {
       if (!onCreateProduct) return;
+      if (createSubmitLockRef.current) return;
       const payload = buildCreatePayload();
       if (!payload) return;
-      onCreateProduct(payload);
+      createSubmitLockRef.current = true;
+      setIsCreateSubmitting(true);
+      try {
+        await Promise.resolve(onCreateProduct(payload));
+        clearPersistedCreateDraft();
+      } catch {
+        // the create handler already reports the failure
+      } finally {
+        createSubmitLockRef.current = false;
+        setIsCreateSubmitting(false);
+      }
       return;
     }
     if (DEMO_MODE || !supabaseClient) {
@@ -4426,10 +4582,20 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
               </>
             ) : null}
             <div className="pd-row pd-row--wrap pd-gap-sm">
-              <button type="button" onClick={handleSaveEdit} className="pd-btn pd-btn--primary pd-btn--pill">
-                {isCreateMode ? 'Publier le produit' : 'Enregistrer'}
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                className="pd-btn pd-btn--primary pd-btn--pill"
+                disabled={isCreateSubmitting}
+              >
+                {isCreateMode ? (isCreateSubmitting ? 'Publication...' : 'Publier le produit') : 'Enregistrer'}
               </button>
-              <button type="button" onClick={handleCancelEdit} className="pd-btn pd-btn--outline pd-btn--pill">
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="pd-btn pd-btn--outline pd-btn--pill"
+                disabled={isCreateSubmitting}
+              >
                 {isCreateMode ? 'Réinitialiser' : 'Annuler'}
               </button>
             </div>

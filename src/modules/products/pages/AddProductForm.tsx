@@ -3,14 +3,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { CreateProductPayload, Product, ProductDetail, User } from '../../../shared/types';
 import { ProductDetailView } from './ProductDetailView';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
+import { getCreateProductDraftStorageKey } from '../utils/createProductDraftStorage';
 
 interface AddProductFormProps {
-  onAddProduct: (payload: CreateProductPayload) => void;
+  onAddProduct: (payload: CreateProductPayload) => Promise<void> | void;
   supabaseClient?: SupabaseClient | null;
   currentUser?: User | null;
 }
 
 export function AddProductForm({ onAddProduct, supabaseClient, currentUser }: AddProductFormProps) {
+  const createDraftStorageKey = React.useMemo(
+    () => getCreateProductDraftStorageKey(currentUser?.id ?? currentUser?.producerId),
+    [currentUser?.id, currentUser?.producerId]
+  );
   const producerProfile = React.useMemo(() => {
     const name = currentUser?.name?.trim() || 'Ma Ferme';
     const city = currentUser?.city?.trim() || currentUser?.address?.trim() || 'A proximite';
@@ -73,6 +78,7 @@ export function AddProductForm({ onAddProduct, supabaseClient, currentUser }: Ad
       onCreateOrder={() => {}}
       onParticipate={() => {}}
       onCreateProduct={onAddProduct}
+      createDraftStorageKey={createDraftStorageKey}
       categoryOptions={PRODUCT_CATEGORIES}
     />
   );

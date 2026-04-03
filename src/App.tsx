@@ -40,6 +40,7 @@ import {
   TimelineStep,
 } from './shared/types';
 import { getSupabaseClient } from './shared/lib/supabaseClient';
+import { getCreateProductDraftStorageKey } from './modules/products/utils/createProductDraftStorage';
 import {
   clearStoredAuthRedirect,
   getStoredAuthRedirect,
@@ -1929,6 +1930,7 @@ export default function App() {
     DEMO_MODE ? mockNotifications : []
   );
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
+  const addProductInFlightRef = React.useRef(false);
   const profileSaveHandlerRef = React.useRef<(() => void) | null>(null);
   const [canSaveProfile, setCanSaveProfile] = React.useState(false);
   const registerProfileSaveHandler = React.useCallback((handler: (() => void) | null) => {
@@ -3462,14 +3464,19 @@ export default function App() {
     openOrderView(newOrder.id);
   };
 
-  const handleAddProduct = (payload: CreateProductPayload) => {
+  const handleAddProduct = async (payload: CreateProductPayload) => {
     if (!user) {
       toast.info('Connectez-vous pour ajouter un produit.');
       redirectToAuth(tabRoutes.create);
       return;
     }
+    if (addProductInFlightRef.current) {
+      return;
+    }
+    addProductInFlightRef.current = true;
     const productCode = payload.product.productCode ?? `product-${Date.now()}`;
     const targetProfilePath = user.handle ? `/profil/${user.handle}` : tabRoutes.profile;
+    const createDraftStorageKey = getCreateProductDraftStorageKey(user.id ?? user.producerId);
 
     const finalizeCreate = (nextProduct: Product, nextDetail: ProductDetail) => {
       const productKey = nextProduct.productCode ?? nextProduct.id;
@@ -3483,6 +3490,10 @@ export default function App() {
           category: nextProduct.category,
         },
       }));
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem(createDraftStorageKey);
+      }
+      addProductInFlightRef.current = false;
       toast.success('Produit ajoute avec succes !');
       setProfileMode('view');
       navigate(targetProfilePath);
@@ -3496,10 +3507,12 @@ export default function App() {
       [user.id, payload.product.producerId, user.producerId].find(isUuid) ?? null;
     const dbCategory = resolveDbCategory(payload.product.category);
     if (!dbCategory) {
+      addProductInFlightRef.current = false;
       toast.error("Categorie non prise en charge par la base.");
       return;
     }
     if (!producerProfileId) {
+      addProductInFlightRef.current = false;
       toast.error('Profil producteur introuvable.');
       return;
     }
@@ -3528,7 +3541,7 @@ export default function App() {
       return;
     }
 
-    void (async () => {
+    return await (async () => {
       try {
         const PRODUCT_IMAGE_BUCKET = 'product-images';
         const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';
@@ -3788,6 +3801,9 @@ export default function App() {
       } catch (error) {
         console.error('Create product error:', error);
         toast.error('Creation du produit impossible.');
+        throw error;
+      } finally {
+        addProductInFlightRef.current = false;
       }
     })();
   };
