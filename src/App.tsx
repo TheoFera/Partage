@@ -147,11 +147,15 @@ const POSTCODE_OVERLAY_DISMISSED_SESSION_KEY = 'partage:postcode-overlay-dismiss
 const POSTCODE_GEOCODE_DEBOUNCE_MS = 250;
 const POSTCODE_OVERLAY_ALLOWED_PATHS = new Set(['/', '/carte', '/decouvrir']);
 const PURCHASE_DRAFT_STORAGE_KEY = 'partage:order-purchase-draft:v1';
+const RECENT_PURCHASE_STORAGE_KEY = 'partage:recent-order-purchase:v1';
 
-const parseStoredPurchaseDraft = (): OrderPurchaseDraft | null => {
+const parseStoredOrderPurchase = (
+  storageKey: string,
+  errorLabel: string
+): OrderPurchaseDraft | null => {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = sessionStorage.getItem(PURCHASE_DRAFT_STORAGE_KEY);
+    const raw = sessionStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<OrderPurchaseDraft> & Record<string, unknown>;
     if (!parsed || typeof parsed !== 'object' || typeof parsed.orderId !== 'string') return null;
@@ -217,9 +221,103 @@ const parseStoredPurchaseDraft = (): OrderPurchaseDraft | null => {
 
     return nextDraft;
   } catch (error) {
-    console.warn('Unable to parse stored purchase draft:', error);
+    console.warn(`Unable to parse stored ${errorLabel}:`, error);
     return null;
   }
+};
+
+const parseStoredPurchaseDraft = () =>
+  parseStoredOrderPurchase(PURCHASE_DRAFT_STORAGE_KEY, 'purchase draft');
+
+const parseStoredRecentPurchase = () =>
+  parseStoredOrderPurchase(RECENT_PURCHASE_STORAGE_KEY, 'recent purchase');
+
+const buildGroupOrderFromContext = (context: OrderFull | null): GroupOrder | null => {
+  if (!context) return null;
+
+  const { order, productsOffered, pickupSlots, participants, profiles } = context;
+  const sharerProfile = order.sharerProfileId ? profiles[order.sharerProfileId] : undefined;
+  const producerProfile = order.producerProfileId ? profiles[order.producerProfileId] : undefined;
+
+  const products = productsOffered
+    .map((entry) => {
+      const product = entry.product;
+      if (!product) return null;
+      const productCode = product.code ?? entry.productId;
+      if (!productCode) return null;
+      const displayPriceCents =
+        entry.unitFinalPriceCents ?? entry.unitBasePriceCents ?? 0;
+      return {
+        id: productCode,
+        productCode,
+        dbId: entry.productId,
+        slug: product.slug ?? undefined,
+        activeLotCode: product.activeLotCode ?? undefined,
+        activeLotId: product.activeLotId ?? undefined,
+        name: product.name,
+        description: product.description ?? '',
+        price: centsToEuros(displayPriceCents),
+        unit: entry.unitLabel ?? product.packaging ?? (product.measurement === 'kg' ? 'kg' : 'piece'),
+        quantity: 0,
+        category: '',
+        imageUrl: product.imageUrl ?? '',
+        producerId: order.producerProfileId,
+        producerName: producerProfile?.name ?? product.producerName ?? 'Producteur',
+        producerLocation: product.producerLocation ?? '',
+        inStock: true,
+        measurement: product.measurement ?? 'unit',
+        weightKg: entry.unitWeightKg ?? product.unitWeightKg ?? undefined,
+      } satisfies Product;
+    })
+    .filter(Boolean) as Product[];
+
+  return {
+    id: order.id,
+    orderCode: order.orderCode,
+    createdAt: order.createdAt,
+    title: order.title,
+    sharerId: order.sharerProfileId,
+    sharerName: sharerProfile?.name ?? 'Partageur',
+    sharerAvatarPath: sharerProfile?.avatarPath ?? null,
+    sharerAvatarUpdatedAt: sharerProfile?.avatarUpdatedAt ?? null,
+    products,
+    producerId: order.producerProfileId,
+    producerName: producerProfile?.name ?? products[0]?.producerName ?? 'Producteur',
+    producerAvatarPath: producerProfile?.avatarPath ?? null,
+    producerAvatarUpdatedAt: producerProfile?.avatarUpdatedAt ?? null,
+    sharerPercentage: order.sharerPercentage,
+    sharerQuantities: order.sharerQuantities,
+    minWeight: order.minWeightKg,
+    maxWeight: order.maxWeightKg ?? 0,
+    orderedWeight: order.orderedWeightKg,
+    deliveryFeeCents: order.deliveryFeeCents,
+    estimatedDeliveryDate: order.estimatedDeliveryDate ?? undefined,
+    pickupWindowWeeks: order.pickupWindowWeeks ?? undefined,
+    deadline: order.deadline ?? new Date(),
+    pickupStreet: order.pickupStreet ?? undefined,
+    pickupCity: order.pickupCity ?? undefined,
+    pickupPostcode: order.pickupPostcode ?? undefined,
+    pickupAddress: order.pickupAddress ?? order.deliveryAddress ?? '',
+    message: order.message ?? '',
+    status: order.status,
+    visibility: order.visibility,
+    statusUpdatedAt: order.updatedAt,
+    autoApproveParticipationRequests: order.autoApproveParticipationRequests,
+    allowSharerMessages: order.allowSharerMessages,
+    autoApprovePickupSlots: order.autoApprovePickupSlots,
+    totalValue: centsToEuros(order.participantTotalCents),
+    participants: participants.filter((participant) => participant.role === 'participant').length,
+    pickupSlots: pickupSlots
+      .filter((slot) => slot.enabled)
+      .map((slot) => ({
+        day: slot.day ?? undefined,
+        date: slot.slotDate ?? undefined,
+        start: slot.startTime ?? undefined,
+        end: slot.endTime ?? undefined,
+        label: slot.label ?? undefined,
+      })),
+    pickupDeliveryFee: centsToEuros(order.pickupDeliveryFeeCents),
+  };
 };
 
 const mockNotifications = [
@@ -1584,7 +1682,9 @@ export default function App() {
   const [purchaseDraft, setPurchaseDraft] = React.useState<OrderPurchaseDraft | null>(() =>
     parseStoredPurchaseDraft()
   );
-  const [recentPurchase, setRecentPurchase] = React.useState<OrderPurchaseDraft | null>(null);
+  const [recentPurchase, setRecentPurchase] = React.useState<OrderPurchaseDraft | null>(() =>
+    parseStoredRecentPurchase()
+  );
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -1597,6 +1697,18 @@ export default function App() {
       console.warn('Unable to persist purchase draft:', error);
     }
   }, [purchaseDraft]);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (recentPurchase) {
+        sessionStorage.setItem(RECENT_PURCHASE_STORAGE_KEY, JSON.stringify(recentPurchase));
+      } else {
+        sessionStorage.removeItem(RECENT_PURCHASE_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn('Unable to persist recent purchase:', error);
+    }
+  }, [recentPurchase]);
   const [productHeaderActions, setProductHeaderActions] = React.useState<React.ReactNode | null>(null);
   const [productShareContext, setProductShareContext] = React.useState<ProductShareContext | null>(null);
   const [shareOverlay, setShareOverlay] = React.useState<{
@@ -4527,9 +4639,16 @@ export default function App() {
 
   const OrderPaymentRoute = () => {
     const params = useParams<{ orderCode: string }>();
-    const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
+    const requestedOrderCode = params.orderCode?.trim() ?? null;
+    const fallbackOrder =
+      requestedOrderCode && loadedOrderCode === requestedOrderCode
+        ? buildGroupOrderFromContext(orderContext)
+        : null;
+    const order =
+      groupOrders.find((o) => o.orderCode === requestedOrderCode || o.id === requestedOrderCode) ?? fallbackOrder;
     const draft = order && purchaseDraft?.orderId === order.id ? purchaseDraft : null;
     const isClosePayment = draft?.kind === 'close';
+    const isOrderLoading = Boolean(requestedOrderCode && loadedOrderCode !== requestedOrderCode);
 
     const [participantStatus, setParticipantStatus] = React.useState<string | null>(null);
     const [isParticipantLoading, setIsParticipantLoading] = React.useState(true);
@@ -4576,6 +4695,7 @@ export default function App() {
       };
     }, [isClosePayment, order, user?.id]);
 
+    if (isOrderLoading) return <div className="order-payment-view__loading">Chargement...</div>;
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
@@ -4656,7 +4776,15 @@ export default function App() {
 
   const OrderShareRoute = () => {
     const params = useParams<{ orderCode: string }>();
-    const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
+    const requestedOrderCode = params.orderCode?.trim() ?? null;
+    const fallbackOrder =
+      requestedOrderCode && loadedOrderCode === requestedOrderCode
+        ? buildGroupOrderFromContext(orderContext)
+        : null;
+    const order =
+      groupOrders.find((o) => o.orderCode === requestedOrderCode || o.id === requestedOrderCode) ?? fallbackOrder;
+    const isOrderLoading = Boolean(requestedOrderCode && loadedOrderCode !== requestedOrderCode);
+    if (isOrderLoading) return <div className="order-payment-view__loading">Chargement...</div>;
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
