@@ -22,6 +22,7 @@ serve(async (req) => {
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
   const STRIPE_API_BASE = Deno.env.get("STRIPE_API_BASE") ?? "https://api.stripe.com/v1";
+  const STRIPE_CHECKOUT_UI_MODE = Deno.env.get("STRIPE_CHECKOUT_UI_MODE") ?? "embedded_page";
 
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !STRIPE_SECRET_KEY) {
     return json({ error: "Function env is missing" }, 500);
@@ -54,7 +55,7 @@ serve(async (req) => {
   const customerEmail = (userData.user.email ?? "").trim();
   const form = new URLSearchParams();
   form.append("mode", "payment");
-  form.append("ui_mode", "embedded");
+  form.append("ui_mode", STRIPE_CHECKOUT_UI_MODE);
   form.append("locale", "fr");
   form.append("return_url", parsedReturnUrl);
   form.append("line_items[0][price_data][currency]", "eur");
@@ -85,11 +86,17 @@ serve(async (req) => {
   if (!stripeRes.ok) {
     const stripeMessage =
       typeof stripeJson?.error?.message === "string" ? stripeJson.error.message : null;
+    const stripeCode =
+      typeof stripeJson?.error?.code === "string" ? stripeJson.error.code : null;
+    const stripeParam =
+      typeof stripeJson?.error?.param === "string" ? stripeJson.error.param : null;
     return json(
       {
         error: "Stripe checkout session create failed",
         status: stripeRes.status,
         stripe_message: stripeMessage,
+        stripe_code: stripeCode,
+        stripe_param: stripeParam,
         details: stripeJson,
       },
       502,
