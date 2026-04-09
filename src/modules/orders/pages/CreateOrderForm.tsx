@@ -11,6 +11,11 @@ import { formatUnitWeightLabel } from '../../products/utils/weight';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
+import {
+  formatQuantityInputValue,
+  isKgMeasurement,
+  parseLocalizedQuantityInput,
+} from '../utils/quantityInput';
 import './OrderClientView.css';
 
 interface CreateOrderFormProps {
@@ -2612,7 +2617,26 @@ function ShareProductsCarousel({
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const [draftValues, setDraftValues] = React.useState<Record<string, string>>({});
+  const [focusedProductId, setFocusedProductId] = React.useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    setDraftValues((prev) => {
+      const next: Record<string, string> = {};
+      let changed = false;
+      products.forEach((product) => {
+        const allowDecimal = isKgMeasurement(product.measurement);
+        const fallbackValue = formatQuantityInputValue(quantities[product.id] ?? 0, allowDecimal);
+        const currentValue =
+          focusedProductId === product.id && product.id in prev ? prev[product.id] : fallbackValue;
+        next[product.id] = currentValue;
+        if (currentValue !== prev[product.id]) changed = true;
+      });
+      if (Object.keys(prev).length !== Object.keys(next).length) changed = true;
+      return changed ? next : prev;
+    });
+  }, [focusedProductId, products, quantities]);
 
   const computeVisible = React.useCallback((width: number) => {
     const available = Math.max(0, width - CONTAINER_SIDE_PADDING * 2 + CARD_GAP);
@@ -2678,6 +2702,9 @@ function ShareProductsCarousel({
       >
         {productsToShow.map((product) => {
           const quantity = quantities[product.id] ?? 0;
+          const allowDecimal = isKgMeasurement(product.measurement);
+          const inputValue =
+            draftValues[product.id] ?? formatQuantityInputValue(quantity, allowDecimal);
           return (
             <div
               key={product.id}
@@ -2715,12 +2742,23 @@ function ShareProductsCarousel({
                     -
                   </button>
                   <input
-                    type="number"
-                    min={0}
-                    value={quantity}
+                    type="text"
+                    inputMode={allowDecimal ? 'decimal' : 'numeric'}
+                    value={inputValue}
                     onChange={(e) => {
-                      const value = Math.max(0, Number(e.target.value) || 0);
+                      const rawValue = e.target.value;
+                      setDraftValues((prev) => ({ ...prev, [product.id]: rawValue }));
+                      const value = parseLocalizedQuantityInput(rawValue, { allowDecimal });
+                      if (value === null) return;
                       onDirectQuantity(product.id, value);
+                    }}
+                    onFocus={() => setFocusedProductId(product.id)}
+                    onBlur={() => {
+                      setFocusedProductId((prev) => (prev === product.id ? null : prev));
+                      setDraftValues((prev) => ({
+                        ...prev,
+                        [product.id]: formatQuantityInputValue(quantities[product.id] ?? 0, allowDecimal),
+                      }));
                     }}
                     className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
                     aria-label={`Quantite pour ${product.name}`}

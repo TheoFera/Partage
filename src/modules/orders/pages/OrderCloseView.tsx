@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Minus, Plus, ShieldCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Order, OrderFull, OrderParticipant } from '../types';
+import { resolveOrderItemQuantityValue } from '../utils/quantityInput';
 import {
   addItem,
   createLockClosePackage,
@@ -36,6 +37,19 @@ type ClosePaymentPayload = {
   useCoopBalance: boolean;
   extraQuantities: Record<string, number>;
 };
+
+const getOrderItemQuantity = (item: {
+  quantityUnits?: number | null;
+  lineWeightKg?: number | null;
+  unitWeightKg?: number | null;
+  unitLabel?: string | null;
+}) =>
+  resolveOrderItemQuantityValue({
+    quantityUnits: item.quantityUnits,
+    lineWeightKg: item.lineWeightKg,
+    unitWeightKg: item.unitWeightKg,
+    unitLabel: item.unitLabel,
+  });
 
 export function OrderCloseView({
   currentUser,
@@ -118,7 +132,7 @@ export function OrderCloseView({
 
   const currentSharerQuantities = React.useMemo(() => {
     return sharerItems.reduce((acc, item) => {
-      acc[item.productId] = (acc[item.productId] ?? 0) + item.quantityUnits;
+      acc[item.productId] = (acc[item.productId] ?? 0) + getOrderItemQuantity(item);
       return acc;
     }, {} as Record<string, number>);
   }, [sharerItems]);

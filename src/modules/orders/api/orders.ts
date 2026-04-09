@@ -36,7 +36,6 @@ import {
   type InvoiceSerie,
   eurosToCents,
 } from '../types';
-
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 const INVOICES_BUCKET = 'facturation-documents';
 
@@ -539,6 +538,30 @@ const resolveUnitWeightKg = (saleUnit: string | null, unitWeightKg: number | nul
   return 0.25;
 };
 
+const isKgSaleUnit = (saleUnit?: string | null) => (saleUnit ?? '').trim().toLowerCase() === 'kg';
+
+const normalizeQuantityUnitsForStorage = (saleUnit: string | null, quantityUnits: number) => {
+  const normalized = Math.max(0, Number(quantityUnits) || 0);
+  if (isKgSaleUnit(saleUnit)) {
+    return normalized > 0 ? 1 : 0;
+  }
+  return Math.trunc(normalized);
+};
+
+const resolveStoredUnitWeightKg = (saleUnit: string | null, defaultUnitWeightKg: number, quantityUnits: number) => {
+  if (isKgSaleUnit(saleUnit)) {
+    return Math.max(0, Number(quantityUnits) || 0);
+  }
+  return defaultUnitWeightKg;
+};
+
+const resolveStoredUnitBasePriceCents = (saleUnit: string | null, basePriceCents: number, quantityUnits: number) => {
+  if (isKgSaleUnit(saleUnit)) {
+    return Math.round(basePriceCents * Math.max(0, Number(quantityUnits) || 0));
+  }
+  return basePriceCents;
+};
+
 const resolveEffectiveWeightKg = (orderedWeightKg: number, minWeightKg: number, maxWeightKg: number | null) => {
   const current = Math.max(0, orderedWeightKg ?? 0);
   const min = Math.max(0, minWeightKg ?? 0);
@@ -806,23 +829,37 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
             productRow.unit_weight_kg,
             productRow.packaging
           );
-          const unitWeightKg = orderProduct?.unit_weight_kg ?? fallbackUnitWeightKg;
+          const unitWeightKg = resolveStoredUnitWeightKg(
+            productRow.sale_unit,
+            orderProduct?.unit_weight_kg ?? fallbackUnitWeightKg,
+            entry.quantity
+          );
           const basePriceCents = Number(
             productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
           );
-          const unitBasePriceCents = orderProduct?.unit_base_price_cents ?? basePriceCents;
-          const unitDeliveryCents = orderProduct?.unit_delivery_cents ?? 0;
-          const unitSharerFeeCents = orderProduct?.unit_sharer_fee_cents ?? 0;
-          const unitFinalPriceCents =
-            orderProduct?.unit_final_price_cents ?? unitBasePriceCents + unitDeliveryCents + unitSharerFeeCents;
-          const lineTotalCents = unitFinalPriceCents * entry.quantity;
-          const lineWeightKg = unitWeightKg * entry.quantity;
+          const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+            productRow.sale_unit,
+            orderProduct?.unit_base_price_cents ?? basePriceCents,
+            entry.quantity
+          );
+          const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, entry.quantity);
+          const pricing = calculateOrderItemPricing({
+            order,
+            basePriceCents: unitBasePriceCents,
+            unitWeightKg,
+            quantityUnits: storedQuantityUnits,
+          });
+          const unitDeliveryCents = pricing.unitDeliveryCents;
+          const unitSharerFeeCents = pricing.unitSharerFeeCents;
+          const unitFinalPriceCents = pricing.unitFinalPriceCents;
+          const lineTotalCents = pricing.lineTotalCents;
+          const lineWeightKg = pricing.lineWeightKg;
           return {
             order_id: order.id,
             participant_id: (sharerParticipant as DbOrderParticipant).id,
             product_id: productRow.product_id,
             lot_id: resolvedLotId,
-            quantity_units: entry.quantity,
+            quantity_units: storedQuantityUnits,
             unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
             unit_weight_kg: unitWeightKg,
             unit_base_price_cents: unitBasePriceCents,
@@ -1127,15 +1164,23 @@ export const addItem = async (params: {
     if (backfillLotError) throw backfillLotError;
   }
 
-  const unitWeightKg =
+  const unitWeightKg = resolveStoredUnitWeightKg(
+    productRow.sale_unit,
     (isPositiveNumber(orderProduct.unit_weight_kg) ? orderProduct.unit_weight_kg : null) ??
-    resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging);
-  const unitBasePriceCents = orderProduct.unit_base_price_cents;
+      resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging),
+    params.quantityUnits
+  );
+  const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, params.quantityUnits);
+  const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+    productRow.sale_unit,
+    orderProduct.unit_base_price_cents,
+    params.quantityUnits
+  );
   const pricing = calculateOrderItemPricing({
     order: mapOrderRow(orderRow as DbOrder),
     basePriceCents: unitBasePriceCents,
     unitWeightKg,
-    quantityUnits: params.quantityUnits,
+    quantityUnits: storedQuantityUnits,
   });
   const unitDeliveryCents = pricing.unitDeliveryCents;
   const unitSharerFeeCents = pricing.unitSharerFeeCents;
@@ -1150,7 +1195,7 @@ export const addItem = async (params: {
       participant_id: params.participantId,
       product_id: params.productId,
       lot_id: resolvedLotId,
-      quantity_units: params.quantityUnits,
+      quantity_units: storedQuantityUnits,
       unit_label: orderProduct.unit_label ?? (productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging),
       unit_weight_kg: unitWeightKg,
       unit_base_price_cents: unitBasePriceCents,
@@ -1170,7 +1215,7 @@ export const addItem = async (params: {
       lot_id: resolvedLotId,
       order_id: params.orderId,
       order_item_id: (itemRow as DbOrderItem).id,
-      reserved_units: productRow.sale_unit === 'kg' ? null : params.quantityUnits,
+      reserved_units: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
       reserved_kg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
       status: 'active',
       expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
@@ -1230,15 +1275,23 @@ export const updateOrderItemQuantity = async (
   if (productError || !productRow) throw productError ?? new Error('Produit introuvable.');
 
   const orderProduct = orderProductRow as DbOrderProduct;
-  const unitWeightKg =
+  const unitWeightKg = resolveStoredUnitWeightKg(
+    productRow.sale_unit,
     (isPositiveNumber(orderProduct.unit_weight_kg) ? orderProduct.unit_weight_kg : null) ??
-    resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging);
-  const unitBasePriceCents = orderProduct.unit_base_price_cents;
+      resolveUnitWeightKg(productRow.sale_unit, productRow.unit_weight_kg, productRow.packaging),
+    quantityUnits
+  );
+  const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, quantityUnits);
+  const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+    productRow.sale_unit,
+    orderProduct.unit_base_price_cents,
+    quantityUnits
+  );
   const pricing = calculateOrderItemPricing({
     order: mapOrderRow(orderRow as DbOrder),
     basePriceCents: unitBasePriceCents,
     unitWeightKg,
-    quantityUnits,
+    quantityUnits: storedQuantityUnits,
   });
   const unitDeliveryCents = pricing.unitDeliveryCents;
   const unitSharerFeeCents = pricing.unitSharerFeeCents;
@@ -1249,8 +1302,9 @@ export const updateOrderItemQuantity = async (
   const { error: updateError } = await client
     .from('order_items')
     .update({
-      quantity_units: quantityUnits,
+      quantity_units: storedQuantityUnits,
       unit_weight_kg: unitWeightKg,
+      unit_base_price_cents: unitBasePriceCents,
       unit_delivery_cents: unitDeliveryCents,
       unit_sharer_fee_cents: unitSharerFeeCents,
       unit_final_price_cents: unitFinalPriceCents,
@@ -1267,7 +1321,7 @@ export const updateOrderItemQuantity = async (
     .maybeSingle();
   if (reservationRow?.id) {
     const payload = {
-      reserved_units: productRow.sale_unit === 'kg' ? null : quantityUnits,
+      reserved_units: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
       reserved_kg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
       expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
     };

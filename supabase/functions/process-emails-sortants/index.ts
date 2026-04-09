@@ -11,7 +11,7 @@ const BREVO_SENDER_EMAIL = Deno.env.get("BREVO_SENDER_EMAIL") ?? "";
 const BREVO_SENDER_NAME = Deno.env.get("BREVO_SENDER_NAME") ?? "Partage";
 const BILLING_BUCKET = Deno.env.get("BILLING_BUCKET") ?? "facturation-documents";
 const LOGO_PUBLIC_URL = Deno.env.get("LOGO_PUBLIC_URL") ?? "";
-const FUNCTION_VERSION = "process_emails_sortants_2026_03_13_fix_01";
+const FUNCTION_VERSION = "process_emails_sortants_2026_04_09_fix_kg_qty_01";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
   <g fill="none" stroke="#FF6D4D" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
@@ -568,7 +568,7 @@ Deno.serve(async (req) => {
       if (itemLines.length === 0 && facture.serie === "PROD_CLIENT" && participantId) {
         const { data: itemRows, error: itemsErr } = await supabase
           .from("order_items")
-          .select("product_id, quantity_units, unit_label, unit_final_price_cents, line_total_cents")
+          .select("product_id, quantity_units, unit_label, unit_final_price_cents, line_total_cents, line_weight_kg")
           .eq("order_id", facture.order_id)
           .eq("participant_id", participantId);
         if (itemsErr) throw new Error(`Order items error: ${itemsErr.message}`);
@@ -581,13 +581,22 @@ Deno.serve(async (req) => {
 
         itemLines = (itemRows ?? []).map((row) => {
           const product = productMap.get(row.product_id);
+          const isKgLine = (row.unit_label ?? "").trim().toLowerCase() === "kg";
+          const quantity = isKgLine
+            ? Number(row.line_weight_kg ?? 0)
+            : Number(row.quantity_units ?? 0);
+          const totalTtcCents = Number(row.line_total_cents ?? 0);
+          const unitTtcCents =
+            isKgLine && quantity > 0
+              ? Math.round(totalTtcCents / quantity)
+              : Number(row.unit_final_price_cents ?? 0);
           return {
             label: product?.name ?? "Produit",
-            quantity: Number(row.quantity_units ?? 0),
+            quantity,
             unitLabel: row.unit_label ?? null,
-            unitTtcCents: Number(row.unit_final_price_cents ?? 0),
+            unitTtcCents,
             vatRate: Number(product?.vat_rate ?? 0),
-            totalTtcCents: Number(row.line_total_cents ?? 0),
+            totalTtcCents,
           };
         });
       }
