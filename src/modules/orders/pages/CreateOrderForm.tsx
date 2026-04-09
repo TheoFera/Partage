@@ -11,12 +11,10 @@ import { formatUnitWeightLabel } from '../../products/utils/weight';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
-import { DEMO_MODE } from '../../../shared/config/demoMode';
 import './OrderClientView.css';
 
 interface CreateOrderFormProps {
   products: DeckCard[];
-  onCreateOrder?: (order: any) => void;
   preselectedProductIds?: string[];
   onCancel?: () => void;
   user?: User | null;
@@ -249,7 +247,7 @@ const buildCalendarDays = (month: Date) => {
 
 const hasActiveLot = (product: DeckCard) => Boolean(product.activeLotCode ?? product.activeLotId);
 const hasValidLotPrice = (product: DeckCard) =>
-  DEMO_MODE ? Number(product.price) > 0 : hasActiveLot(product) && Number(product.price) > 0;
+  hasActiveLot(product) && Number(product.price) > 0;
 
 const deliveryDayIndexMap: Record<DeliveryDay, number> = {
   sunday: 0,
@@ -312,7 +310,6 @@ const buildProfileHandle = (value?: string | null) => (value ? value.toLowerCase
 export function CreateOrderForm({
   products,
   preselectedProductIds,
-  onCreateOrder,
   onCancel,
   user,
   producer,
@@ -1476,11 +1473,6 @@ export function CreateOrderForm({
       },
       estimatedDeliveryDate,
     };
-
-    if (DEMO_MODE && onCreateOrder) {
-      onCreateOrder(orderDraft);
-      return;
-    }
 
     setIsSubmitting(true);
     createOrder({

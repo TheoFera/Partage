@@ -6,7 +6,7 @@ This is a code bundle for TEST Site Partage. The original project is available a
 
 1. Run `npm i` to install the dependencies.
 2. Run `npm run dev` to start the development server.
-3. Creez un fichier `.env` et renseignez `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` et `VITE_STRIPE_PUBLISHABLE_KEY` si vous branchez Supabase (optionnel: `VITE_DEMO_MODE=true`).
+3. Creez un fichier `.env` et renseignez `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` et `VITE_STRIPE_PUBLISHABLE_KEY` si vous branchez Supabase.
 
 ## Routing
 
@@ -29,10 +29,6 @@ Pour Stripe, configurez aussi les secrets Edge Functions `STRIPE_SECRET_KEY` (ob
 - Pour diagnostiquer la configuration des secrets billing, executer:
   - `select * from public.billing_email_config_healthcheck();`
 - Si `SUPABASE_SERVICE_ROLE_KEY` n'est pas un JWT valide (`dot_count != 2`), `process-emails-sortants` peut repondre `401 Invalid JWT`.
-
-## Mode demo
-
-`src/shared/config/demoMode.ts` centralise `DEMO_MODE` (lecture de `VITE_DEMO_MODE`). Les donnees de demo sont dans `src/data/fixtures/`.
 
 ## Structure du dossier `src`
 
@@ -70,15 +66,10 @@ Pour Stripe, configurez aussi les secrets Edge Functions `STRIPE_SECRET_KEY` (ob
 - `src/shared/lib/` : helpers transverses (money, supabase, imageProcessing, formatPrix).
 - `src/shared/constants/` : constantes partagees (cards, producerLabels).
 - `src/shared/types/` : types communs a l'application.
-- `src/shared/config/` : config runtime (ex: `demoMode`).
 
 ### Supabase
 
 - `supabase/` : configuration et fonctions edge (voir section Supabase).
-
-### Data
-
-- `src/data/fixtures/` : donnees factices pour le mode demo (mockData, mockProductDetails).
 
 ## Carte rapide
 

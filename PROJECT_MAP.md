@@ -31,11 +31,6 @@
 - `src/shared/lib/`: cross-domain helpers (money, supabaseClient, imageProcessing).
 - `src/shared/constants/`: cross-domain constants (cards, producer labels).
 - `src/shared/types/`: app-wide types.
-- `src/shared/config/`: runtime config (DEMO_MODE).
-
-## Data
-- `src/data/fixtures/`: demo/mock data (used by demo mode).
-
 ## Supabase
 - `supabase/config.toml`: local Supabase CLI config.
 - `supabase/functions/`: edge functions (`finalize-payment`, `process-emails-sortants`).

@@ -21,10 +21,9 @@ type AuthLocationState = {
 interface AuthPageProps {
   supabaseClient: SupabaseClient | null;
   onAuthSuccess: (user: SupabaseAuthUser) => void;
-  onDemoLogin: () => void;
 }
 
-export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPageProps) {
+export function AuthPage({ supabaseClient, onAuthSuccess }: AuthPageProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = location.state as AuthLocationState | null;
@@ -145,7 +144,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!supabaseClient) {
-      toast.error('Supabase n est pas configuré. Utilisez le mode démo pour tester.');
+      toast.error('Supabase n est pas configuré.');
       return;
     }
     setLoading(true);
@@ -283,12 +282,6 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDemo = () => {
-    onDemoLogin();
-    clearStoredRedirect();
-    navigate(redirectTo, { replace: true });
   };
 
   React.useEffect(() => {
@@ -771,13 +764,6 @@ export function AuthPage({ supabaseClient, onAuthSuccess, onDemoLogin }: AuthPag
               ) : null}
             </div>
           ) : null}
-
-          <div className="auth-card__footer">
-            <p></p>
-            <button onClick={handleDemo} className="auth-card__demo-button" type="button">
-              Mode démo
-            </button>
-          </div>
         </div>
       </div>
     </div>

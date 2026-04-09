@@ -32,7 +32,6 @@ import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from '../
 import { formatUnitWeightLabel } from '../utils/weight';
 import { fetchLotBreakdown, saveProducerLotBreakdown } from '../utils/pricing';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
-import { DEMO_MODE } from '../../../shared/config/demoMode';
 import {
   CreateProductPayload,
   DbLotLabel,
@@ -842,7 +841,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         setLotStepDatesByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: {} }));
         return;
       }
-      if (DEMO_MODE || !supabaseClient || isCreateMode || !lotDbId) {
+      if (!supabaseClient || isCreateMode || !lotDbId) {
         setLotStepDatesByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: {} }));
         return;
       }
@@ -888,7 +887,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         setLotPriceBreakdownByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: [] }));
         return;
       }
-      if (DEMO_MODE || !supabaseClient || isCreateMode || !lotDbId) {
+      if (!supabaseClient || isCreateMode || !lotDbId) {
         setLotPriceBreakdownByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: [] }));
         return;
       }
@@ -910,7 +909,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         setLotLabelsByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: [] }));
         return;
       }
-      if (DEMO_MODE || !supabaseClient || isCreateMode || !lotDbId) {
+      if (!supabaseClient || isCreateMode || !lotDbId) {
         setLotLabelsByLot((prev) => (prev[lotCode] ? prev : { ...prev, [lotCode]: [] }));
         return;
       }
@@ -934,7 +933,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const loadLotOrderUsage = React.useCallback(
     async (lotCode: string, lotDbId?: string | null) => {
       if (lotOrderUsageByLot[lotCode] !== undefined) return;
-      if (DEMO_MODE || !supabaseClient || isCreateMode || !lotDbId) {
+      if (!supabaseClient || isCreateMode || !lotDbId) {
         setLotOrderUsageByLot((prev) =>
           prev[lotCode] !== undefined ? prev : { ...prev, [lotCode]: false }
         );
@@ -1823,9 +1822,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const handleProductImageChange = React.useCallback(
     async ({ file, previewUrl }: { file: File; previewUrl: string }) => {
-      if (DEMO_MODE || !supabaseClient || isCreateMode) {
+      if (isCreateMode) {
         applyProductImagePreview(file, previewUrl, true);
         return;
+      }
+      if (!supabaseClient) {
+        throw new Error('Supabase n est pas configuré. Impossible de modifier l image.');
       }
 
       const productCode = product.productCode ?? product.id;
@@ -1967,10 +1969,13 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         updateTimelineStep(index, { localId: nextLocalId });
       }
 
-      if (DEMO_MODE || !supabaseClient || isCreateMode) {
+      if (isCreateMode) {
         applyJourneyImagePreview(index, previewUrl, stepLabel, nextLocalId);
         queueJourneyImage(nextLocalId, file, previewUrl);
         return;
+      }
+      if (!supabaseClient) {
+        throw new Error('Supabase n est pas configuré. Impossible de modifier l image.');
       }
 
       const productCode = product.productCode ?? product.id;
@@ -2117,7 +2122,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const persistLotStepDates = React.useCallback(
     async (step: TimelineStep, index: number, dates: LotStepDates) => {
-      if (DEMO_MODE || !supabaseClient || isCreateMode) return;
+      if (!supabaseClient || isCreateMode) return;
       if (!activeLotId || !activeLotPersisted || !activeLotDbId) return;
 
       const productCode = product.productCode ?? product.id;
@@ -2657,12 +2662,8 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       }
       return;
     }
-    if (DEMO_MODE || !supabaseClient) {
-      setEditMode(false);
-      toast.success('Modifications enregistrées (demo).');
-      if (notifyFollowers && !notificationMessage.trim()) {
-        toast.error('Ajoutez un message de notification pour prevenir les abonnes.');
-      }
+    if (!supabaseClient) {
+      toast.error('Supabase n est pas configuré. Impossible d enregistrer les modifications.');
       return;
     }
 
@@ -2911,7 +2912,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       ...lotDraft,
       periodeDisponibilite: { debut: lotDraft.debut, fin: lotDraft.fin },
     };
-    if (DEMO_MODE || !supabaseClient || isCreateMode) {
+    if (isCreateMode) {
       setLotList((prev) => {
         if (lotEditMode === 'edit') {
           return prev.map((item) => (item.id === normalized.id ? normalized : item));
@@ -2927,7 +2928,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         setLotDraft(null);
         setLotEditMode(null);
       }
-      toast.success(lotEditMode === 'edit' ? 'Lot mis à jour (demo).' : 'Lot ajouté (demo).');
+      toast.success(lotEditMode === 'edit' ? 'Lot mis à jour.' : 'Lot ajouté.');
+      return;
+    }
+    if (!supabaseClient) {
+      toast.error('Supabase n est pas configuré. Impossible d enregistrer le lot.');
       return;
     }
     try {
@@ -3152,7 +3157,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       setOverrideLotPriceCents(null);
     };
 
-    if (DEMO_MODE || !supabaseClient || isCreateMode || !lotDbId) {
+    if (!supabaseClient && !isCreateMode) {
+      toast.error('Supabase n est pas configuré. Impossible de supprimer le lot.');
+      return;
+    }
+
+    if (isCreateMode || !lotDbId) {
       removeLocalLot();
       toast.success('Lot supprimé.');
       return;

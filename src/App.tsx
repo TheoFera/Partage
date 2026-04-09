@@ -22,7 +22,6 @@ import { OrderCloseView } from './modules/orders/pages/OrderCloseView';
 import { AuthPage } from './modules/auth/pages/AuthPage';
 import { ShareOverlay } from './shared/ui/ShareOverlay';
 import { PostcodeOverlay } from './shared/ui/PostcodeOverlay';
-import { mockProducts, mockUser, mockGroupOrders } from './data/fixtures/mockData';
 import { ProductDetailView } from './modules/products/pages/ProductDetailView';
 import type { OrderFull } from './modules/orders/types';
 import {
@@ -49,7 +48,6 @@ import {
 } from './shared/lib/authRedirect';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from './shared/lib/storageObjectPath';
-import { DEMO_MODE } from './shared/config/demoMode';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
   addItem,
@@ -68,7 +66,6 @@ import {
   finalizePaymentSimulation,
   removeItem,
   requestParticipation,
-  setDemoOrders,
   triggerOutgoingEmails,
   updateOrderItemQuantity,
   updatePaymentStatus,
@@ -320,36 +317,63 @@ const buildGroupOrderFromContext = (context: OrderFull | null): GroupOrder | nul
   };
 };
 
-const mockNotifications = [
-  {
-    id: 'notif-1',
-    title: 'Paiement confirme',
-    message: 'Votre participation a la commande "Commande Ma Ferme" est validee.',
-    time: 'Il y a 2 min',
-    unread: true,
-  },
-  {
-    id: 'notif-2',
-    title: 'Nouvelle commande partagee',
-    message: 'Marie Dupont a publie "Panier gourmand du week-end".',
-    time: 'Il y a 1 h',
-    unread: true,
-  },
-  {
-    id: 'notif-3',
-    title: 'Rappel de retrait',
-    message: 'Retrait prevu vendredi 17:00 - 19:00.',
-    time: 'Hier',
-    unread: false,
-  },
-  {
-    id: 'notif-4',
-    title: 'Message recu',
-    message: 'Le producteur a ajoute une info sur la commande.',
-    time: 'Il y a 3 j',
-    unread: false,
-  },
-];
+const useResolvedGroupOrder = (requestedOrderCode: string | null, groupOrders: GroupOrder[]) => {
+  const matchedOrder = React.useMemo(() => {
+    if (!requestedOrderCode) return null;
+    return (
+      groupOrders.find((order) => order.orderCode === requestedOrderCode || order.id === requestedOrderCode) ?? null
+    );
+  }, [groupOrders, requestedOrderCode]);
+  const [fallbackOrder, setFallbackOrder] = React.useState<GroupOrder | null>(null);
+  const [isFallbackLoading, setIsFallbackLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    let isActive = true;
+
+    if (!requestedOrderCode || matchedOrder || isUuid(requestedOrderCode)) {
+      setFallbackOrder(null);
+      setIsFallbackLoading(false);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    setFallbackOrder(null);
+    setIsFallbackLoading(true);
+
+    getOrderFullByCode(requestedOrderCode)
+      .then((context) => {
+        if (!isActive) return;
+        setFallbackOrder(buildGroupOrderFromContext(context));
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setFallbackOrder(null);
+      })
+      .finally(() => {
+        if (!isActive) return;
+        setIsFallbackLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [matchedOrder, requestedOrderCode]);
+
+  return {
+    order: matchedOrder ?? fallbackOrder,
+    isLoading: Boolean(requestedOrderCode) && !matchedOrder && isFallbackLoading,
+  };
+};
+
+const GUEST_VIEWER: User = {
+  id: 'guest',
+  name: 'Visiteur',
+  role: 'participant',
+  handle: 'visiteur',
+  profileVisibility: 'public',
+  addressVisibility: 'private',
+};
 
 const getTabFromPath = (pathname: string) => {
   if (pathname.startsWith('/carte')) return 'deck';
@@ -1211,7 +1235,6 @@ type ProductRouteViewProps = {
   groupOrders: GroupOrder[];
   user: User | null;
   canSaveProduct: boolean;
-  useDemoProducts: boolean;
   createdProductDetails: Record<string, ProductDetail>;
   supabaseClient?: SupabaseClient | null;
   onHeaderActionsChange: React.Dispatch<React.SetStateAction<React.ReactNode | null>>;
@@ -1231,7 +1254,6 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   groupOrders,
   user,
   canSaveProduct,
-  useDemoProducts,
   createdProductDetails,
   supabaseClient,
   onHeaderActionsChange,
@@ -1354,7 +1376,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     return () => {
       active = false;
     };
-  }, [createdProductDetails, lotCode, productCode, products, useDemoProducts]);
+  }, [createdProductDetails, lotCode, productCode, products]);
 
   React.useEffect(() => {
     let active = true;
@@ -1634,11 +1656,10 @@ export default function App() {
     }
   }, []);
   const [user, setUser] = React.useState<User | null>(null);
-  const [products, setProducts] = React.useState<Product[]>(DEMO_MODE ? mockProducts : []);
+  const [products, setProducts] = React.useState<Product[]>([]);
   const [createdProductDetails, setCreatedProductDetails] = React.useState<Record<string, ProductDetail>>({});
-  const [useDemoProducts, setUseDemoProducts] = React.useState<boolean>(DEMO_MODE);
-  const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
-  const [userOrders, setUserOrders] = React.useState<GroupOrder[]>(DEMO_MODE ? mockGroupOrders : []);
+  const [groupOrders, setGroupOrders] = React.useState<GroupOrder[]>([]);
+  const [userOrders, setUserOrders] = React.useState<GroupOrder[]>([]);
   React.useEffect(() => {
     if (typeof window === 'undefined' || !supabaseClient) return;
     if (import.meta.env.DEV) {
@@ -1647,12 +1668,7 @@ export default function App() {
     }
   }, [supabaseClient, user?.id]);
   React.useEffect(() => {
-    if (!DEMO_MODE) return;
-    setDemoOrders(groupOrders);
-    setUserOrders(groupOrders);
-  }, [groupOrders]);
-  React.useEffect(() => {
-    if (DEMO_MODE || !supabaseClient) return;
+    if (!supabaseClient) return;
     let active = true;
     const loadOrders = async () => {
       try {
@@ -1731,16 +1747,14 @@ export default function App() {
   React.useEffect(() => {
     let active = true;
     listProducts()
-      .then(({ products: nextProducts, isDemo }) => {
+      .then((nextProducts) => {
         if (!active) return;
         setProducts(nextProducts);
-        setUseDemoProducts(isDemo);
       })
       .catch((error) => {
         console.warn('Products listing error:', error);
         if (!active) return;
-        setProducts(DEMO_MODE ? mockProducts : []);
-        setUseDemoProducts(DEMO_MODE);
+        setProducts([]);
       });
     return () => {
       active = false;
@@ -2048,9 +2062,7 @@ export default function App() {
   const [profileRoleFilters, setProfileRoleFilters] = React.useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
-  const [notifications, setNotifications] = React.useState<NotificationItem[]>(
-    DEMO_MODE ? mockNotifications : []
-  );
+  const [notifications, setNotifications] = React.useState<NotificationItem[]>([]);
   const [profileMode, setProfileMode] = React.useState<'view' | 'edit'>('view');
   const addProductInFlightRef = React.useRef(false);
   const profileSaveHandlerRef = React.useRef<(() => void) | null>(null);
@@ -2111,10 +2123,6 @@ export default function App() {
   );
 
   React.useEffect(() => {
-    if (DEMO_MODE) {
-      setNotifications(mockNotifications);
-      return;
-    }
     if (!supabaseClient || !user?.id) {
       setNotifications([]);
       return;
@@ -2143,7 +2151,7 @@ export default function App() {
   }, [mapDbNotification, supabaseClient, user?.id]);
 
   React.useEffect(() => {
-    if (DEMO_MODE || !supabaseClient || !user?.id) return;
+    if (!supabaseClient || !user?.id) return;
     const channel = supabaseClient
       .channel(`notifications-${user.id}`)
       .on(
@@ -2189,7 +2197,7 @@ export default function App() {
     const wasOpen = wasNotificationsOpenRef.current;
     wasNotificationsOpenRef.current = notificationsOpen;
     if (!wasOpen || notificationsOpen) return;
-    if (DEMO_MODE || !supabaseClient || !user?.id) return;
+    if (!supabaseClient || !user?.id) return;
     const unreadIds = notifications.filter((item) => item.unread).map((item) => item.id);
     if (!unreadIds.length) return;
     const readAt = new Date().toISOString();
@@ -2398,7 +2406,7 @@ export default function App() {
     return () => listener?.subscription.unsubscribe();
   }, [ensureProfile, supabaseClient]);
 
-  const viewer = user ?? mockUser;
+  const viewer = user ?? GUEST_VIEWER;
   const isAuthenticated = Boolean(user);
   const isProfileAuthPage = !isAuthenticated && location.pathname === '/profil';
   const isAuthLayout = isAuthPage || isProfileAuthPage;
@@ -3490,102 +3498,6 @@ export default function App() {
     toast.success('Paiement confirmé et commande clôturée.');
   };
 
-  const handleCreateOrder = (orderData: any) => {
-    if (!user) {
-      toast.info('Connectez-vous ou creez un compte pour publier une commande.');
-      redirectToAuth('/commande/nouvelle', 'signup');
-      return;
-    }
-    const now = new Date();
-    const firstProduct = orderData.products?.[0];
-    const pickupAddress =
-      orderData.pickupAddress ||
-      [orderData.pickupStreet, [orderData.pickupPostcode, orderData.pickupCity].filter(Boolean).join(' ') || undefined]
-        .filter(Boolean)
-        .join(', ');
-    const shareMode = orderData.shareMode ?? 'products';
-    const sharerQuantities =
-      shareMode === 'cash' ? {} : (orderData.shareQuantities as Record<string, number> | undefined) ?? {};
-    const hasSharerSelection = Object.values(sharerQuantities).some((qty) => qty > 0);
-    const getProductWeightKg = (product: Product) => {
-      if (product.weightKg) return product.weightKg;
-      const unit = product.unit?.toLowerCase() ?? '';
-      const match = unit.match(/([\d.,]+)\s*(kg|g)/);
-      if (match) {
-        const raw = parseFloat(match[1].replace(',', '.'));
-        if (Number.isFinite(raw)) {
-          return match[2] === 'kg' ? raw : raw / 1000;
-        }
-      }
-      if (product.measurement === 'kg') return 1;
-      return 0.25;
-    };
-    const sharerSelectionWeight = hasSharerSelection
-      ? (orderData.products ?? []).reduce((sum: number, product: Product) => {
-          const qty = sharerQuantities[product.id] ?? 0;
-          return sum + getProductWeightKg(product) * qty;
-        }, 0)
-      : 0;
-    const rawEstimatedDeliveryDate =
-      orderData.estimatedDeliveryDate instanceof Date
-        ? orderData.estimatedDeliveryDate
-        : orderData.estimatedDeliveryDate
-          ? new Date(orderData.estimatedDeliveryDate)
-          : undefined;
-    const estimatedDeliveryDate =
-      rawEstimatedDeliveryDate && !Number.isNaN(rawEstimatedDeliveryDate.getTime())
-        ? rawEstimatedDeliveryDate
-        : undefined;
-    const pickupWindowWeeks =
-      typeof orderData.pickupWindowWeeks === 'number' && orderData.pickupWindowWeeks > 0
-        ? orderData.pickupWindowWeeks
-        : undefined;
-
-    const newOrder: GroupOrder = {
-      id: `order-${Date.now()}`,
-      title: orderData.title,
-      sharerId: user.id,
-      sharerName: user.name,
-      products: orderData.products,
-      producerId: firstProduct?.producerId ?? currentProducerId,
-      producerName: firstProduct?.producerName ?? 'Producteur',
-      sharerPercentage: orderData.sharerPercentage,
-        sharerQuantities: hasSharerSelection ? sharerQuantities : undefined,
-        minWeight: orderData.minWeight,
-        maxWeight: orderData.maxWeight,
-        orderedWeight: sharerSelectionWeight,
-        deliveryFeeCents:
-          typeof orderData.deliveryFeeCents === 'number'
-            ? orderData.deliveryFeeCents
-            : eurosToCents(orderData.pickupDeliveryFee ?? 0),
-        estimatedDeliveryDate,
-        pickupWindowWeeks,
-      deadline: orderData.deadline ?? now,
-      pickupStreet: orderData.pickupStreet,
-      pickupCity: orderData.pickupCity,
-      pickupPostcode: orderData.pickupPostcode,
-      pickupAddress,
-      pickupSlots: orderData.pickupSlots,
-      pickupDeliveryFee: orderData.pickupDeliveryFee ?? 0,
-      message: orderData.message,
-      status: 'open',
-      visibility: orderData.visibility ?? 'public',
-      autoApproveParticipationRequests: orderData.autoApproveParticipationRequests ?? false,
-      allowSharerMessages: orderData.allowSharerMessages ?? true,
-      autoApprovePickupSlots: orderData.autoApprovePickupSlots ?? false,
-      totalValue: orderData.totals?.participantTotal ?? 0,
-      participants: hasSharerSelection ? 1 : 0,
-    };
-
-    setGroupOrders((prev) => [newOrder, ...prev]);
-    toast.success('Commande cree avec succes !');
-    const usedProductIds = (orderData.products ?? []).map((p: Product) => p.id);
-    setDeck(deck.filter((card) => !usedProductIds.includes(card.id)));
-    lastTabRef.current = orderBuilderSourceRef.current ?? lastTabRef.current;
-    resetOrderBuilder();
-    openOrderView(newOrder.id);
-  };
-
   const handleAddProduct = async (payload: CreateProductPayload) => {
     if (!user) {
       toast.info('Connectez-vous pour ajouter un produit.');
@@ -3639,27 +3551,9 @@ export default function App() {
       return;
     }
 
-    if (!supabaseClient || DEMO_MODE) {
-      const fallbackProduct: Product = {
-        id: productCode,
-        productCode,
-        slug: payload.product.slug ?? slugify(payload.product.name || productCode),
-        name: payload.product.name,
-        description: payload.product.description ?? '',
-        price: 0,
-        unit: packaging || (saleUnit === 'kg' ? 'kg' : 'piece'),
-        quantity: 0,
-        category: payload.product.category,
-        imageUrl: payload.product.imageUrl ?? '',
-        producerId: producerProfileId ?? payload.product.producerId ?? productCode,
-        producerName: payload.product.producerName,
-        producerLocation: payload.product.producerLocation,
-        inStock: false,
-        measurement,
-        weightKg: payload.product.weightKg,
-        vatRate: payload.detail.vatRate ?? payload.product.vatRate,
-      };
-      finalizeCreate(fallbackProduct, payload.detail);
+    if (!supabaseClient) {
+      addProductInFlightRef.current = false;
+      toast.error('Supabase n est pas configuré. Impossible d ajouter un produit.');
       return;
     }
 
@@ -4246,14 +4140,6 @@ export default function App() {
     setProfileMode('view');
   };
 
-  const handleDemoLogin = () => {
-    setUser(mockUser);
-    setDeck([]);
-    setProfileMode('view');
-    prevRoleRef.current = mockUser.role;
-    toast.success('Connecte en mode demo');
-  };
-
   const locationLabel = viewer.address?.split(',')[0] ?? 'votre quartier';
   const openProfileByHandle = React.useCallback(
     (handle: string) => {
@@ -4640,15 +4526,9 @@ export default function App() {
   const OrderPaymentRoute = () => {
     const params = useParams<{ orderCode: string }>();
     const requestedOrderCode = params.orderCode?.trim() ?? null;
-    const fallbackOrder =
-      requestedOrderCode && loadedOrderCode === requestedOrderCode
-        ? buildGroupOrderFromContext(orderContext)
-        : null;
-    const order =
-      groupOrders.find((o) => o.orderCode === requestedOrderCode || o.id === requestedOrderCode) ?? fallbackOrder;
+    const { order, isLoading: isOrderLoading } = useResolvedGroupOrder(requestedOrderCode, groupOrders);
     const draft = order && purchaseDraft?.orderId === order.id ? purchaseDraft : null;
     const isClosePayment = draft?.kind === 'close';
-    const isOrderLoading = Boolean(requestedOrderCode && loadedOrderCode !== requestedOrderCode);
 
     const [participantStatus, setParticipantStatus] = React.useState<string | null>(null);
     const [isParticipantLoading, setIsParticipantLoading] = React.useState(true);
@@ -4777,13 +4657,7 @@ export default function App() {
   const OrderShareRoute = () => {
     const params = useParams<{ orderCode: string }>();
     const requestedOrderCode = params.orderCode?.trim() ?? null;
-    const fallbackOrder =
-      requestedOrderCode && loadedOrderCode === requestedOrderCode
-        ? buildGroupOrderFromContext(orderContext)
-        : null;
-    const order =
-      groupOrders.find((o) => o.orderCode === requestedOrderCode || o.id === requestedOrderCode) ?? fallbackOrder;
-    const isOrderLoading = Boolean(requestedOrderCode && loadedOrderCode !== requestedOrderCode);
+    const { order, isLoading: isOrderLoading } = useResolvedGroupOrder(requestedOrderCode, groupOrders);
     if (isOrderLoading) return <div className="order-payment-view__loading">Chargement...</div>;
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
@@ -5029,7 +4903,6 @@ export default function App() {
                 <AuthPage
                   supabaseClient={supabaseClient}
                   onAuthSuccess={handleAuthSuccess}
-                  onDemoLogin={handleDemoLogin}
                 />
               )
             }
@@ -5048,7 +4921,6 @@ export default function App() {
                 user={user}
                 producer={orderProducer}
                 supabaseClient={supabaseClient}
-                onCreateOrder={handleCreateOrder}
                 onCancel={() => {
                   const target = orderBuilderSourceRef.current ?? tabRoutes.home;
                   resetOrderBuilder();
@@ -5093,7 +4965,6 @@ export default function App() {
                 <AuthPage
                   supabaseClient={supabaseClient}
                   onAuthSuccess={handleAuthSuccess}
-                  onDemoLogin={handleDemoLogin}
                 />
               )
             }
@@ -5152,7 +5023,6 @@ export default function App() {
                 groupOrders={groupOrders}
                 user={user}
                 canSaveProduct={canSaveProduct}
-                useDemoProducts={useDemoProducts}
                 createdProductDetails={createdProductDetails}
                 supabaseClient={supabaseClient}
                 onHeaderActionsChange={setProductHeaderActions}
@@ -5176,7 +5046,6 @@ export default function App() {
                 groupOrders={groupOrders}
                 user={user}
                 canSaveProduct={canSaveProduct}
-                useDemoProducts={useDemoProducts}
                 createdProductDetails={createdProductDetails}
                 supabaseClient={supabaseClient}
                 onHeaderActionsChange={setProductHeaderActions}
@@ -5200,7 +5069,6 @@ export default function App() {
                 groupOrders={groupOrders}
                 user={user}
                 canSaveProduct={canSaveProduct}
-                useDemoProducts={useDemoProducts}
                 createdProductDetails={createdProductDetails}
                 supabaseClient={supabaseClient}
                 onHeaderActionsChange={setProductHeaderActions}
@@ -5224,7 +5092,6 @@ export default function App() {
                 groupOrders={groupOrders}
                 user={user}
                 canSaveProduct={canSaveProduct}
-                useDemoProducts={useDemoProducts}
                 createdProductDetails={createdProductDetails}
                 supabaseClient={supabaseClient}
                 onHeaderActionsChange={setProductHeaderActions}

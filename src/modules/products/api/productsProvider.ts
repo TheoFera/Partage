@@ -2,8 +2,6 @@
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
 import { centsToEuros } from '../../../shared/lib/money';
 import { fetchLotByLotCode } from '../utils/pricing';
-import { mockProducts } from '../../../data/fixtures/mockData';
-import { buildDefaultProductDetail, mockProductDetails } from '../../../data/fixtures/mockProductDetails';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
@@ -32,7 +30,6 @@ import type {
   RepartitionValeur,
   TimelineStep,
 } from '../../../shared/types';
-import { DEMO_MODE } from '../../../shared/config/demoMode';
 
 const PRODUCT_IMAGE_BUCKET = 'product-images';
 const JOURNEY_IMAGE_BUCKET = import.meta.env.VITE_PRODUCT_JOURNEY_BUCKET ?? 'product-journey';
@@ -77,14 +74,6 @@ const buildImageUrl = (client: SupabaseClient | null, path?: string | null, buck
   const { data } = client.storage.from(bucket).getPublicUrl(path);
   return data?.publicUrl ?? '';
 };
-
-const withDemoFields = (product: Product): Product => ({
-  ...product,
-  productCode: product.productCode ?? product.id,
-  slug: product.slug ?? slugify(product.name),
-});
-
-const getDemoProducts = () => mockProducts.map(withDemoFields);
 
 const resolveProducerName = (name?: string | null) => name?.trim() || 'Producteur';
 
@@ -589,56 +578,29 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
   };
 };
 
-const getDemoProductDetailByCode = (productCode: string) => {
-  const demoProducts = getDemoProducts();
-  const product = demoProducts.find((item) => (item.productCode ?? item.id) === productCode);
-  if (!product) return null;
-  const detail = mockProductDetails[product.id] ?? buildDefaultProductDetail(product);
-  return { product, detail };
-};
-
-const getDemoLotDetailByCode = (lotCode: string) => {
-  const demoProducts = getDemoProducts();
-  for (const product of demoProducts) {
-    const detail = mockProductDetails[product.id] ?? buildDefaultProductDetail(product);
-    const hasLot = detail.productions?.some((lot) => lot.id === lotCode);
-    if (hasLot) {
-      return { product, detail, lotCode };
-    }
-  }
-  return null;
-};
-
-export const listProducts = async (): Promise<{ products: Product[]; isDemo: boolean }> => {
-  if (DEMO_MODE) {
-    return { products: getDemoProducts(), isDemo: true };
-  }
+export const listProducts = async (): Promise<Product[]> => {
   const client = getSupabaseOrNull();
   if (!client) {
-    return { products: [], isDemo: false };
+    return [];
   }
 
   const { data, error } = await client.from('v_products_listing').select('*');
   if (error) {
     console.warn('Supabase products listing error:', error);
-    return { products: [], isDemo: false };
+    return [];
   }
 
   if (!data || data.length === 0) {
-    return { products: [], isDemo: false };
+    return [];
   }
 
-  const products = (data as ProductListingRow[]).map((row) => mapListingRowToProduct(row, client));
-  return { products, isDemo: false };
+  return (data as ProductListingRow[]).map((row) => mapListingRowToProduct(row, client));
 };
 
 export const getProductByCode = async (
   productCode: string
 ): Promise<{ product: Product; detail: ProductDetail; activeLotCode?: string | null } | null> => {
   if (!productCode) return null;
-  if (DEMO_MODE) {
-    return getDemoProductDetailByCode(productCode);
-  }
 
   const client = getSupabaseOrNull();
   if (!client) return null;
@@ -722,9 +684,6 @@ export const getLotByCode = async (
   lotCode: string
 ): Promise<{ product: Product; detail: ProductDetail; lotCode?: string | null } | null> => {
   if (!lotCode) return null;
-  if (DEMO_MODE) {
-    return getDemoLotDetailByCode(lotCode);
-  }
 
   const client = getSupabaseOrNull();
   if (!client) return null;

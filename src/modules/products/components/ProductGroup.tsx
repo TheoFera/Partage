@@ -16,7 +16,6 @@ import {
   MIN_VISIBLE_CARDS,
   CONTAINER_SIDE_PADDING,
 } from '../../../shared/constants/cards';
-import { DEMO_MODE } from '../../../shared/config/demoMode';
 import '../styles/ProductsLanding.css';
 
 type ProductGroupVariant = 'producer' | 'order';
@@ -227,7 +226,7 @@ const getProductAttributes = (product: Product) => {
 
 const hasActiveLot = (product: Product) => Boolean(product.activeLotCode ?? product.activeLotId);
 export const hasValidLotPrice = (product: Product) =>
-  DEMO_MODE ? Number(product.price) > 0 : hasActiveLot(product) && Number(product.price) > 0;
+  hasActiveLot(product) && Number(product.price) > 0;
 
 const resolveOrderEffectiveWeightKg = (orderedWeight: number, minWeight: number, maxWeight?: number) => {
   const current = Math.max(0, orderedWeight ?? 0);

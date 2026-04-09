@@ -216,22 +216,6 @@
   color: #6b7280;
 }
 
-.auth-card__demo-button {
-  border-radius: 0.75rem;
-  padding: 0.55rem 0.95rem;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
-  cursor: pointer;
-  font-weight: 600;
-  color: #1f2937;
-  transition: border-color 0.2s ease, color 0.2s ease;
-}
-
-.auth-card__demo-button:hover {
-  border-color: #ff6b4a;
-  color: #ff6b4a;
-}
-
 .auth-form__action-row {
   width: 100%;
   display: flex;
