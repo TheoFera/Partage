@@ -833,7 +833,7 @@ React.useEffect(() => {
               )}
               {user.socialLinks && Object.values(user.socialLinks).some(Boolean) && (
                 <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
-                  <span className="text-xs uppercase text-[#6B7280]">R?seaux :</span>
+                  <span className="text-xs uppercase text-[#6B7280]">Réseaux :</span>
                   {Object.entries(user.socialLinks)
                     .filter(([, v]) => Boolean(v))
                     .map(([key, value]) => (

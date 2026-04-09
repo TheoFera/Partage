@@ -501,6 +501,38 @@ const emptyOrderFull: OrderFull = {
   profiles: {},
 };
 
+const ORDER_CLIENT_SELECTION_STORAGE_PREFIX = 'partage:order-client-selection:v1';
+
+type StoredOrderClientSelection = {
+  quantities: Record<string, number>;
+  useCoopBalance: boolean;
+};
+
+const parseStoredOrderClientSelection = (storageKey: string | null): StoredOrderClientSelection | null => {
+  if (typeof window === 'undefined' || !storageKey) return null;
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredOrderClientSelection> & Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const quantities: Record<string, number> = {};
+    if (parsed.quantities && typeof parsed.quantities === 'object') {
+      Object.entries(parsed.quantities as Record<string, unknown>).forEach(([productCode, rawQty]) => {
+        const qty = Number(rawQty);
+        if (!Number.isFinite(qty) || qty <= 0) return;
+        quantities[productCode] = qty;
+      });
+    }
+    return {
+      quantities,
+      useCoopBalance: parsed.useCoopBalance !== false,
+    };
+  } catch (error) {
+    console.warn('Unable to parse stored order selection:', error);
+    return null;
+  }
+};
+
 export function OrderClientView({
   onClose,
   currentUser,
@@ -533,6 +565,11 @@ export function OrderClientView({
   const [useCoopBalance, setUseCoopBalance] = React.useState(true);
 
   const isAuthenticated = Boolean(currentUser);
+  const orderSelectionStorageKey = React.useMemo(() => {
+    if (!orderCode) return null;
+    const viewerKey = currentUser?.id?.trim() || 'guest';
+    return `${ORDER_CLIENT_SELECTION_STORAGE_PREFIX}:${orderCode}:${viewerKey}`;
+  }, [currentUser?.id, orderCode]);
 
   const loadInvoices = React.useCallback(
     async (orderId: string, producerProfileId?: string | null) => {
@@ -591,13 +628,16 @@ export function OrderClientView({
     try {
       const data = await getOrderFullByCode(orderCode);
       setOrderFull(data);
+      const storedSelection = parseStoredOrderClientSelection(orderSelectionStorageKey);
       const next: Record<string, number> = {};
       data.productsOffered.forEach((entry) => {
         const key = entry.product?.code ?? entry.productId;
         if (!key) return;
-        next[key] = Math.max(0, Number(next[key]) || 0);
+        const storedQuantity = storedSelection?.quantities[key];
+        next[key] = Math.max(0, Number.isFinite(storedQuantity ?? NaN) ? storedQuantity ?? 0 : 0);
       });
       setQuantities(next);
+      setUseCoopBalance(storedSelection?.useCoopBalance ?? true);
       setParticipantsVisibility(data.order.participantsVisibility);
       setParticipantsPanelOpen(false);
       await loadInvoices(data.order.id, data.order.producerProfileId);
@@ -607,11 +647,39 @@ export function OrderClientView({
     } finally {
       setIsLoading(false);
     }
-  }, [orderCode, loadInvoices]);
+  }, [orderCode, orderSelectionStorageKey, loadInvoices]);
 
   React.useEffect(() => {
     loadOrder();
   }, [loadOrder]);
+
+  React.useEffect(() => {
+    if (!orderSelectionStorageKey || typeof window === 'undefined') return;
+    if (!orderFull) return;
+    try {
+      const allowedProductCodes = new Set(
+        orderFull.productsOffered
+          .map((entry) => entry.product?.code ?? entry.productId)
+          .filter((value): value is string => Boolean(value))
+      );
+      const persistedQuantities = Object.entries(quantities).reduce((acc, [productCode, rawQty]) => {
+        if (!allowedProductCodes.has(productCode)) return acc;
+        const qty = Math.max(0, Number(rawQty) || 0);
+        if (qty <= 0) return acc;
+        acc[productCode] = qty;
+        return acc;
+      }, {} as Record<string, number>);
+      window.sessionStorage.setItem(
+        orderSelectionStorageKey,
+        JSON.stringify({
+          quantities: persistedQuantities,
+          useCoopBalance,
+        } satisfies StoredOrderClientSelection)
+      );
+    } catch (error) {
+      console.warn('Unable to persist order selection:', error);
+    }
+  }, [orderFull, orderSelectionStorageKey, quantities, useCoopBalance]);
 
   React.useEffect(() => {
     const activeOrder = orderFull?.order;

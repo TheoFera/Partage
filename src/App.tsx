@@ -76,6 +76,7 @@ import {
   PRODUCER_LABELS_YEAR_COLUMN,
 } from './shared/constants/producerLabels';
 import { toast, Toaster } from 'sonner';
+import { resolveOrderItemQuantityValue } from './modules/orders/utils/quantityInput';
 
 const tabRoutes = {
   home: '/',
@@ -168,6 +169,7 @@ const parseStoredOrderPurchase = (
 
     const nextDraft: OrderPurchaseDraft = {
       orderId: parsed.orderId,
+      orderCode: typeof parsed.orderCode === 'string' && parsed.orderCode.trim() ? parsed.orderCode.trim() : undefined,
       quantities,
       lineItems: Array.isArray(parsed.lineItems)
         ? parsed.lineItems
@@ -365,6 +367,19 @@ const useResolvedGroupOrder = (requestedOrderCode: string | null, groupOrders: G
     isLoading: Boolean(requestedOrderCode) && !matchedOrder && isFallbackLoading,
   };
 };
+
+const getOrderItemQuantity = (item: {
+  quantityUnits?: number | null;
+  lineWeightKg?: number | null;
+  unitWeightKg?: number | null;
+  unitLabel?: string | null;
+}) =>
+  resolveOrderItemQuantityValue({
+    quantityUnits: item.quantityUnits,
+    lineWeightKg: item.lineWeightKg,
+    unitWeightKg: item.unitWeightKg,
+    unitLabel: item.unitLabel,
+  });
 
 const GUEST_VIEWER: User = {
   id: 'guest',
@@ -3030,6 +3045,22 @@ export default function App() {
     (orderId: string) => groupOrders.find((entry) => entry.id === orderId)?.orderCode ?? orderId,
     [groupOrders]
   );
+  const resolveGroupOrderForDraft = React.useCallback(
+    async (draft: OrderPurchaseDraft) => {
+      const requestedOrderCode = draft.orderCode?.trim() || null;
+      const matchedOrder =
+        groupOrders.find(
+          (entry) => entry.id === draft.orderId || (requestedOrderCode ? entry.orderCode === requestedOrderCode : false)
+        ) ?? null;
+      if (matchedOrder) return matchedOrder;
+
+      const lookupKey = requestedOrderCode ?? draft.orderId;
+      if (!lookupKey) return null;
+      const context = await getOrderFullByCode(lookupKey);
+      return buildGroupOrderFromContext(context);
+    },
+    [groupOrders]
+  );
 
   const openProductView = (
     productId: string,
@@ -3175,6 +3206,7 @@ export default function App() {
     const weight = Number(payload.weight) || 0;
     const draft: OrderPurchaseDraft = {
       orderId: order.id,
+      orderCode: order.orderCode,
       quantities: payload.quantities,
       lineItems: payload.lineItems,
       total,
@@ -3199,6 +3231,7 @@ export default function App() {
     const total = centsToEuros(payload.amountCents);
     const draft: OrderPurchaseDraft = {
       orderId: order.id,
+      orderCode: order.orderCode,
       quantities: {},
       total,
       weight: 0,
@@ -3246,7 +3279,14 @@ export default function App() {
       redirectToAuth(location.pathname);
       return;
     }
-    const order = groupOrders.find((entry) => entry.id === draft.orderId);
+    let order: GroupOrder | null = null;
+    try {
+      order = await resolveGroupOrderForDraft(draft);
+    } catch (error) {
+      console.error('Unable to resolve order for payment confirmation:', error);
+      toast.error('Impossible de recharger la commande apres paiement.');
+      return;
+    }
     if (!order) {
       toast.error('Commande introuvable.');
       return;
@@ -3291,7 +3331,7 @@ export default function App() {
       const withItems = await getOrderFullByCode(order.orderCode ?? order.id);
       const participantItems = withItems.items.filter((item) => item.participantId === participant.id);
       for (const item of participantItems) {
-        await updateOrderItemQuantity(item.id, order.id, participant.id, item.quantityUnits);
+        await updateOrderItemQuantity(item.id, order.id, participant.id, getOrderItemQuantity(item));
       }
 
       const refreshed = await getOrderFullByCode(order.orderCode ?? order.id);
@@ -3388,7 +3428,7 @@ export default function App() {
     handlePurchaseOrder(draft.orderId, paidTotalEuros, draft.weight);
     setRecentPurchase(finalizedDraft);
     setPurchaseDraft(null);
-    navigate(`/cmd/${resolveOrderCode(draft.orderId)}/partage`);
+    navigate(`/cmd/${order.orderCode ?? draft.orderCode ?? resolveOrderCode(draft.orderId)}/partage`);
     toast.success('Paiement confirme.');
   };
 
@@ -3400,7 +3440,14 @@ export default function App() {
       redirectToAuth(location.pathname);
       return;
     }
-    const order = groupOrders.find((entry) => entry.id === draft.orderId);
+    let order: GroupOrder | null = null;
+    try {
+      order = await resolveGroupOrderForDraft(draft);
+    } catch (error) {
+      console.error('Unable to resolve order for close payment confirmation:', error);
+      toast.error('Impossible de recharger la commande avant la cloture.');
+      return;
+    }
     if (!order) {
       toast.error('Commande introuvable.');
       return;
@@ -3427,7 +3474,7 @@ export default function App() {
       const items = orderFull.items ?? [];
       const sharerItems = items.filter((item) => item.participantId === sharerParticipant.id);
       const currentSharerQuantities = sharerItems.reduce((acc, item) => {
-        acc[item.productId] = (acc[item.productId] ?? 0) + item.quantityUnits;
+        acc[item.productId] = (acc[item.productId] ?? 0) + getOrderItemQuantity(item);
         return acc;
       }, {} as Record<string, number>);
 
