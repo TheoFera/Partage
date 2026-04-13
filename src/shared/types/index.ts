@@ -90,6 +90,11 @@ export interface Product {
   producerId: string;
   producerName: string;
   producerLocation: string;
+  producerProfileName?: string | null;
+  producerProfileCity?: string | null;
+  producerProfilePostcode?: string | null;
+  producerAvatarPath?: string | null;
+  producerAvatarUpdatedAt?: string | null;
   inStock: boolean;
   measurement: 'unit' | 'kg';
   weightKg?: number;
@@ -460,6 +465,11 @@ export interface ProductListingRow {
   producer_profile_id: string | null;
   producer_name: string | null;
   producer_location: string | null;
+  producer_profile_name?: string | null;
+  producer_profile_city?: string | null;
+  producer_profile_postcode?: string | null;
+  producer_avatar_path?: string | null;
+  producer_avatar_updated_at?: string | null;
   primary_image_path: string | null;
   active_lot_id?: string | null;
   active_lot_code: string | null;

@@ -280,6 +280,11 @@ export function ProductsLanding({
         name: string;
         location: string;
         postcode?: string;
+        profileName?: string | null;
+        profileCity?: string | null;
+        profilePostcode?: string | null;
+        avatarPath?: string | null;
+        avatarUpdatedAt?: string | null;
         tags: string[];
         products: Product[];
       }
@@ -293,11 +298,21 @@ export function ProductsLanding({
         name: product.producerName,
         location: formatCityLabel(undefined, postcode, product.producerLocation),
         postcode,
+        profileName: product.producerProfileName ?? null,
+        profileCity: product.producerProfileCity ?? null,
+        profilePostcode: product.producerProfilePostcode ?? null,
+        avatarPath: product.producerAvatarPath ?? null,
+        avatarUpdatedAt: product.producerAvatarUpdatedAt ?? null,
         tags,
         products: [],
       };
       grouped.set(product.producerId, {
         ...existing,
+        profileName: existing.profileName ?? product.producerProfileName ?? null,
+        profileCity: existing.profileCity ?? product.producerProfileCity ?? null,
+        profilePostcode: existing.profilePostcode ?? product.producerProfilePostcode ?? null,
+        avatarPath: existing.avatarPath ?? product.producerAvatarPath ?? null,
+        avatarUpdatedAt: existing.avatarUpdatedAt ?? product.producerAvatarUpdatedAt ?? null,
         products: [...existing.products, product],
       });
     });
@@ -351,16 +366,16 @@ export function ProductsLanding({
   const [profileMetaById, setProfileMetaById] = React.useState<
     Record<
       string,
-      { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+      {
+        path: string | null;
+        updatedAt: string | null;
+        handle?: string | null;
+        name?: string | null;
+        city?: string | null;
+        postcode?: string | null;
+      }
     >
   >({});
-  const producerProfileIds = React.useMemo(() => {
-    const ids = new Set<string>();
-    producerProductRows.forEach((producer) => {
-      if (isUuid(producer.id)) ids.add(producer.id);
-    });
-    return Array.from(ids);
-  }, [producerProductRows]);
   const sharerProfileIds = React.useMemo(() => {
     const ids = new Set<string>();
     ordersResults.forEach((order) => {
@@ -368,10 +383,7 @@ export function ProductsLanding({
     });
     return Array.from(ids);
   }, [ordersResults]);
-  const profileIds = React.useMemo(
-    () => Array.from(new Set([...producerProfileIds, ...sharerProfileIds])),
-    [producerProfileIds, sharerProfileIds]
-  );
+  const profileIds = React.useMemo(() => Array.from(new Set(sharerProfileIds)), [sharerProfileIds]);
 
   React.useEffect(() => {
     let active = true;
@@ -384,7 +396,7 @@ export function ProductsLanding({
 
     supabaseClient
       .from('profiles')
-      .select('id, handle, avatar_path, avatar_updated_at, name')
+      .select('id, handle, avatar_path, avatar_updated_at, name, city, postcode')
       .in('id', profileIds)
       .then(({ data, error }) => {
         if (!active) return;
@@ -395,7 +407,14 @@ export function ProductsLanding({
         }
         const mapped: Record<
           string,
-          { path: string | null; updatedAt: string | null; handle?: string | null; name?: string | null }
+          {
+            path: string | null;
+            updatedAt: string | null;
+            handle?: string | null;
+            name?: string | null;
+            city?: string | null;
+            postcode?: string | null;
+          }
         > = {};
         (data as Array<Record<string, unknown>> | null)?.forEach((row) => {
           const id = typeof row.id === 'string' ? row.id : '';
@@ -405,6 +424,8 @@ export function ProductsLanding({
             updatedAt: (row.avatar_updated_at as string | null) ?? null,
             handle: (row.handle as string | null) ?? null,
             name: (row.name as string | null) ?? null,
+            city: (row.city as string | null) ?? null,
+            postcode: (row.postcode as string | null) ?? null,
           };
         });
         setProfileMetaById(mapped);
@@ -417,8 +438,9 @@ export function ProductsLanding({
 
   const producerGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return producerProductRows.map((producer) => {
-      const profileMeta = profileMetaById[producer.id];
-      const resolvedProducerName = profileMeta?.name?.trim() || producer.name;
+      const resolvedProducerName = producer.profileName?.trim() || producer.name;
+      const resolvedPostcode = producer.profilePostcode?.trim() || producer.postcode;
+      const resolvedLocation = formatCityLabel(producer.profileCity ?? undefined, resolvedPostcode, producer.location);
       const resolvedProducts = producer.products.map((product) =>
         resolvedProducerName && product.producerName !== resolvedProducerName
           ? { ...product, producerName: resolvedProducerName }
@@ -427,16 +449,15 @@ export function ProductsLanding({
       return {
         id: producer.id,
         title: resolvedProducerName,
-        location: producer.postcode ? `${producer.location} ${producer.postcode}` : producer.location,
+        location: resolvedPostcode ? `${resolvedLocation} ${resolvedPostcode}` : resolvedLocation,
         tags: producer.tags,
         products: resolvedProducts,
         variant: 'producer',
-        profileHandle: profileMeta?.handle ?? undefined,
-        avatarPath: profileMeta?.path ?? null,
-        avatarUpdatedAt: profileMeta?.updatedAt ?? null,
+        avatarPath: producer.avatarPath ?? null,
+        avatarUpdatedAt: producer.avatarUpdatedAt ?? null,
       };
     });
-  }, [producerProductRows, profileMetaById]);
+  }, [producerProductRows]);
 
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
