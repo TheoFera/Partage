@@ -402,6 +402,7 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
 };
 
 const ORDER_CARD_WIDTH = CARD_WIDTH;
+const MOBILE_PRODUCTS_SWIPE_BREAKPOINT = 768;
 
 type ParticipantVisibility = {
   profile: boolean;
@@ -3872,6 +3873,7 @@ function OrderProductsCarousel({
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const [containerWidth, setContainerWidth] = React.useState(0);
   const [draftValues, setDraftValues] = React.useState<Record<string, string>>({});
   const [focusedProductId, setFocusedProductId] = React.useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -3905,6 +3907,7 @@ function OrderProductsCarousel({
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       const width = entry?.contentRect?.width ?? el.clientWidth;
+      setContainerWidth((prev) => (prev === width ? prev : width));
       const next = computeVisible(width);
       setVisibleCount((prev) => (prev === next ? prev : next));
     });
@@ -3917,7 +3920,8 @@ function OrderProductsCarousel({
     setStartIndex((prev) => Math.min(prev, maxIndex));
   }, [products.length, visibleCount]);
 
-  const useCarousel = products.length > visibleCount;
+  const useSwipeScroll = containerWidth > 0 && containerWidth < MOBILE_PRODUCTS_SWIPE_BREAKPOINT;
+  const useCarousel = !useSwipeScroll && products.length > visibleCount;
   const maxIndex = Math.max(0, products.length - visibleCount);
 
   const containerMinWidth =
@@ -3926,15 +3930,16 @@ function OrderProductsCarousel({
     CONTAINER_SIDE_PADDING * 2;
 
   const containerStyle: React.CSSProperties = {
-    minWidth: `${containerMinWidth}px`,
+    minWidth: useSwipeScroll ? '0' : `${containerMinWidth}px`,
     width: '100%',
-    paddingInline: CONTAINER_SIDE_PADDING,
     position: 'relative',
   };
 
-  const productsToShow = useCarousel
-    ? products.slice(startIndex, startIndex + visibleCount)
-    : products;
+  const productsToShow = useSwipeScroll
+    ? products
+    : useCarousel
+      ? products.slice(startIndex, startIndex + visibleCount)
+      : products;
 
   const canScrollLeft = useCarousel && startIndex > 0;
   const canScrollRight = useCarousel && startIndex < maxIndex;
@@ -3952,8 +3957,18 @@ function OrderProductsCarousel({
   return (
     <div className="relative" style={containerStyle} ref={containerRef}>
       <div
-        className="flex gap-3"
-        style={{ alignItems: 'stretch', justifyContent: useCarousel ? 'flex-start' : 'center' }}
+        className={`order-client-view__products-track ${
+          useSwipeScroll
+            ? 'order-client-view__products-track--swipe'
+            : useCarousel
+              ? 'order-client-view__products-track--carousel'
+              : 'order-client-view__products-track--centered'
+        }`}
+        style={{
+          alignItems: 'stretch',
+          justifyContent: useCarousel ? 'flex-start' : 'center',
+          paddingInline: useSwipeScroll ? 0 : CONTAINER_SIDE_PADDING,
+        }}
       >
         {productsToShow.map((product) => {
           const quantity = quantities[product.id] ?? 0;
@@ -3963,6 +3978,7 @@ function OrderProductsCarousel({
           return (
             <div
               key={product.id}
+              className={useSwipeScroll ? 'order-client-view__products-card--swipe' : undefined}
               style={{
                 width: `${ORDER_CARD_WIDTH}px`,
                 minWidth: `${ORDER_CARD_WIDTH}px`,

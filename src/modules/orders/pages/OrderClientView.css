@@ -295,6 +295,31 @@
   right: 0;
 }
 
+.order-client-view__products-track {
+  display: flex;
+  gap: 12px;
+}
+
+.order-client-view__products-track--swipe {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+}
+
+.order-client-view__products-card--swipe {
+  scroll-snap-align: start;
+}
+
+@media (max-width: 767px) {
+  .order-client-view__products-track--swipe {
+    scrollbar-width: thin;
+  }
+}
+
 .order-client-view__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

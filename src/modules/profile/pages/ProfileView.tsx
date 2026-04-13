@@ -2392,7 +2392,7 @@ function ProfileEditPanel({
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-[#1F2937] font-semibold">Informations legales</h3>
               <span className="text-xs text-[#6B7280]">
-                Ces informations peuvent etre completees progressivement.
+                Ces informations peuvent être complétées progressivement.
               </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">

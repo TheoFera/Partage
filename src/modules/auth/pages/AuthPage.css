@@ -2,7 +2,7 @@
   width: 100%;
   display: flex;
   justify-content: center;
-  padding: 1.5rem 1rem;
+  padding: 1.5rem 1rem calc(6.5rem + env(safe-area-inset-bottom, 0px));
   background: #f9f2e4;
   box-sizing: border-box;
 }
@@ -229,6 +229,10 @@
 }
 
 @media (min-width: 1024px) {
+  .auth-page {
+    padding-bottom: 2rem;
+  }
+
   .auth-card {
     flex-direction: row;
   }
