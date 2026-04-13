@@ -662,7 +662,7 @@ export function ProductsLanding({
           style={{ inset: 0, position: 'absolute' }}
         >
           <img
-            src={`${import.meta.env.BASE_URL}banniere.jpg`}
+            src={`${import.meta.env.BASE_URL}banniere.webp`}
             alt="Champs maraichers avec producteurs et animaux en plein air"
             style={{
               width: '100%',
@@ -671,7 +671,8 @@ export function ProductsLanding({
               objectPosition: 'center center',
               display: 'block',
             }}
-            loading="lazy"
+            loading="eager"
+            fetchPriority="high"
           />
           <div
             className="absolute inset-0"
