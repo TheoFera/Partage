@@ -5,6 +5,13 @@ import { toast } from 'sonner';
 import type { Order, OrderFull, OrderParticipant } from '../types';
 import { resolveOrderItemQuantityValue } from '../utils/quantityInput';
 import {
+  buildOrderPageSnapshotKey,
+  clearOrderPageSnapshot,
+  type OrderClosePageSnapshot,
+  readOrderPageSnapshot,
+  writeOrderPageSnapshot,
+} from '../utils/orderPageSnapshot';
+import {
   addItem,
   createLockClosePackage,
   fetchParticipantInvoices,
@@ -60,17 +67,31 @@ export function OrderCloseView({
 }) {
   const navigate = useNavigate();
   const { orderCode } = useParams<{ orderCode: string }>();
-  const [orderFull, setOrderFull] = React.useState<OrderFull | null>(null);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const orderCloseSnapshotKey = React.useMemo(
+    () => buildOrderPageSnapshotKey('close', orderCode, currentUser?.id ?? null),
+    [currentUser?.id, orderCode]
+  );
+  const cachedOrderCloseSnapshot = React.useMemo(
+    () => readOrderPageSnapshot<OrderClosePageSnapshot>(orderCloseSnapshotKey),
+    [orderCloseSnapshotKey]
+  );
+
+  const [orderFull, setOrderFull] = React.useState<OrderFull | null>(() => cachedOrderCloseSnapshot?.orderFull ?? null);
+  const [isLoading, setIsLoading] = React.useState(() => !cachedOrderCloseSnapshot?.orderFull);
   const [isWorking, setIsWorking] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [extraQuantities, setExtraQuantities] = React.useState<Record<string, number>>({});
-  const [coopBalanceCents, setCoopBalanceCents] = React.useState(0);
-  const [useCoopBalance, setUseCoopBalance] = React.useState(true);
+  const [extraQuantities, setExtraQuantities] = React.useState<Record<string, number>>(
+    () => cachedOrderCloseSnapshot?.extraQuantities ?? {}
+  );
+  const [coopBalanceCents, setCoopBalanceCents] = React.useState(() => cachedOrderCloseSnapshot?.coopBalanceCents ?? 0);
+  const [useCoopBalance, setUseCoopBalance] = React.useState(() => cachedOrderCloseSnapshot?.useCoopBalance ?? true);
 
   const loadOrder = React.useCallback(async () => {
     if (!orderCode) return;
-    setIsLoading(true);
+    const isHydratedFromSnapshot = Boolean(cachedOrderCloseSnapshot?.orderFull);
+    if (!isHydratedFromSnapshot) {
+      setIsLoading(true);
+    }
     setLoadError(null);
     try {
       const data = await getOrderFullByCode(orderCode);
@@ -81,15 +102,29 @@ export function OrderCloseView({
       }
     } catch (error) {
       console.error('Close view load error:', error);
-      setLoadError('Impossible de charger la commande.');
+      if (!isHydratedFromSnapshot) {
+        setLoadError('Impossible de charger la commande.');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [currentUser?.id, orderCode]);
+  }, [cachedOrderCloseSnapshot?.orderFull, currentUser?.id, orderCode]);
 
   React.useEffect(() => {
     loadOrder();
   }, [loadOrder]);
+
+  React.useEffect(() => {
+    if (!orderCloseSnapshotKey || !orderFull) return;
+    const resolvedOrderKey = orderFull.order.orderCode || orderFull.order.id;
+    if (resolvedOrderKey !== orderCode) return;
+    writeOrderPageSnapshot(orderCloseSnapshotKey, {
+      orderFull,
+      extraQuantities,
+      coopBalanceCents,
+      useCoopBalance,
+    } satisfies OrderClosePageSnapshot);
+  }, [coopBalanceCents, extraQuantities, orderCloseSnapshotKey, orderCode, orderFull, useCoopBalance]);
 
   const order = orderFull?.order ?? null;
   const isOwner = Boolean(order && currentUser?.id && order.sharerProfileId === currentUser.id);
@@ -100,9 +135,10 @@ export function OrderCloseView({
   React.useEffect(() => {
     if (!order) return;
     if (order.status !== 'open') {
+      clearOrderPageSnapshot(orderCloseSnapshotKey);
       navigate(`/cmd/${order.orderCode ?? order.id}`, { replace: true });
     }
-  }, [navigate, order]);
+  }, [navigate, order, orderCloseSnapshotKey]);
 
   const itemsByParticipant = React.useMemo(() => {
     return items.reduce((acc, item) => {
@@ -410,6 +446,7 @@ export function OrderCloseView({
       await applyExtraQuantities(order, sharerParticipant);
       await createLockClosePackage(order.id, useCoopBalance);
 
+      clearOrderPageSnapshot(orderCloseSnapshotKey);
       toast.success('Commande cloturee et recapitulatif genere.');
       navigate(`/cmd/${order.orderCode ?? order.id}`, { replace: true });
     } catch (error) {

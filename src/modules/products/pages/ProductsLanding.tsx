@@ -696,7 +696,7 @@ export function ProductsLanding({
               margin: '0 auto',
             }}
           >
-            Participe à des commandes ou{' '}
+            Participe à des commandes groupées ou{' '}
             <span className="products-landing__hero-keep-together">
               crée la tienne et reçoit une part
             </span>

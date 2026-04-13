@@ -31,6 +31,16 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/stripe_checkout_session_status/index.ts"
 
+[functions.create_checkout_payment_session]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/create_checkout_payment_session/index.ts"
+
+[functions.stripe_checkout_webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/stripe_checkout_webhook/index.ts"
+
 [functions.stripe_create_connected_account_link]
 enabled = true
 verify_jwt = true

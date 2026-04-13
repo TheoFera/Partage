@@ -50,7 +50,8 @@ export function HowItWorksView() {
         <div className="how-hero__content">
           <h1 className="how-hero__title">Comment ça fonctionne ?</h1>
           <p className="how-hero__subtitle">
-            S'approvisionner directement auprès des producteurs n'a jamais été aussi simple.
+            Une commande groupée est une commande passée à plusieurs auprès d’un même producteur.{' '}
+            En regroupant les achats, on mutualise les frais de livraison, tout en simplifiant l'organisation et la préparation de la commande pour le producteur.
           </p>
         </div>
 

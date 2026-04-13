@@ -164,6 +164,7 @@ export interface GroupOrder {
 
 export interface OrderPurchaseDraft {
   orderId: string;
+  orderCode?: string;
   quantities: Record<string, number>;
   lineItems?: Array<{
     productCode: string;
@@ -176,6 +177,7 @@ export interface OrderPurchaseDraft {
   weight: number;
   baseOrderedWeight: number;
   kind?: 'participant' | 'close';
+  checkoutPaymentSessionId?: string | null;
   useCoopBalance?: boolean;
   closeData?: {
     useCoopBalance: boolean;

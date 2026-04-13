@@ -31,6 +31,12 @@ import {
   resolveOrderItemQuantityValue,
 } from '../utils/quantityInput';
 import {
+  buildOrderPageSnapshotKey,
+  type OrderClientPageSnapshot,
+  readOrderPageSnapshot,
+  writeOrderPageSnapshot,
+} from '../utils/orderPageSnapshot';
+import {
   addItem,
   approveParticipation,
   createPlatformInvoiceAndSendForOrder,
@@ -543,34 +549,50 @@ export function OrderClientView({
 }: OrderClientViewProps) {
   const navigate = useNavigate();
   const { orderCode } = useParams<{ orderCode: string }>();
-  const [orderFull, setOrderFull] = React.useState<OrderFull | null>(null);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [isWorking, setIsWorking] = React.useState(false);
-  const [quantities, setQuantities] = React.useState<Record<string, number>>({});
-  const [participantsVisibility, setParticipantsVisibility] = React.useState<ParticipantVisibility>(
-    defaultParticipantVisibility
-  );
-  const [participantsPanelOpen, setParticipantsPanelOpen] = React.useState(false);
-  const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
-  const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const [participantInvoices, setParticipantInvoices] = React.useState<Facture[]>([]);
-  const [producerInvoices, setProducerInvoices] = React.useState<Facture[]>([]);
-  const [isInvoiceLoading, setIsInvoiceLoading] = React.useState(false);
-  const [producerStatementSources, setProducerStatementSources] = React.useState<ProducerStatementSources | null>(
-    null
-  );
-  const [isProducerStatementLoading, setIsProducerStatementLoading] = React.useState(false);
-  const [platformShareCents, setPlatformShareCents] = React.useState(0);
-  const [coopBalanceCents, setCoopBalanceCents] = React.useState(0);
-  const [useCoopBalance, setUseCoopBalance] = React.useState(true);
-
   const isAuthenticated = Boolean(currentUser);
   const orderSelectionStorageKey = React.useMemo(() => {
     if (!orderCode) return null;
     const viewerKey = currentUser?.id?.trim() || 'guest';
     return `${ORDER_CLIENT_SELECTION_STORAGE_PREFIX}:${orderCode}:${viewerKey}`;
   }, [currentUser?.id, orderCode]);
+  const orderClientSnapshotKey = React.useMemo(
+    () => buildOrderPageSnapshotKey('client', orderCode, currentUser?.id ?? null),
+    [currentUser?.id, orderCode]
+  );
+  const cachedOrderClientSnapshot = React.useMemo(
+    () => readOrderPageSnapshot<OrderClientPageSnapshot>(orderClientSnapshotKey),
+    [orderClientSnapshotKey]
+  );
+
+  const [orderFull, setOrderFull] = React.useState<OrderFull | null>(() => cachedOrderClientSnapshot?.orderFull ?? null);
+  const [isLoading, setIsLoading] = React.useState(() => !cachedOrderClientSnapshot?.orderFull);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [isWorking, setIsWorking] = React.useState(false);
+  const [quantities, setQuantities] = React.useState<Record<string, number>>(
+    () => cachedOrderClientSnapshot?.quantities ?? {}
+  );
+  const [participantsVisibility, setParticipantsVisibility] = React.useState<ParticipantVisibility>(
+    () => cachedOrderClientSnapshot?.participantsVisibility ?? defaultParticipantVisibility
+  );
+  const [participantsPanelOpen, setParticipantsPanelOpen] = React.useState(false);
+  const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const [participantInvoices, setParticipantInvoices] = React.useState<Facture[]>(
+    () => cachedOrderClientSnapshot?.participantInvoices ?? []
+  );
+  const [producerInvoices, setProducerInvoices] = React.useState<Facture[]>(
+    () => cachedOrderClientSnapshot?.producerInvoices ?? []
+  );
+  const [isInvoiceLoading, setIsInvoiceLoading] = React.useState(false);
+  const [producerStatementSources, setProducerStatementSources] = React.useState<ProducerStatementSources | null>(
+    () => cachedOrderClientSnapshot?.producerStatementSources ?? null
+  );
+  const [isProducerStatementLoading, setIsProducerStatementLoading] = React.useState(false);
+  const [platformShareCents, setPlatformShareCents] = React.useState(
+    () => cachedOrderClientSnapshot?.platformShareCents ?? 0
+  );
+  const [coopBalanceCents, setCoopBalanceCents] = React.useState(() => cachedOrderClientSnapshot?.coopBalanceCents ?? 0);
+  const [useCoopBalance, setUseCoopBalance] = React.useState(() => cachedOrderClientSnapshot?.useCoopBalance ?? true);
 
   const loadInvoices = React.useCallback(
     async (orderId: string, producerProfileId?: string | null) => {
@@ -624,7 +646,10 @@ export function OrderClientView({
 
   const loadOrder = React.useCallback(async () => {
     if (!orderCode) return;
-    setIsLoading(true);
+    const isHydratedFromSnapshot = Boolean(cachedOrderClientSnapshot?.orderFull);
+    if (!isHydratedFromSnapshot) {
+      setIsLoading(true);
+    }
     setLoadError(null);
     try {
       const data = await getOrderFullByCode(orderCode);
@@ -644,15 +669,46 @@ export function OrderClientView({
       await loadInvoices(data.order.id, data.order.producerProfileId);
     } catch (error) {
       console.error('Order load error:', error);
-      setLoadError('Impossible de charger la commande.');
+      if (!isHydratedFromSnapshot) {
+        setLoadError('Impossible de charger la commande.');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [orderCode, orderSelectionStorageKey, loadInvoices]);
+  }, [cachedOrderClientSnapshot?.orderFull, orderCode, orderSelectionStorageKey, loadInvoices]);
 
   React.useEffect(() => {
     loadOrder();
   }, [loadOrder]);
+
+  React.useEffect(() => {
+    if (!orderClientSnapshotKey || !orderFull) return;
+    const resolvedOrderKey = orderFull.order.orderCode || orderFull.order.id;
+    if (resolvedOrderKey !== orderCode) return;
+    writeOrderPageSnapshot(orderClientSnapshotKey, {
+      orderFull,
+      participantInvoices,
+      producerInvoices,
+      producerStatementSources,
+      platformShareCents,
+      coopBalanceCents,
+      useCoopBalance,
+      quantities,
+      participantsVisibility,
+    } satisfies OrderClientPageSnapshot);
+  }, [
+    coopBalanceCents,
+    orderClientSnapshotKey,
+    orderCode,
+    orderFull,
+    participantInvoices,
+    participantsVisibility,
+    platformShareCents,
+    producerInvoices,
+    producerStatementSources,
+    quantities,
+    useCoopBalance,
+  ]);
 
   React.useEffect(() => {
     if (!orderSelectionStorageKey || typeof window === 'undefined') return;

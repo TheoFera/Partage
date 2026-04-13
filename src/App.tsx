@@ -50,25 +50,10 @@ import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/m
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from './shared/lib/storageObjectPath';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
-  addItem,
-  createLockClosePackage,
-  createPaymentStub,
-  deleteParticipantIfNoActivity,
-  fetchCoopBalance,
-  fetchParticipantInvoices,
   getOrderFullByCode,
   getParticipantByProfile,
-  issueParticipantInvoiceWithCoop,
-  issueSharerInvoiceAfterLock,
   listOrdersForUser,
   listPublicOrders,
-  finalizeClosePayment,
-  finalizePaymentSimulation,
-  removeItem,
-  requestParticipation,
-  triggerOutgoingEmails,
-  updateOrderItemQuantity,
-  updatePaymentStatus,
 } from './modules/orders/api/orders';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
@@ -77,6 +62,13 @@ import {
 } from './shared/constants/producerLabels';
 import { toast, Toaster } from 'sonner';
 import { resolveOrderItemQuantityValue } from './modules/orders/utils/quantityInput';
+import {
+  buildOrderPageSnapshotKey,
+  clearOrderPageSnapshot,
+  findOrderPageSnapshot,
+  type OrderPaymentPageSnapshot,
+  writeOrderPageSnapshot,
+} from './modules/orders/utils/orderPageSnapshot';
 
 const tabRoutes = {
   home: '/',
@@ -197,6 +189,10 @@ const parseStoredOrderPurchase = (
       weight: Number(parsed.weight) || 0,
       baseOrderedWeight: Number(parsed.baseOrderedWeight) || 0,
       kind: parsed.kind === 'close' ? 'close' : 'participant',
+      checkoutPaymentSessionId:
+        typeof parsed.checkoutPaymentSessionId === 'string' && parsed.checkoutPaymentSessionId.trim()
+          ? parsed.checkoutPaymentSessionId.trim()
+          : null,
       useCoopBalance: Boolean(parsed.useCoopBalance),
     };
 
@@ -553,6 +549,7 @@ const OrderRoute = ({
   const order = groupOrders.find((o) => o.orderCode === params.orderCode || o.id === params.orderCode);
   return (
     <OrderClientView
+      key={params.orderCode}
       onClose={onClose}
       currentUser={currentUser}
       onOpenParticipantProfile={onOpenParticipantProfile}
@@ -3215,6 +3212,19 @@ export default function App() {
       kind: 'participant',
       useCoopBalance: Boolean(payload.useCoopBalance),
     };
+    writeOrderPageSnapshot(
+      buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+      {
+        order,
+        draft,
+        checkoutPaymentSessionId: null,
+        checkoutClientSecret: null,
+        providerPaymentId: null,
+        paymentState: 'idle',
+        paymentStatusMessage: null,
+        paymentError: null,
+      } satisfies OrderPaymentPageSnapshot
+    );
     setPurchaseDraft(draft);
     setRecentPurchase(null);
     if (!isAuthenticated) {
@@ -3242,6 +3252,19 @@ export default function App() {
         extraQuantities: payload.extraQuantities,
       },
     };
+    writeOrderPageSnapshot(
+      buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+      {
+        order,
+        draft,
+        checkoutPaymentSessionId: null,
+        checkoutClientSecret: null,
+        providerPaymentId: null,
+        paymentState: 'idle',
+        paymentStatusMessage: null,
+        paymentError: null,
+      } satisfies OrderPaymentPageSnapshot
+    );
     setPurchaseDraft(draft);
     setRecentPurchase(null);
     if (!isAuthenticated) {
@@ -3295,6 +3318,19 @@ export default function App() {
       toast.error('Utilisateur introuvable.');
       return;
     }
+
+    const completedDraft: OrderPurchaseDraft = {
+      ...draft,
+      checkoutPaymentSessionId: draft.checkoutPaymentSessionId ?? null,
+    };
+    handlePurchaseOrder(draft.orderId, draft.total, draft.weight);
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
+    setRecentPurchase(completedDraft);
+    setPurchaseDraft(null);
+    navigate(`/cmd/${order.orderCode ?? draft.orderCode ?? resolveOrderCode(draft.orderId)}/partage`);
+    toast.success('Paiement confirme.');
+    return;
 
     let paidAmountCents = eurosToCents(draft.total);
     let paymentParticipantId: string | null = null;
@@ -3426,6 +3462,8 @@ export default function App() {
     const paidTotalEuros = centsToEuros(paidAmountCents);
     const finalizedDraft: OrderPurchaseDraft = { ...draft, total: paidTotalEuros };
     handlePurchaseOrder(draft.orderId, paidTotalEuros, draft.weight);
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
     setRecentPurchase(finalizedDraft);
     setPurchaseDraft(null);
     navigate(`/cmd/${order.orderCode ?? draft.orderCode ?? resolveOrderCode(draft.orderId)}/partage`);
@@ -3456,6 +3494,24 @@ export default function App() {
       toast.error('Utilisateur introuvable.');
       return;
     }
+
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
+    setGroupOrders((prev) =>
+      prev.map((entry) =>
+        entry.id === order.id
+          ? {
+              ...entry,
+              status: 'locked',
+            }
+          : entry
+      )
+    );
+    setPurchaseDraft(null);
+    setRecentPurchase(null);
+    navigate(`/cmd/${resolveOrderCode(order.id)}`);
+    toast.success('Paiement confirme et commande cloturee.');
+    return;
     const closeData = draft.closeData;
     if (!closeData) {
       toast.error('Paiement de clôture incomplet.');
@@ -3539,6 +3595,8 @@ export default function App() {
       toast.warning('Facture generee, mais envoi email non declenche automatiquement.');
     }
 
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
+    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
     setPurchaseDraft(null);
     setRecentPurchase(null);
     navigate(`/cmd/${resolveOrderCode(order.id)}`);
@@ -4196,11 +4254,29 @@ export default function App() {
     [navigate]
   );
   const openProducerProfile = React.useCallback(
-    (product: Product) => {
-      const handle = product.producerName.toLowerCase().replace(/\s+/g, '');
-      openProfileByHandle(handle);
+    async (product: Product) => {
+      const fallbackHandle = sanitizeHandle(product.producerName);
+      const navigateToHandle = (value?: string | null) => {
+        const resolvedHandle = (value ?? '').trim().toLowerCase() || fallbackHandle;
+        openProfileByHandle(resolvedHandle);
+      };
+
+      if (user?.handle && (user.id === product.producerId || user.producerId === product.producerId)) {
+        navigateToHandle(user.handle);
+        return;
+      }
+
+      if (isUuid(product.producerId)) {
+        const profile = await fetchProfileById(product.producerId);
+        if (profile?.handle) {
+          navigateToHandle(profile.handle);
+          return;
+        }
+      }
+
+      navigateToHandle(fallbackHandle);
     },
-    [openProfileByHandle]
+    [fetchProfileById, openProfileByHandle, user?.handle, user?.id, user?.producerId]
   );
   const openSharerProfile = React.useCallback(
     (sharerName: string) => {
@@ -4573,8 +4649,27 @@ export default function App() {
   const OrderPaymentRoute = () => {
     const params = useParams<{ orderCode: string }>();
     const requestedOrderCode = params.orderCode?.trim() ?? null;
-    const { order, isLoading: isOrderLoading } = useResolvedGroupOrder(requestedOrderCode, groupOrders);
-    const draft = order && purchaseDraft?.orderId === order.id ? purchaseDraft : null;
+    const paymentSnapshotMatch = React.useMemo(
+      () =>
+        findOrderPageSnapshot<OrderPaymentPageSnapshot>([
+          buildOrderPageSnapshotKey('payment', requestedOrderCode, user?.id ?? null),
+          user?.id ? buildOrderPageSnapshotKey('payment', requestedOrderCode, null) : null,
+        ]),
+      [requestedOrderCode, user?.id]
+    );
+    const paymentSnapshotKey = React.useMemo(
+      () => buildOrderPageSnapshotKey('payment', requestedOrderCode, user?.id ?? null),
+      [requestedOrderCode, user?.id]
+    );
+    const cachedPaymentSnapshot = paymentSnapshotMatch?.snapshot ?? null;
+    const { order: resolvedOrder, isLoading: isOrderLoading } = useResolvedGroupOrder(requestedOrderCode, groupOrders);
+    const order = resolvedOrder ?? cachedPaymentSnapshot?.order ?? null;
+    const draft =
+      order && purchaseDraft?.orderId === order.id
+        ? purchaseDraft
+        : order && cachedPaymentSnapshot?.draft?.orderId === order.id
+          ? cachedPaymentSnapshot.draft
+          : null;
     const isClosePayment = draft?.kind === 'close';
 
     const [participantStatus, setParticipantStatus] = React.useState<string | null>(null);
@@ -4622,7 +4717,7 @@ export default function App() {
       };
     }, [isClosePayment, order, user?.id]);
 
-    if (isOrderLoading) return <div className="order-payment-view__loading">Chargement...</div>;
+    if (isOrderLoading && !order) return <div className="order-payment-view__loading">Chargement...</div>;
     if (!order) return <NotFound message="Commande introuvable." />;
     if (!isAuthenticated) {
       return (
@@ -4683,8 +4778,11 @@ export default function App() {
 
     return (
       <OrderPaymentView
+        key={requestedOrderCode ?? order.id}
         order={order}
         draft={draft}
+        snapshotKey={paymentSnapshotKey}
+        initialSnapshot={cachedPaymentSnapshot}
         onBack={() =>
           navigate(
             isClosePayment
@@ -4730,8 +4828,10 @@ export default function App() {
   };
 
   const OrderCloseRoute = () => {
+    const params = useParams<{ orderCode: string }>();
     return (
       <OrderCloseView
+        key={params.orderCode}
         currentUser={user}
         onStartClosePayment={(payload) => {
           const order = groupOrders.find((entry) => entry.id === payload.orderId);

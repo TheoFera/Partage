@@ -4,12 +4,18 @@ import type { GroupOrder, OrderPurchaseDraft } from '../../../shared/types';
 import './OrderPaymentView.css';
 import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
+import {
+  type OrderPaymentPageSnapshot,
+  writeOrderPageSnapshot,
+} from '../utils/orderPageSnapshot';
 
 interface OrderPaymentViewProps {
   order: GroupOrder;
   draft: OrderPurchaseDraft;
   onBack: () => void;
   onConfirmPayment: (payload?: OrderPaymentConfirmationPayload) => void | Promise<void>;
+  snapshotKey?: string | null;
+  initialSnapshot?: OrderPaymentPageSnapshot | null;
 }
 
 function formatPrice(value: number) {
@@ -23,8 +29,14 @@ export type OrderPaymentConfirmationPayload = {
 };
 
 type StripeCreateCheckoutSessionResponse = {
+  checkout_payment_session_id: string;
   provider_payment_id: string;
   client_secret: string;
+};
+
+type CreateCheckoutPaymentSessionResponse = {
+  checkout_payment_session_id: string;
+  local_status: 'draft' | 'checkout_created' | 'checkout_completed' | 'fulfilling' | 'fulfilled' | 'failed' | 'expired';
 };
 
 type EdgeInvokeErrorLike = {
@@ -39,8 +51,12 @@ type StripeCreateCheckoutSessionErrorBody = {
 };
 
 type StripeCheckoutSessionStatusResponse = {
+  checkout_payment_session_id: string;
   provider_payment_id: string;
-  status: 'paid' | 'authorized' | 'failed' | 'pending';
+  local_status: 'draft' | 'checkout_created' | 'checkout_completed' | 'fulfilling' | 'fulfilled' | 'failed' | 'expired';
+  status: 'processing' | 'succeeded' | 'failed' | 'retryable';
+  can_retry: boolean;
+  error_message: string | null;
   stripe_status: string | null;
   payment_status: string | null;
   customer_email: string | null;
@@ -104,6 +120,8 @@ export function OrderPaymentView({
   draft,
   onBack,
   onConfirmPayment,
+  snapshotKey = null,
+  initialSnapshot = null,
 }: OrderPaymentViewProps) {
   const isClosePayment = draft.kind === 'close';
   const selectedItems = React.useMemo(() => {
@@ -134,12 +152,25 @@ export function OrderPaymentView({
     [selectedItemsSubtotalCents, totalDueCents]
   );
 
-  const [checkoutClientSecret, setCheckoutClientSecret] = React.useState<string | null>(null);
-  const [providerPaymentId, setProviderPaymentId] = React.useState<string | null>(null);
+  const [checkoutPaymentSessionId, setCheckoutPaymentSessionId] = React.useState<string | null>(
+    () => initialSnapshot?.checkoutPaymentSessionId ?? draft.checkoutPaymentSessionId ?? null
+  );
+  const [checkoutClientSecret, setCheckoutClientSecret] = React.useState<string | null>(
+    () => initialSnapshot?.checkoutClientSecret ?? null
+  );
+  const [providerPaymentId, setProviderPaymentId] = React.useState<string | null>(
+    () => initialSnapshot?.providerPaymentId ?? null
+  );
   const [isCreatingPayment, setIsCreatingPayment] = React.useState(false);
   const [isVerifying, setIsVerifying] = React.useState(false);
   const [isCheckoutMounting, setIsCheckoutMounting] = React.useState(false);
-  const [paymentError, setPaymentError] = React.useState<string | null>(null);
+  const [paymentState, setPaymentState] = React.useState<'idle' | 'processing' | 'succeeded' | 'failed' | 'retryable'>(
+    () => initialSnapshot?.paymentState ?? 'idle'
+  );
+  const [paymentStatusMessage, setPaymentStatusMessage] = React.useState<string | null>(
+    () => initialSnapshot?.paymentStatusMessage ?? null
+  );
+  const [paymentError, setPaymentError] = React.useState<string | null>(() => initialSnapshot?.paymentError ?? null);
   const [checkoutReady, setCheckoutReady] = React.useState(false);
   const hasConfirmedRef = React.useRef(false);
   const checkoutRef = React.useRef<EmbeddedCheckoutInstance | null>(null);
@@ -150,27 +181,6 @@ export function OrderPaymentView({
   }, []);
 
   const storageKey = React.useMemo(() => `stripe_idem_${order.id}`, [order.id]);
-
-  const getIdempotencyKey = React.useCallback(
-    (forceNew: boolean) => {
-      try {
-        if (!forceNew) {
-          const existing = sessionStorage.getItem(storageKey);
-          if (existing) return existing;
-        }
-        const generated =
-          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-            ? crypto.randomUUID()
-            : `idem_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-        sessionStorage.setItem(storageKey, generated);
-        return generated;
-      } catch (error) {
-        console.warn('Unable to access sessionStorage for idempotency key:', error);
-        return null;
-      }
-    },
-    [storageKey]
-  );
 
   React.useEffect(() => {
     try {
@@ -203,6 +213,213 @@ export function OrderPaymentView({
     window.history.replaceState({}, '', `${url.pathname}${url.hash}`);
   }, []);
 
+  const syncCheckoutPaymentStatus = React.useCallback(
+    async (forcedSessionId?: string, forcedCheckoutPaymentSessionId?: string | null) => {
+      if (hasConfirmedRef.current || isVerifying) return;
+      const sessionId = forcedSessionId ?? providerPaymentId;
+      const currentCheckoutPaymentSessionId =
+        forcedCheckoutPaymentSessionId ?? checkoutPaymentSessionId ?? draft.checkoutPaymentSessionId ?? null;
+      if (!sessionId && !currentCheckoutPaymentSessionId) {
+        setPaymentError('Session de paiement introuvable. Merci de relancer.');
+        setPaymentState('failed');
+        return;
+      }
+
+      setIsVerifying(true);
+      setPaymentError(null);
+      setPaymentStatusMessage('Verification du paiement en cours...');
+      try {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase.functions.invoke<StripeCheckoutSessionStatusResponse>(
+          'stripe_checkout_session_status',
+          {
+            body: {
+              checkout_payment_session_id: currentCheckoutPaymentSessionId,
+              provider_payment_id: sessionId,
+              session_id: sessionId,
+            },
+          }
+        );
+        if (error) throw error;
+        if (!data?.status) throw new Error('Statut de paiement indisponible.');
+
+        setCheckoutPaymentSessionId(data.checkout_payment_session_id || currentCheckoutPaymentSessionId || null);
+        if (data.provider_payment_id) {
+          setProviderPaymentId(data.provider_payment_id);
+        }
+
+        if (data.status === 'succeeded') {
+          setPaymentState('succeeded');
+          setPaymentStatusMessage('Paiement confirme. Finalisation terminee.');
+          await onConfirmPayment({
+            provider: 'stripe',
+            providerPaymentId: data.provider_payment_id || sessionId || '',
+            raw: {
+              stripe_status: data.stripe_status,
+              payment_status: data.payment_status,
+              customer_email: data.customer_email,
+              customer_phone: data.customer_phone,
+              payment_intent_id: data.payment_intent_id,
+              checkout_payment_session_id: data.checkout_payment_session_id,
+              local_status: data.local_status,
+            },
+          });
+          hasConfirmedRef.current = true;
+          clearCheckoutQueryFromUrl();
+          return;
+        }
+
+        if (data.status === 'processing') {
+          const isStripeCheckoutComplete =
+            data.stripe_status === 'complete' &&
+            (data.payment_status === 'paid' || data.payment_status === 'no_payment_required' || data.payment_status === 'unpaid');
+          if (!isStripeCheckoutComplete) {
+            setPaymentState('idle');
+            setPaymentStatusMessage('Session Stripe prete. Vous pouvez reprendre le paiement.');
+            setPaymentError(null);
+            return;
+          }
+          setPaymentState('processing');
+          setPaymentStatusMessage('Paiement valide. Finalisation serveur en cours...');
+          setPaymentError(null);
+          return;
+        }
+
+        setPaymentState(data.status);
+        const message =
+          data.error_message ||
+          (data.status === 'retryable'
+            ? 'Le paiement n a pas pu etre finalise. Vous pouvez relancer une nouvelle session.'
+            : 'Le paiement a echoue. Merci de reessayer.');
+        setPaymentStatusMessage(message);
+        setPaymentError(message);
+      } catch (error) {
+        console.error('Stripe payment confirm error:', error);
+        setPaymentState('failed');
+        setPaymentStatusMessage('Impossible de verifier le paiement pour le moment.');
+        setPaymentError('Impossible de verifier le paiement. Merci de reessayer.');
+      } finally {
+        setIsVerifying(false);
+      }
+    },
+    [
+      checkoutPaymentSessionId,
+      clearCheckoutQueryFromUrl,
+      draft.checkoutPaymentSessionId,
+      isVerifying,
+      onConfirmPayment,
+      providerPaymentId,
+    ]
+  );
+
+  const createCheckoutPaymentSessionDraft = React.useCallback(
+    async (forceNew = false) => {
+      if (checkoutPaymentSessionId && !forceNew) return checkoutPaymentSessionId;
+      const supabase = getSupabaseClient();
+      const amountCents = eurosToCents(draft.total);
+      const { data, error } = await supabase.functions.invoke<CreateCheckoutPaymentSessionResponse>(
+        'create_checkout_payment_session',
+        {
+          body: {
+            order_id: order.id,
+            flow_kind: isClosePayment ? 'close' : 'participant',
+            amount_cents: amountCents,
+            draft_payload: draft,
+          },
+        }
+      );
+      if (error) throw error;
+      if (!data?.checkout_payment_session_id) {
+        throw new Error('Brouillon de paiement indisponible.');
+      }
+      setCheckoutPaymentSessionId(data.checkout_payment_session_id);
+      return data.checkout_payment_session_id;
+    },
+    [checkoutPaymentSessionId, draft, isClosePayment, order.id]
+  );
+
+  const createServerBackedCheckoutSession = React.useCallback(
+    async (forceNew = false) => {
+      if (isCreatingPayment || isVerifying) return;
+      if (checkoutClientSecret && providerPaymentId && checkoutPaymentSessionId && !forceNew) {
+        return;
+      }
+
+      setIsCreatingPayment(true);
+      setPaymentError(null);
+      setPaymentState('idle');
+      setPaymentStatusMessage(null);
+      try {
+        const supabase = getSupabaseClient();
+        const resolvedCheckoutPaymentSessionId = await createCheckoutPaymentSessionDraft(forceNew);
+        const returnUrl =
+          typeof window !== 'undefined'
+            ? `${window.location.origin}/cmd/${order.orderCode ?? order.id}/paiement?session_id={CHECKOUT_SESSION_ID}`
+            : undefined;
+
+        const { data, error } = await supabase.functions.invoke<StripeCreateCheckoutSessionResponse>(
+          'stripe_create_checkout_session',
+          {
+            body: {
+              checkout_payment_session_id: resolvedCheckoutPaymentSessionId,
+              return_url: returnUrl,
+            },
+          }
+        );
+        if (error) throw error;
+        if (!data?.client_secret || !data?.provider_payment_id || !data?.checkout_payment_session_id) {
+          throw new Error('Reponse de paiement incomplete.');
+        }
+
+        disposeCheckout();
+        setCheckoutPaymentSessionId(data.checkout_payment_session_id);
+        setProviderPaymentId(data.provider_payment_id);
+        setCheckoutClientSecret(data.client_secret);
+      } catch (error) {
+        console.error('Stripe checkout session error:', error);
+        let detailedMessage: string | null = null;
+        const maybeContext = (error as EdgeInvokeErrorLike | null)?.context;
+        if (maybeContext instanceof Response) {
+          try {
+            const payload =
+              (await maybeContext.clone().json()) as StripeCreateCheckoutSessionErrorBody;
+            const msg = payload?.stripe_message ?? payload?.error;
+            if (typeof msg === 'string' && msg.trim()) {
+              detailedMessage = msg.trim();
+            }
+          } catch {
+            try {
+              const text = await maybeContext.clone().text();
+              if (text.trim()) detailedMessage = text.trim();
+            } catch {
+              // Ignore parse fallback failure.
+            }
+          }
+        }
+        const message =
+          detailedMessage
+            ? `Impossible d initier le paiement. ${detailedMessage}`
+            : 'Impossible d initier le paiement. Merci de reessayer.';
+        setPaymentState('failed');
+        setPaymentStatusMessage(message);
+        setPaymentError(message);
+      } finally {
+        setIsCreatingPayment(false);
+      }
+    },
+    [
+      checkoutClientSecret,
+      checkoutPaymentSessionId,
+      createCheckoutPaymentSessionDraft,
+      disposeCheckout,
+      isCreatingPayment,
+      isVerifying,
+      order.id,
+      order.orderCode,
+      providerPaymentId,
+    ]
+  );
+
   const verifyStripePayment = React.useCallback(
     async (forcedSessionId?: string) => {
       if (hasConfirmedRef.current || isVerifying) return;
@@ -225,7 +442,7 @@ export function OrderPaymentView({
         if (error) throw error;
         if (!data?.status) throw new Error('Statut de paiement indisponible.');
 
-        if (data.status === 'paid' || data.status === 'authorized') {
+        if (data.status === 'succeeded') {
           await onConfirmPayment({
             provider: 'stripe',
             providerPaymentId: data.provider_payment_id || sessionId,
@@ -269,7 +486,7 @@ export function OrderPaymentView({
       setPaymentError(null);
       try {
         const supabase = getSupabaseClient();
-        const idempotencyKey = getIdempotencyKey(forceNew);
+        const idempotencyKey = null;
         const amountCents = eurosToCents(draft.total);
         const returnUrl =
           typeof window !== 'undefined'
@@ -329,7 +546,6 @@ export function OrderPaymentView({
       checkoutClientSecret,
       disposeCheckout,
       draft.total,
-      getIdempotencyKey,
       isCreatingPayment,
       isVerifying,
       order.id,
@@ -340,6 +556,7 @@ export function OrderPaymentView({
 
   React.useEffect(() => {
     if (!checkoutClientSecret || !providerPaymentId) return;
+    if (paymentState === 'processing' || paymentState === 'succeeded') return;
     if (checkoutRef.current) return;
 
     let cancelled = false;
@@ -360,7 +577,7 @@ export function OrderPaymentView({
         const stripe = window.Stripe(STRIPE_PUBLISHABLE_KEY);
         const checkout = await stripe.initEmbeddedCheckout({
           fetchClientSecret: async () => checkoutClientSecret,
-          onComplete: () => verifyStripePayment(providerPaymentId),
+          onComplete: () => syncCheckoutPaymentStatus(providerPaymentId, checkoutPaymentSessionId),
         });
         if (cancelled) {
           if (typeof checkout.destroy === 'function') checkout.destroy();
@@ -371,7 +588,7 @@ export function OrderPaymentView({
         setCheckoutReady(true);
       } catch (error) {
         console.error('Stripe checkout mount error:', error);
-        void verifyStripePayment(providerPaymentId);
+        void syncCheckoutPaymentStatus(providerPaymentId, checkoutPaymentSessionId);
         setPaymentError('Impossible de charger le module de paiement Stripe. Merci de reessayer.');
       } finally {
         if (!cancelled) {
@@ -385,7 +602,38 @@ export function OrderPaymentView({
     return () => {
       cancelled = true;
     };
-  }, [checkoutClientSecret, checkoutContainerId, providerPaymentId, verifyStripePayment]);
+  }, [
+    checkoutClientSecret,
+    checkoutContainerId,
+    checkoutPaymentSessionId,
+    paymentState,
+    providerPaymentId,
+    syncCheckoutPaymentStatus,
+  ]);
+
+  React.useEffect(() => {
+    if (!snapshotKey) return;
+    writeOrderPageSnapshot(snapshotKey, {
+      order,
+      draft,
+      checkoutPaymentSessionId,
+      checkoutClientSecret,
+      providerPaymentId,
+      paymentState,
+      paymentStatusMessage,
+      paymentError,
+    } satisfies OrderPaymentPageSnapshot);
+  }, [
+    checkoutClientSecret,
+    checkoutPaymentSessionId,
+    draft,
+    order,
+    paymentError,
+    paymentState,
+    paymentStatusMessage,
+    providerPaymentId,
+    snapshotKey,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -403,8 +651,17 @@ export function OrderPaymentView({
     if (!providerPaymentId) {
       setProviderPaymentId(initialSessionId);
     }
-    void verifyStripePayment(initialSessionId);
-  }, [initialSessionId, providerPaymentId, verifyStripePayment]);
+    void syncCheckoutPaymentStatus(initialSessionId, checkoutPaymentSessionId);
+  }, [checkoutPaymentSessionId, initialSessionId, providerPaymentId, syncCheckoutPaymentStatus]);
+
+  React.useEffect(() => {
+    if (paymentState !== 'processing') return;
+    if (!checkoutPaymentSessionId && !providerPaymentId) return;
+    const timeout = window.setTimeout(() => {
+      void syncCheckoutPaymentStatus(providerPaymentId ?? undefined, checkoutPaymentSessionId);
+    }, 2500);
+    return () => window.clearTimeout(timeout);
+  }, [checkoutPaymentSessionId, paymentState, providerPaymentId, syncCheckoutPaymentStatus]);
 
   const handleRetryPayment = React.useCallback(() => {
     try {
@@ -414,15 +671,20 @@ export function OrderPaymentView({
     }
     hasConfirmedRef.current = false;
     disposeCheckout();
+    setCheckoutPaymentSessionId(null);
     setCheckoutClientSecret(null);
     setProviderPaymentId(null);
     setCheckoutReady(false);
+    setPaymentState('idle');
+    setPaymentStatusMessage(null);
     setPaymentError(null);
-    void createStripeCheckoutSession(true);
-  }, [createStripeCheckoutSession, disposeCheckout, storageKey]);
+    void createServerBackedCheckoutSession(true);
+  }, [createServerBackedCheckoutSession, disposeCheckout, storageKey]);
 
   const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting;
   const hasCheckoutSession = Boolean(checkoutClientSecret && providerPaymentId);
+  const shouldShowEmbeddedCheckout =
+    hasCheckoutSession && paymentState !== 'processing' && paymentState !== 'succeeded';
 
   return (
     <div className="order-payment-view">
@@ -483,7 +745,7 @@ export function OrderPaymentView({
           </div>
           <button
             type="button"
-            onClick={() => createStripeCheckoutSession(false)}
+            onClick={() => createServerBackedCheckoutSession(false)}
             className="order-payment-view__confirm-button"
             disabled={isBusy}
             aria-busy={isBusy}
@@ -501,6 +763,21 @@ export function OrderPaymentView({
               Paiement en cours. Merci de finaliser votre paiement dans le module.
             </p>
           ) : null}
+          {paymentStatusMessage ? (
+            <p className="order-payment-view__confirm-feedback" role="status">
+              {paymentStatusMessage}
+            </p>
+          ) : null}
+          {paymentState === 'retryable' || paymentState === 'failed' ? (
+            <button
+              type="button"
+              onClick={handleRetryPayment}
+              className="order-payment-view__confirm-button"
+              disabled={isBusy}
+            >
+              Relancer une nouvelle session Stripe
+            </button>
+          ) : null}
         </div>
         <div className="order-payment-view__card">
           <div className="order-payment-view__eyebrow">
@@ -513,7 +790,7 @@ export function OrderPaymentView({
                 {paymentError}
               </div>
             )}
-            {hasCheckoutSession ? (
+            {shouldShowEmbeddedCheckout ? (
               <div className="order-payment-view__payment-frame">
                 <div
                   id={checkoutContainerId}
