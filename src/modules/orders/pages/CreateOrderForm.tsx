@@ -2959,9 +2959,6 @@ function ProducerProductCarousel({
                 borderColor: isSelected ? '#FF6B4A' : '#e5e7eb',
                 borderRadius: 16,
                 background: '#fff',
-                boxShadow: isSelected
-                  ? '0 14px 30px rgba(255,107,74,0.3)'
-                  : '0 12px 26px rgba(17,24,39,0.06)',
                 padding: 0,
                 cursor: 'pointer',
                 overflow: 'hidden',
