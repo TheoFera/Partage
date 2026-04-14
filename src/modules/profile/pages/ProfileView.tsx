@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -16,6 +17,7 @@ import {
   Lock,
   Link2,
   Phone,
+  X,
 } from 'lucide-react';
 import {
   DeckCard,
@@ -314,6 +316,7 @@ const DEFAULT_PROFILE_AVATAR =
       <ellipse cx="80" cy="118" rx="42" ry="32" fill="#6B7280" />
     </svg>`
   );
+const AVATAR_LIGHTBOX_TRANSITION_MS = 220;
 
 interface ProfileViewProps {
   user: User;
@@ -395,6 +398,7 @@ export function ProfileView({
   const following = Boolean(isFollowing);
   const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
   const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
+  const [avatarLightboxOpen, setAvatarLightboxOpen] = React.useState(false);
 
   const handleFollowClick = React.useCallback(() => {
     if (!onToggleFollow) {
@@ -740,16 +744,15 @@ React.useEffect(() => {
         <div className="relative flex flex-col gap-6">
           <div className="profile-header-main flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="flex flex-col items-center gap-4 text-center md:flex-row md:items-center md:text-left">
-              <div className="profile-avatar w-24 h-24 md:w-28 md:h-28 rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]">
-                <Avatar
-                  supabaseClient={supabaseClient ?? null}
-                  path={user.avatarPath}
-                  updatedAt={avatarVersion}
-                  fallbackSrc={avatarFallbackSrc}
-                  alt={user.name}
-                  className="w-full h-full object-cover"
-                />
-              </div>
+              <ProfileAvatarPreview
+                supabaseClient={supabaseClient ?? null}
+                path={user.avatarPath}
+                updatedAt={avatarVersion}
+                fallbackSrc={avatarFallbackSrc}
+                alt={user.name}
+                className="profile-avatar w-24 h-24 md:w-28 md:h-28 rounded-full ring-4 ring-[#FFE8D7] shadow-lg overflow-hidden bg-gradient-to-br from-[#FF6B4A] to-[#FFD166]"
+                onOpen={() => setAvatarLightboxOpen(true)}
+              />
               <div className="space-y-2">
                 <div className="flex items-center justify-center gap-2 md:justify-start">
                   <h2 className="text-2xl md:text-3xl font-semibold">{user.name}</h2>
@@ -878,8 +881,178 @@ React.useEffect(() => {
           {renderTabContent()}
         </div>
       </div>
+      <ProfileAvatarLightbox
+        open={avatarLightboxOpen}
+        onClose={() => setAvatarLightboxOpen(false)}
+        path={user.avatarPath}
+        alt={user.name}
+        fallbackSrc={avatarFallbackSrc}
+        updatedAt={avatarVersion}
+        supabaseClient={supabaseClient ?? null}
+      />
     </div>
   );
+}
+
+type ProfileAvatarPreviewProps = {
+  path?: string | null;
+  alt: string;
+  fallbackSrc: string;
+  updatedAt?: string | null;
+  supabaseClient?: SupabaseClient | null;
+  className: string;
+  onOpen?: (() => void) | undefined;
+};
+
+function ProfileAvatarPreview({
+  path,
+  alt,
+  fallbackSrc,
+  updatedAt,
+  supabaseClient,
+  className,
+  onOpen,
+}: ProfileAvatarPreviewProps) {
+  const avatarContent = (
+    <>
+      <Avatar
+        supabaseClient={supabaseClient}
+        path={path}
+        updatedAt={updatedAt}
+        fallbackSrc={fallbackSrc}
+        alt={alt}
+        className="h-full w-full object-cover"
+      />
+      {onOpen ? (
+        <>
+          <span aria-hidden="true" className="profile-avatar-trigger__veil" />
+        </>
+      ) : null}
+    </>
+  );
+
+  if (!onOpen) {
+    return <div className={className}>{avatarContent}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`profile-avatar-trigger ${className}`}
+      aria-label={`Voir la photo de profil de ${alt} en grand`}
+      aria-haspopup="dialog"
+    >
+      {avatarContent}
+    </button>
+  );
+}
+
+function ProfileAvatarLightbox({
+  open,
+  onClose,
+  path,
+  alt,
+  fallbackSrc,
+  updatedAt,
+  supabaseClient,
+}: {
+  open: boolean;
+  onClose: () => void;
+  path?: string | null;
+  alt: string;
+  fallbackSrc: string;
+  updatedAt?: string | null;
+  supabaseClient?: SupabaseClient | null;
+}) {
+  const [shouldRender, setShouldRender] = React.useState(open);
+  const [isVisible, setIsVisible] = React.useState(open);
+
+  React.useEffect(() => {
+    if (open) {
+      setShouldRender(true);
+      if (typeof window === 'undefined') {
+        setIsVisible(true);
+        return;
+      }
+      const frame = window.requestAnimationFrame(() => setIsVisible(true));
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    if (!shouldRender || typeof window === 'undefined') {
+      setIsVisible(false);
+      return;
+    }
+
+    setIsVisible(false);
+    const timeout = window.setTimeout(() => setShouldRender(false), AVATAR_LIGHTBOX_TRANSITION_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open, shouldRender]);
+
+  React.useEffect(() => {
+    if (!shouldRender) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose, shouldRender]);
+
+  React.useEffect(() => {
+    if (!shouldRender || typeof document === 'undefined') return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [shouldRender]);
+
+  const handleBackdropMouseDown = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (event.target === event.currentTarget) onClose();
+    },
+    [onClose]
+  );
+
+  if (!shouldRender) return null;
+
+  const content = (
+    <div
+      className={`profile-avatar-lightbox${isVisible ? ' profile-avatar-lightbox--visible' : ''}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Photo de profil de ${alt}`}
+      onMouseDown={handleBackdropMouseDown}
+    >
+      <div
+        className={`profile-avatar-lightbox__dialog${isVisible ? ' profile-avatar-lightbox__dialog--visible' : ''}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="profile-avatar-lightbox__close"
+          aria-label="Fermer la photo de profil"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <div className="profile-avatar-lightbox__frame">
+          <Avatar
+            supabaseClient={supabaseClient}
+            path={path}
+            updatedAt={updatedAt}
+            fallbackSrc={fallbackSrc}
+            alt={alt}
+            className="h-full w-full object-cover"
+          />
+        </div>
+        <p className="profile-avatar-lightbox__caption">{alt}</p>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
 }
 
 function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
@@ -3166,7 +3339,7 @@ function ProfileEditPanel({
                 updatedAt={avatarVersion}
                 fallbackSrc={avatarFallbackSrc}
                 alt={name || user.name}
-                className="w-full h-full object-cover"
+                className="h-full w-full object-cover"
               />
             </div>
             <div className="space-y-2">

@@ -1470,7 +1470,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         ...prev,
         {
           partiePrenante: 'Producteur',
-          nom: 'Nouveau poste',
+          nom: 'Production',
           valeur: 0,
           type: 'eur',
           source: 'producer',

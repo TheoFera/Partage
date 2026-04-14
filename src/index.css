@@ -1813,6 +1813,126 @@ html {
   flex-shrink: 0;
 }
 
+.profile-avatar-trigger {
+  position: relative;
+  z-index: 5;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  pointer-events: auto;
+  touch-action: manipulation;
+  cursor: zoom-in;
+  isolation: isolate;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.profile-avatar-trigger:hover {
+  transform: scale(1.03);
+}
+
+.profile-avatar-trigger:focus-visible {
+  outline: 2px solid #ff6b4a;
+  outline-offset: 4px;
+}
+
+.profile-avatar-trigger__veil {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.04) 8%, rgba(17, 24, 39, 0.36) 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.profile-avatar-trigger:hover .profile-avatar-trigger__veil,
+.profile-avatar-trigger:focus-visible .profile-avatar-trigger__veil {
+  opacity: 1;
+}
+
+.profile-avatar-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  background: rgba(17, 24, 39, 0);
+  backdrop-filter: blur(0);
+  -webkit-backdrop-filter: blur(0);
+  transition: background-color 220ms ease, backdrop-filter 220ms ease;
+}
+
+.profile-avatar-lightbox--visible {
+  background: rgba(17, 24, 39, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.profile-avatar-lightbox__dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 100%;
+  opacity: 0;
+  transform: translateY(16px) scale(0.88);
+  transition: transform 220ms ease, opacity 220ms ease;
+}
+
+.profile-avatar-lightbox__dialog--visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.profile-avatar-lightbox__frame {
+  width: min(78vw, 28rem);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 9999px;
+  border: 0;
+  background: transparent;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+}
+
+.profile-avatar-lightbox__close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  transform: translate(0.75rem, -0.75rem);
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.34);
+  color: #fff;
+  transition: background-color 180ms ease;
+}
+
+.profile-avatar-lightbox__close:hover {
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.profile-avatar-lightbox__close:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 3px;
+}
+
+.profile-avatar-lightbox__caption {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
 .profile-verified-badge {
   display: inline-flex;
   align-items: center;

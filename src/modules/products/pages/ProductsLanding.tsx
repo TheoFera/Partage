@@ -672,7 +672,6 @@ export function ProductsLanding({
               display: 'block',
             }}
             loading="eager"
-            fetchPriority="high"
           />
           <div
             className="absolute inset-0"
