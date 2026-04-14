@@ -221,6 +221,54 @@ const scheduleLeafletInvalidate = (map: L.Map) => {
   };
 };
 
+const stripDistanceFromLocation = (value?: string) => {
+  if (!value) return '';
+  return value
+    .replace(/\s*[-–—]?\s*\d+(?:[.,]\d+)?\s*km/gi, '')
+    .replace(/\s*[-–—]\s*$/, '')
+    .trim();
+};
+
+const extractPostcodeFromLocation = (value?: string) => {
+  if (!value) return undefined;
+  const match = value.match(/\b(75\d{3}|\d{5})\b/);
+  return match ? match[1] : undefined;
+};
+
+const formatParisArrondissementLabel = (postcode?: string | null) => {
+  if (!postcode) return null;
+  const match = `${postcode}`.match(/75(\d{3})/);
+  if (!match) return null;
+  const arrondissement = parseInt(match[1].slice(-2), 10);
+  if (!Number.isFinite(arrondissement) || arrondissement < 1 || arrondissement > 20) return null;
+  return arrondissement === 1 ? 'Paris 1er' : `Paris ${arrondissement}e`;
+};
+
+const extractCityFromAddressLike = (value?: string) => {
+  if (!value) return '';
+  const stripped = stripDistanceFromLocation(value);
+  const parts = stripped
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const lastPart = parts.length ? parts[parts.length - 1] : stripped;
+  const postcodeCity = lastPart.match(/\b\d{4,5}\s+(.+)/);
+  if (postcodeCity) return postcodeCity[1].trim();
+  return lastPart.replace(/\b\d{4,5}\b/g, '').trim();
+};
+
+const formatProfileOrderLocation = (city?: string | null, postcode?: string | null, fallback?: string) => {
+  const normalizedCity = city?.trim();
+  const fallbackPostcode = extractPostcodeFromLocation(fallback);
+  const parisLabel = formatParisArrondissementLabel(postcode ?? fallbackPostcode);
+  if (parisLabel && (!normalizedCity || normalizedCity.toLowerCase() === 'paris')) {
+    return parisLabel;
+  }
+  if (normalizedCity) return normalizedCity;
+  const coarseCity = extractCityFromAddressLike(fallback);
+  return coarseCity || 'Proche de vous';
+};
+
 type OpeningHourSlot = { start: string; end: string };
 
 const findDeliveryDayOption = (day: string) => {
@@ -498,13 +546,15 @@ React.useEffect(() => {
     return Array.from(mergedMap.values()).map((order) => {
       const deadlineDate = order.deadline instanceof Date ? order.deadline : new Date(order.deadline);
       const sortedProducts = [...order.products].sort((a, b) => a.name.localeCompare(b.name));
-      const location =
+      const locationFallback =
         order.pickupAddress ||
         order.mapLocation?.areaLabel ||
         sortedProducts[0]?.producerLocation ||
         order.producerName ||
         order.sharerName ||
         '';
+      const location = formatProfileOrderLocation(order.pickupCity, order.pickupPostcode, locationFallback);
+      const locationWithPostcode = order.pickupPostcode ? `${location} ${order.pickupPostcode}` : location;
       const sharerId = (order as any).sharerId ?? (order as any).sharerProfileId ?? '';
       const meta = sharerId ? profileMetaById[sharerId] : undefined;
       const handleFromDb = (meta?.handle ?? '').trim();
@@ -514,7 +564,7 @@ React.useEffect(() => {
           id: order.id,
           orderId: order.orderCode ?? order.id,
           title: order.title,
-          location,
+          location: locationWithPostcode,
           tags: [],
           products: sortedProducts,
           variant: 'order',

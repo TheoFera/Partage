@@ -2839,7 +2839,13 @@ function ProducerProductCarousel({
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const [useHorizontalScroll, setUseHorizontalScroll] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  const containerMinWidth =
+    MIN_VISIBLE_CARDS * CARD_WIDTH +
+    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
 
   const computeVisible = React.useCallback((width: number) => {
     const available = Math.max(0, width - CONTAINER_SIDE_PADDING * 2 + CARD_GAP);
@@ -2855,32 +2861,30 @@ function ProducerProductCarousel({
       const width = entry?.contentRect?.width ?? el.clientWidth;
       const next = computeVisible(width);
       setVisibleCount((prev) => (prev === next ? prev : next));
+      setUseHorizontalScroll(width < containerMinWidth);
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [computeVisible]);
+  }, [computeVisible, containerMinWidth]);
 
   React.useEffect(() => {
     const maxIndex = Math.max(0, products.length - visibleCount);
     setStartIndex((prev) => Math.min(prev, maxIndex));
   }, [products.length, visibleCount]);
 
-  const useCarousel = products.length > visibleCount;
+  const useCarousel = !useHorizontalScroll && products.length > visibleCount;
   const maxIndex = Math.max(0, products.length - visibleCount);
 
-  const containerMinWidth =
-    MIN_VISIBLE_CARDS * CARD_WIDTH +
-    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
-    CONTAINER_SIDE_PADDING * 2;
-
   const containerStyle: React.CSSProperties = {
-    minWidth: `${containerMinWidth}px`,
     width: '100%',
     paddingInline: CONTAINER_SIDE_PADDING,
     position: 'relative',
+    overflow: 'hidden',
   };
 
-  const productsToShow = useCarousel
+  const productsToShow = useHorizontalScroll
+    ? products
+    : useCarousel
     ? products.slice(startIndex, startIndex + visibleCount)
     : products;
 
@@ -2903,8 +2907,13 @@ function ProducerProductCarousel({
         className="flex gap-3"
         style={{
           alignItems: 'stretch',
-          justifyContent: 'center',
+          justifyContent: useHorizontalScroll || useCarousel ? 'flex-start' : 'center',
           userSelect: 'none',
+          overflowX: useHorizontalScroll ? 'auto' : 'visible',
+          overflowY: 'hidden',
+          paddingBottom: useHorizontalScroll ? 8 : 0,
+          scrollSnapType: useHorizontalScroll ? 'x proximity' : undefined,
+          WebkitOverflowScrolling: useHorizontalScroll ? 'touch' : undefined,
         }}
       >
         {productsToShow.map((product) => {
@@ -2957,6 +2966,7 @@ function ProducerProductCarousel({
                 cursor: 'pointer',
                 overflow: 'hidden',
                 transition: 'border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease',
+                scrollSnapAlign: useHorizontalScroll ? 'start' : undefined,
               }}
             >
               <div style={{ width: '100%', height: '105px', background: '#f3f4f6', flexShrink: 0 }}>
