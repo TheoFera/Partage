@@ -554,14 +554,30 @@ export function CreateOrderForm({
     );
   }, [deliveryCity, deliveryInfo, deliveryPostcode, deliveryStreet, user]);
 
-  const producerCoords = React.useMemo(() => {
+  const effectiveProducerCenter = React.useMemo(() => {
+    const useProfileAddress = producerLegal?.producerDeliveryUseProfileAddress ?? true;
+    if (!useProfileAddress) {
+      const customLat = producerLegal?.producerDeliveryCenterLat;
+      const customLng = producerLegal?.producerDeliveryCenterLng;
+      if (Number.isFinite(customLat) && Number.isFinite(customLng)) {
+        return { lat: Number(customLat), lng: Number(customLng) };
+      }
+      return null;
+    }
+
     const lat = producer?.addressLat;
     const lng = producer?.addressLng;
     if (Number.isFinite(lat) && Number.isFinite(lng)) {
       return { lat: Number(lat), lng: Number(lng) };
     }
     return null;
-  }, [producer?.addressLat, producer?.addressLng]);
+  }, [
+    producer?.addressLat,
+    producer?.addressLng,
+    producerLegal?.producerDeliveryCenterLat,
+    producerLegal?.producerDeliveryCenterLng,
+    producerLegal?.producerDeliveryUseProfileAddress,
+  ]);
 
   const normalizedProducerDeliveryRadiusKm = Number.isFinite(producerLegal?.producerDeliveryRadiusKm ?? NaN)
     ? Math.max(0, producerLegal?.producerDeliveryRadiusKm ?? 0)
@@ -569,17 +585,23 @@ export function CreateOrderForm({
   const shouldCheckDeliveryZone = Boolean(producerLegal?.producerDeliveryEnabled);
 
   const deliveryDistanceKm = React.useMemo(() => {
-    if (!producerCoords || !deliveryGeoCoords) return null;
-    return distanceKm(producerCoords, deliveryGeoCoords);
-  }, [producerCoords, deliveryGeoCoords]);
+    if (!effectiveProducerCenter || !deliveryGeoCoords) return null;
+    return distanceKm(effectiveProducerCenter, deliveryGeoCoords);
+  }, [deliveryGeoCoords, effectiveProducerCenter]);
 
   const deliveryZoneInfo = React.useMemo(() => {
     if (!shouldCheckDeliveryZone) return { within: true, reason: undefined };
     if (normalizedProducerDeliveryRadiusKm <= 0) {
       return { within: false, reason: 'Zone de livraison non definie.' };
     }
-    if (!producerCoords) {
-      return { within: false, reason: 'Adresse producteur manquante.' };
+    if (!effectiveProducerCenter) {
+      return {
+        within: false,
+        reason:
+          producerLegal?.producerDeliveryUseProfileAddress === false
+            ? 'Centre de livraison producteur manquant.'
+            : 'Adresse producteur manquante.',
+      };
     }
     if (!isDeliveryAddressComplete) {
       return { within: false, reason: 'Adresse de livraison incomplète.' };
@@ -606,7 +628,8 @@ export function CreateOrderForm({
     deliveryGeoStatus,
     isDeliveryAddressComplete,
     normalizedProducerDeliveryRadiusKm,
-    producerCoords,
+    effectiveProducerCenter,
+    producerLegal?.producerDeliveryUseProfileAddress,
     shouldCheckDeliveryZone,
   ]);
 

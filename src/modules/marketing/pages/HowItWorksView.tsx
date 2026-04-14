@@ -96,7 +96,7 @@ export function HowItWorksView() {
             onClick={() => scrollToSection('partageur')}
             aria-controls="partageur"
             >
-            Créer des commandes groupées à partager autour de moi et recevoir en échange une part
+            Créer des commandes groupées à partager autour de moi et recevoir en échange une part des produits
             </button>
             <button
             type="button"
@@ -357,8 +357,8 @@ export function HowItWorksView() {
           <article className="how-card">
             <h3 className="how-card__title">5) À la clôture, je reçois la commande définitive</h3>
             <p className="how-card__text">
-              Quand la commande se clôture, je reçois la liste définitive. Ensuite, j’expédie via
-              Chronofresh, je livre si c’est proposé, ou je remets au partageur pour collecte.
+              Quand la commande se clôture, je reçois la commande définitive et soit je livre ou j'expédie moi-même, soit via
+              Chronofresh.
             </p>
           </article>
         </div>

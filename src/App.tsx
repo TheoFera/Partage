@@ -839,6 +839,9 @@ type LegalEntityRow = {
   producer_delivery_max_weight?: number | null;
   producer_delivery_radius_km?: number | null;
   producer_delivery_fee?: number | null;
+  producer_delivery_use_profile_address?: boolean | null;
+  producer_delivery_center_lat?: number | null;
+  producer_delivery_center_lng?: number | null;
   producer_pickup_enabled?: boolean | null;
   producer_pickup_days?: string[] | null;
   producer_pickup_start_time?: string | null;
@@ -923,6 +926,9 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   producerDeliveryMaxWeight: toNumberOrUndefined(row.producer_delivery_max_weight),
   producerDeliveryRadiusKm: toNumberOrUndefined(row.producer_delivery_radius_km),
   producerDeliveryFee: toNumberOrUndefined(row.producer_delivery_fee),
+  producerDeliveryUseProfileAddress: row.producer_delivery_use_profile_address ?? true,
+  producerDeliveryCenterLat: toNumberOrUndefined(row.producer_delivery_center_lat),
+  producerDeliveryCenterLng: toNumberOrUndefined(row.producer_delivery_center_lng),
   producerPickupEnabled: row.producer_pickup_enabled ?? undefined,
   producerPickupDays: normalizeDeliveryDays(row.producer_pickup_days),
   producerPickupStartTime: row.producer_pickup_start_time ?? undefined,
@@ -4115,6 +4121,18 @@ export default function App() {
         legalPayload.producer_delivery_radius_km = mergedLegalEntity.producerDeliveryRadiusKm ?? null;
       if (mergedLegalEntity.producerDeliveryFee !== undefined)
         legalPayload.producer_delivery_fee = mergedLegalEntity.producerDeliveryFee ?? null;
+      const useProfileAddressForDeliveryCenter = mergedLegalEntity.producerDeliveryUseProfileAddress ?? true;
+      if (mergedLegalEntity.producerDeliveryUseProfileAddress !== undefined)
+        legalPayload.producer_delivery_use_profile_address = useProfileAddressForDeliveryCenter;
+      if (useProfileAddressForDeliveryCenter) {
+        legalPayload.producer_delivery_center_lat = null;
+        legalPayload.producer_delivery_center_lng = null;
+      } else {
+        if (mergedLegalEntity.producerDeliveryCenterLat !== undefined)
+          legalPayload.producer_delivery_center_lat = mergedLegalEntity.producerDeliveryCenterLat ?? null;
+        if (mergedLegalEntity.producerDeliveryCenterLng !== undefined)
+          legalPayload.producer_delivery_center_lng = mergedLegalEntity.producerDeliveryCenterLng ?? null;
+      }
       if (mergedLegalEntity.producerPickupEnabled !== undefined)
         legalPayload.producer_pickup_enabled = mergedLegalEntity.producerPickupEnabled ?? null;
       if (mergedLegalEntity.producerPickupDays !== undefined) {

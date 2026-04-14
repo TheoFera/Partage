@@ -1181,6 +1181,9 @@ function ProfileEditPanel({
   const [producerDeliveryFee, setProducerDeliveryFee] = React.useState<number>(
     user.legalEntity?.producerDeliveryFee ?? 0
   );
+  const [producerDeliveryUseProfileAddress, setProducerDeliveryUseProfileAddress] = React.useState<boolean>(
+    user.legalEntity?.producerDeliveryUseProfileAddress ?? true
+  );
   const [producerPickupEnabled, setProducerPickupEnabled] = React.useState<boolean>(
     Boolean(user.legalEntity?.producerPickupEnabled)
   );
@@ -1233,9 +1236,28 @@ function ProfileEditPanel({
     }
     return null;
   }, [user.addressLat, user.addressLng]);
-  const [deliveryMapCenter, setDeliveryMapCenter] = React.useState<{ lat: number; lng: number } | null>(
-    initialDeliveryCenter
-  );
+  const initialCustomDeliveryCenter = React.useMemo(() => {
+    if (
+      Number.isFinite(user.legalEntity?.producerDeliveryCenterLat ?? NaN) &&
+      Number.isFinite(user.legalEntity?.producerDeliveryCenterLng ?? NaN)
+    ) {
+      return {
+        lat: Number(user.legalEntity?.producerDeliveryCenterLat),
+        lng: Number(user.legalEntity?.producerDeliveryCenterLng),
+      };
+    }
+    return null;
+  }, [user.legalEntity?.producerDeliveryCenterLat, user.legalEntity?.producerDeliveryCenterLng]);
+  const [producerDeliveryCustomCenter, setProducerDeliveryCustomCenter] = React.useState<{
+    lat: number;
+    lng: number;
+  } | null>(initialCustomDeliveryCenter);
+  const deliveryMapCenter = React.useMemo(() => {
+    if (producerDeliveryUseProfileAddress) {
+      return initialDeliveryCenter;
+    }
+    return producerDeliveryCustomCenter ?? initialDeliveryCenter;
+  }, [initialDeliveryCenter, producerDeliveryCustomCenter, producerDeliveryUseProfileAddress]);
   const [deliveryMapStatus, setDeliveryMapStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
   const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
@@ -1806,19 +1828,39 @@ function ProfileEditPanel({
 
   React.useEffect(() => {
     if (!producerDeliveryEnabled) return;
-    if (!deliveryAddressQuery) {
-      setDeliveryMapCenter(null);
-      setDeliveryMapStatus('idle');
+    if (producerDeliveryUseProfileAddress) {
+      if (initialDeliveryCenter) {
+        setDeliveryMapStatus('resolved');
+        return;
+      }
+      setDeliveryMapStatus(deliveryAddressQuery ? 'error' : 'idle');
       return;
     }
-    if (initialDeliveryCenter) {
-      setDeliveryMapCenter(initialDeliveryCenter);
+    if (deliveryMapCenter) {
       setDeliveryMapStatus('resolved');
       return;
     }
-    setDeliveryMapCenter(null);
-    setDeliveryMapStatus('error');
-  }, [deliveryAddressQuery, initialDeliveryCenter, producerDeliveryEnabled]);
+    setDeliveryMapStatus('idle');
+  }, [deliveryAddressQuery, deliveryMapCenter, initialDeliveryCenter, producerDeliveryEnabled, producerDeliveryUseProfileAddress]);
+
+  React.useEffect(() => {
+    const map = deliveryMapRef.current;
+    if (!producerDeliveryEnabled || !map) return;
+
+    const handleMapClick = (event: L.LeafletMouseEvent) => {
+      if (producerDeliveryUseProfileAddress || producerSettingsDisabled) return;
+      setProducerDeliveryCustomCenter({
+        lat: event.latlng.lat,
+        lng: event.latlng.lng,
+      });
+      setDeliveryMapStatus('resolved');
+    };
+
+    map.on('click', handleMapClick);
+    return () => {
+      map.off('click', handleMapClick);
+    };
+  }, [producerDeliveryEnabled, producerDeliveryUseProfileAddress, producerSettingsDisabled]);
 
   React.useEffect(() => {
     if (!producerDeliveryEnabled || !deliveryMapRef.current) return;
@@ -1834,7 +1876,14 @@ function ProfileEditPanel({
     }
 
     const latLng: L.LatLngTuple = [deliveryMapCenter.lat, deliveryMapCenter.lng];
-    const marker = L.marker(latLng);
+    const marker = L.marker(latLng, {
+      draggable: !producerDeliveryUseProfileAddress && !producerSettingsDisabled,
+    });
+    marker.on('dragend', () => {
+      const next = marker.getLatLng();
+      setProducerDeliveryCustomCenter({ lat: next.lat, lng: next.lng });
+      setDeliveryMapStatus('resolved');
+    });
     deliveryMapLayerRef.current.addLayer(marker);
 
     if (normalizedDeliveryRadiusKm > 0) {
@@ -1852,7 +1901,13 @@ function ProfileEditPanel({
     }
 
     setTimeout(() => deliveryMapRef.current?.invalidateSize(), 100);
-  }, [producerDeliveryEnabled, deliveryMapCenter, normalizedDeliveryRadiusKm]);
+  }, [
+    producerDeliveryEnabled,
+    deliveryMapCenter,
+    normalizedDeliveryRadiusKm,
+    producerDeliveryUseProfileAddress,
+    producerSettingsDisabled,
+  ]);
 
   React.useEffect(
     () => () => {
@@ -2061,6 +2116,11 @@ function ProfileEditPanel({
       }
     });
 
+    if (producerDeliveryEnabled && !producerDeliveryUseProfileAddress && !deliveryMapCenter) {
+      toast.error('Definissez un centre de livraison sur la carte.');
+      return;
+    }
+
     const normalizeWeight = (value: number) => (Number.isFinite(value) && value > 0 ? value : undefined);
     const normalizeDistance = (value: number) =>
       Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -2109,6 +2169,15 @@ function ProfileEditPanel({
           producerDeliveryMaxWeight: producerDeliveryEnabled ? normalizeWeight(producerDeliveryMaxWeight) : undefined,
           producerDeliveryRadiusKm: normalizeDistance(producerDeliveryRadiusKm),
           producerDeliveryFee: normalizeFee(producerDeliveryFee),
+          producerDeliveryUseProfileAddress,
+          producerDeliveryCenterLat:
+            producerDeliveryUseProfileAddress || !deliveryMapCenter
+              ? undefined
+              : deliveryMapCenter.lat,
+          producerDeliveryCenterLng:
+            producerDeliveryUseProfileAddress || !deliveryMapCenter
+              ? undefined
+              : deliveryMapCenter.lng,
           producerPickupEnabled,
           producerPickupDays: producerPickupEnabled ? producerPickupDays : undefined,
           producerPickupStartTime: producerPickupEnabled ? producerPickupStartTime.trim() : undefined,
@@ -3192,20 +3261,39 @@ function ProfileEditPanel({
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <h4 className="text-[#1F2937] font-semibold">Zone de livraison</h4>
                     </div>
+                    <label className="flex items-center gap-2 text-sm text-[#374151]">
+                      <input
+                        type="checkbox"
+                        checked={producerDeliveryUseProfileAddress}
+                        onChange={(e) => setProducerDeliveryUseProfileAddress(e.target.checked)}
+                        disabled={producerSettingsDisabled || !producerDeliveryEnabled}
+                      />
+                      Même centre de la zone de livraison que vôtre adresse.
+                    </label>
+                    {!producerDeliveryUseProfileAddress && (
+                      <p className="text-xs text-[#6B7280]">
+                        Cliquez sur la carte ou deplacez le point pour definir le centre de livraison.
+                      </p>
+                    )}
                     <div
                       ref={deliveryMapContainerRef}
                       className="w-full rounded-lg overflow-hidden border border-gray-200"
                       style={{ height: 260, minHeight: 260 }}
                     />
-                    {!deliveryAddressQuery && (
+                    {producerDeliveryUseProfileAddress && !deliveryAddressQuery && (
                       <p className="text-xs text-[#9CA3AF]">
                         Renseignez l'adresse, le code postal et la ville dans "Coordonnées" pour positionner la carte.
                       </p>
                     )}
-                    {deliveryAddressQuery && deliveryMapStatus === 'loading' && (
+                    {!producerDeliveryUseProfileAddress && !deliveryMapCenter && (
+                      <p className="text-xs text-[#9CA3AF]">
+                        Aucun centre defini pour le moment. Cliquez sur la carte pour placer le point central.
+                      </p>
+                    )}
+                    {producerDeliveryUseProfileAddress && deliveryAddressQuery && deliveryMapStatus === 'loading' && (
                       <p className="text-xs text-[#9CA3AF]">Recherche de l'adresse...</p>
                     )}
-                    {deliveryAddressQuery && deliveryMapStatus === 'error' && (
+                    {producerDeliveryUseProfileAddress && deliveryAddressQuery && deliveryMapStatus === 'error' && (
                       <p className="text-xs text-[#B45309]">
                         Adresse introuvable. Vérifiez les coordonnées.
                       </p>

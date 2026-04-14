@@ -60,6 +60,9 @@ export interface LegalEntity {
   producerDeliveryMaxWeight?: number;
   producerDeliveryRadiusKm?: number;
   producerDeliveryFee?: number;
+  producerDeliveryUseProfileAddress?: boolean;
+  producerDeliveryCenterLat?: number;
+  producerDeliveryCenterLng?: number;
   producerPickupEnabled?: boolean;
   producerPickupDays?: DeliveryDay[];
   producerPickupStartTime?: string;
