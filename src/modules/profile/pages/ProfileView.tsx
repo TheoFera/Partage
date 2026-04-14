@@ -210,6 +210,17 @@ const reduceDeliveryMapStacking = (map: L.Map) => {
   });
 };
 
+const scheduleLeafletInvalidate = (map: L.Map) => {
+  const frames = [0, 1, 2].map(() =>
+    window.requestAnimationFrame(() => {
+      map.invalidateSize(false);
+    })
+  );
+  return () => {
+    frames.forEach((frame) => window.cancelAnimationFrame(frame));
+  };
+};
+
 type OpeningHourSlot = { start: string; end: string };
 
 const findDeliveryDayOption = (day: string) => {
@@ -1230,6 +1241,8 @@ function ProfileEditPanel({
   const deliveryMapContainerRef = React.useRef<HTMLDivElement | null>(null);
   const deliveryMapRef = React.useRef<L.Map | null>(null);
   const deliveryMapLayerRef = React.useRef<L.LayerGroup | null>(null);
+  const deliveryMapLifecycleCleanupRef = React.useRef<(() => void) | null>(null);
+  const deliveryMapInvalidateCleanupRef = React.useRef<(() => void) | null>(null);
   const initialDeliveryCenter = React.useMemo(() => {
     if (Number.isFinite(user.addressLat ?? NaN) && Number.isFinite(user.addressLng ?? NaN)) {
       return { lat: user.addressLat!, lng: user.addressLng! };
@@ -1802,6 +1815,10 @@ function ProfileEditPanel({
 
   React.useEffect(() => {
     if (producerDeliveryEnabled) return;
+    deliveryMapInvalidateCleanupRef.current?.();
+    deliveryMapInvalidateCleanupRef.current = null;
+    deliveryMapLifecycleCleanupRef.current?.();
+    deliveryMapLifecycleCleanupRef.current = null;
     if (deliveryMapRef.current) {
       deliveryMapRef.current.remove();
       deliveryMapRef.current = null;
@@ -1811,7 +1828,8 @@ function ProfileEditPanel({
 
   React.useEffect(() => {
     if (!producerDeliveryEnabled || !deliveryMapContainerRef.current || deliveryMapRef.current) return;
-    const map = L.map(deliveryMapContainerRef.current, {
+    const container = deliveryMapContainerRef.current;
+    const map = L.map(container, {
       zoomControl: true,
       attributionControl: false,
     }).setView([defaultDeliveryMapCenter.lat, defaultDeliveryMapCenter.lng], 6);
@@ -1823,7 +1841,27 @@ function ProfileEditPanel({
 
     reduceDeliveryMapStacking(map);
     deliveryMapRef.current = map;
-    setTimeout(() => deliveryMapRef.current?.invalidateSize(), 100);
+    const cleanupInvalidate = scheduleLeafletInvalidate(map);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            map.invalidateSize(false);
+          })
+        : null;
+    resizeObserver?.observe(container);
+    const handleWindowResize = () => {
+      map.invalidateSize(false);
+    };
+    window.addEventListener('resize', handleWindowResize);
+    deliveryMapLifecycleCleanupRef.current = () => {
+      cleanupInvalidate();
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
+    };
+    return () => {
+      deliveryMapLifecycleCleanupRef.current?.();
+      deliveryMapLifecycleCleanupRef.current = null;
+    };
   }, [producerDeliveryEnabled]);
 
   React.useEffect(() => {
@@ -1900,7 +1938,9 @@ function ProfileEditPanel({
       deliveryMapRef.current.setView(latLng, 12);
     }
 
-    setTimeout(() => deliveryMapRef.current?.invalidateSize(), 100);
+    deliveryMapRef.current.invalidateSize(false);
+    deliveryMapInvalidateCleanupRef.current?.();
+    deliveryMapInvalidateCleanupRef.current = scheduleLeafletInvalidate(deliveryMapRef.current);
   }, [
     producerDeliveryEnabled,
     deliveryMapCenter,
@@ -1911,6 +1951,10 @@ function ProfileEditPanel({
 
   React.useEffect(
     () => () => {
+      deliveryMapInvalidateCleanupRef.current?.();
+      deliveryMapInvalidateCleanupRef.current = null;
+      deliveryMapLifecycleCleanupRef.current?.();
+      deliveryMapLifecycleCleanupRef.current = null;
       deliveryMapRef.current?.remove();
       deliveryMapRef.current = null;
       deliveryMapLayerRef.current = null;
@@ -3272,7 +3316,7 @@ function ProfileEditPanel({
                     </label>
                     {!producerDeliveryUseProfileAddress && (
                       <p className="text-xs text-[#6B7280]">
-                        Cliquez sur la carte ou deplacez le point pour definir le centre de livraison.
+                        Déplacez le point sur la carte en cliquant pour definir le centre de la zone de livraison.
                       </p>
                     )}
                     <div
