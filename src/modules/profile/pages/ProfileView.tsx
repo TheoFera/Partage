@@ -1861,6 +1861,16 @@ function ProfileEditPanel({
     return () => {
       deliveryMapLifecycleCleanupRef.current?.();
       deliveryMapLifecycleCleanupRef.current = null;
+      deliveryMapInvalidateCleanupRef.current?.();
+      deliveryMapInvalidateCleanupRef.current = null;
+      if (deliveryMapLayerRef.current) {
+        deliveryMapLayerRef.current.clearLayers();
+        deliveryMapLayerRef.current = null;
+      }
+      if (deliveryMapRef.current === map) {
+        map.remove();
+        deliveryMapRef.current = null;
+      }
     };
   }, [producerDeliveryEnabled]);
 
