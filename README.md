@@ -18,7 +18,7 @@ L'application utilise `react-router-dom` (BrowserRouter). Les routes principales
 
 `src/shared/lib/supabaseClient.ts` expose `getSupabaseClient()`/`supabase`. Le client est instancie si `VITE_SUPABASE_URL` et `VITE_SUPABASE_ANON_KEY` sont renseignees dans votre `.env`.
 
-Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`, `supabase/functions/stripe_create_checkout_session`, `supabase/functions/stripe_checkout_session_status`, `supabase/functions/stripe_create_connected_account_link`, `supabase/functions/stripe_connected_account_status`).
+Le dossier `supabase/` contient la config CLI (`config.toml`) et les Edge Functions utilisees par l'app (`supabase/functions/finalize-payment`, `supabase/functions/process-emails-sortants`, `supabase/functions/process-notification-emails`, `supabase/functions/stripe_create_checkout_session`, `supabase/functions/stripe_checkout_session_status`, `supabase/functions/stripe_create_connected_account_link`, `supabase/functions/stripe_connected_account_status`).
 Pour Stripe, configurez aussi les secrets Edge Functions `STRIPE_SECRET_KEY` (obligatoire), `STRIPE_API_BASE` (optionnel, par defaut `https://api.stripe.com/v1`), `STRIPE_API_BASE_V2` (optionnel, par defaut `https://api.stripe.com`), `STRIPE_CHECKOUT_UI_MODE` (optionnel, par defaut `embedded_page`) et `STRIPE_CONNECTED_ACCOUNT_COUNTRY` (optionnel, par defaut `FR`).
 
 ### Billing / factures (runbook)
@@ -29,6 +29,21 @@ Pour Stripe, configurez aussi les secrets Edge Functions `STRIPE_SECRET_KEY` (ob
 - Pour diagnostiquer la configuration des secrets billing, executer:
   - `select * from public.billing_email_config_healthcheck();`
 - Si `SUPABASE_SERVICE_ROLE_KEY` n'est pas un JWT valide (`dot_count != 2`), `process-emails-sortants` peut repondre `401 Invalid JWT`.
+
+### Notifications e-mail
+
+- Migration SQL: `supabase/scripts/2026-04-16_notification_email_pipeline.sql`.
+- La pipeline notification est separee de la pipeline facture:
+  - table outbox: `public.notification_emails_outbox`
+  - fonction SQL: `public.call_process_notification_emails()`
+  - Edge Function: `supabase/functions/process-notification-emails`
+- Secrets / variables a configurer pour `process-notification-emails`:
+  - `NOTIFICATION_EMAIL_INTERNAL_SECRET`
+  - `BREVO_API_KEY`
+  - `BREVO_SENDER_EMAIL=nepasrepondre@partagetonpanier.fr`
+  - `BREVO_SENDER_NAME=Partage ton panier`
+  - `APP_BASE_URL`
+  - `LOGO_PUBLIC_URL`
 
 ## Structure du dossier `src`
 

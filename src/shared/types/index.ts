@@ -2,6 +2,18 @@ export type UserRole = 'producer' | 'sharer' | 'participant';
 export type DeliveryLeadType = 'days' | 'fixed_day';
 export type DeliveryDay = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
 export type VatRegime = 'unknown' | 'franchise' | 'assujetti';
+export type NotificationEmailType =
+  | 'order_created_producer'
+  | 'order_locked_participant'
+  | 'order_locked_producer'
+  | 'order_delivered_participant'
+  | 'order_delivered_producer'
+  | 'order_confirmed_sharer'
+  | 'order_prepared_sharer'
+  | 'order_min_reached_sharer'
+  | 'order_max_reached_sharer'
+  | 'order_auto_locked_deadline_sharer';
+export type NotificationEmailPreferences = Partial<Record<NotificationEmailType, boolean>>;
 
 export interface User {
   id: string;
@@ -31,6 +43,7 @@ export interface User {
   freshProductsCertified?: boolean;
   socialLinks?: Record<string, string | null>;
   openingHours?: Record<string, string>;
+  notificationEmailPreferences?: NotificationEmailPreferences;
   emailVerified?: boolean;
   verified?: boolean;
   businessStatus?: string;

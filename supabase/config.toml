@@ -10,6 +10,12 @@ entrypoint = "./functions/process-emails-sortants/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/process-emails-sortants/*.html" ]
 
+[functions.process-notification-emails]
+enabled = true
+verify_jwt = true
+import_map = "./functions/process-notification-emails/deno.json"
+entrypoint = "./functions/process-notification-emails/index.ts"
+
 [functions.finalize-payment]
 enabled = true
 verify_jwt = true

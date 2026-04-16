@@ -38,6 +38,7 @@ import {
   OrderPurchaseDraft,
   TimelineStep,
 } from './shared/types';
+import { normalizeNotificationEmailPreferences } from './shared/constants/notificationEmailPreferences';
 import { getSupabaseClient } from './shared/lib/supabaseClient';
 import { getCreateProductDraftStorageKey } from './modules/products/utils/createProductDraftStorage';
 import {
@@ -231,8 +232,9 @@ const buildGroupOrderFromContext = (context: OrderFull | null): GroupOrder | nul
   if (!context) return null;
 
   const { order, productsOffered, pickupSlots, participants, profiles } = context;
-  const sharerProfile = order.sharerProfileId ? profiles[order.sharerProfileId] : undefined;
-  const producerProfile = order.producerProfileId ? profiles[order.producerProfileId] : undefined;
+  const profileMap = profiles ?? {};
+  const sharerProfile = order.sharerProfileId ? profileMap[order.sharerProfileId] : undefined;
+  const producerProfile = order.producerProfileId ? profileMap[order.producerProfileId] : undefined;
 
   const products = productsOffered
     .map((entry) => {
@@ -611,6 +613,7 @@ const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
     producerId: authUser.user_metadata?.producerId,
     addressLat: metaLat,
     addressLng: metaLng,
+    notificationEmailPreferences: normalizeNotificationEmailPreferences(),
   };
 };
 
@@ -795,6 +798,7 @@ type ProfileRow = {
   fresh_products_certified: boolean | null;
   social_links: Record<string, string | null> | null;
   opening_hours: Record<string, string> | null;
+  notification_email_preferences: Record<string, boolean> | null;
   account_type: string | null;
   verified: boolean | null;
   business_status?: string | null;
@@ -993,6 +997,7 @@ const mapProfileRowToUser = (
     freshProductsCertified: Boolean(row.fresh_products_certified),
     socialLinks: row.social_links ?? undefined,
     openingHours: row.opening_hours ?? undefined,
+    notificationEmailPreferences: normalizeNotificationEmailPreferences(row.notification_email_preferences),
     emailVerified: authUser?.email_confirmed_at ? true : authUser ? false : undefined,
     verified: Boolean(row.verified),
     businessStatus: row.business_status ?? undefined,
@@ -3336,144 +3341,6 @@ export default function App() {
     setPurchaseDraft(null);
     navigate(`/cmd/${order.orderCode ?? draft.orderCode ?? resolveOrderCode(draft.orderId)}/partage`);
     toast.success('Paiement confirme.');
-    return;
-
-    let paidAmountCents = eurosToCents(draft.total);
-    let paymentParticipantId: string | null = null;
-    let createdPaymentId: string | null = null;
-    let participantCreatedInFlow = false;
-    const createdOrderItems: Array<{ id: string }> = [];
-
-    try {
-      const existingParticipant = await getParticipantByProfile(order.id, user.id);
-      const participant =
-        existingParticipant ?? (await requestParticipation(order.orderCode ?? order.id, user.id));
-      participantCreatedInFlow = !existingParticipant;
-      paymentParticipantId = participant.id;
-      const productsByCode = new Map(order.products.map((product) => [product.id, product]));
-
-      for (const [productCode, rawQty] of Object.entries(draft.quantities)) {
-        const quantityUnits = Math.max(0, Number(rawQty) || 0);
-        if (quantityUnits <= 0) continue;
-        const product = productsByCode.get(productCode);
-        if (!product?.dbId) {
-          console.warn('Produit introuvable pour la participation:', productCode);
-          continue;
-        }
-        const item = await addItem({
-          orderId: order.id,
-          participantId: participant.id,
-          productId: product.dbId,
-          quantityUnits,
-        });
-        createdOrderItems.push({ id: item.id });
-      }
-
-      // Reprice this participant's lines using the latest order weight.
-      const withItems = await getOrderFullByCode(order.orderCode ?? order.id);
-      const participantItems = withItems.items.filter((item) => item.participantId === participant.id);
-      for (const item of participantItems) {
-        await updateOrderItemQuantity(item.id, order.id, participant.id, getOrderItemQuantity(item));
-      }
-
-      const refreshed = await getOrderFullByCode(order.orderCode ?? order.id);
-      const refreshedParticipant = refreshed.participants.find((entry) => entry.id === participant.id);
-      if (!refreshedParticipant) {
-        throw new Error('Participant introuvable apres recalcul des prix.');
-      }
-      const alreadyPaidCents = refreshed.payments.reduce((sum, payment) => {
-        if (payment.participantId !== refreshedParticipant.id) return sum;
-        if (payment.status !== 'paid' && payment.status !== 'authorized') return sum;
-        return sum + Math.max(0, (payment.amountCents ?? 0) - (payment.refundedAmountCents ?? 0));
-      }, 0);
-      const amountDueCents = Math.max(0, refreshedParticipant.totalAmountCents - alreadyPaidCents);
-      const useCoopBalance = Boolean(draft.useCoopBalance);
-      const coopBalanceCents = await fetchCoopBalance(user.id);
-      const coopToConsumeCents = useCoopBalance ? Math.min(coopBalanceCents, amountDueCents) : 0;
-      paidAmountCents = Math.max(0, amountDueCents - coopToConsumeCents);
-
-      if (paidAmountCents <= 0) {
-        if (coopToConsumeCents > 0) {
-          await issueParticipantInvoiceWithCoop({
-            orderId: order.id,
-            profileId: user.id,
-            coopAppliedCents: coopToConsumeCents,
-          });
-        } else {
-          throw new Error('Aucun montant a payer apres recalcul des prix.');
-        }
-      } else {
-        const payment = await createPaymentStub({
-          orderId: order.id,
-          participantId: participant.id,
-          amountCents: paidAmountCents,
-          provider: providerContext?.provider ?? 'stripe',
-          providerPaymentId: providerContext?.providerPaymentId ?? null,
-          raw: {
-            flow_kind: 'participant',
-            use_coop_balance: useCoopBalance,
-            ...providerContext?.raw,
-          },
-        });
-        createdPaymentId = payment.id;
-        const finalizeResult = (await finalizePaymentSimulation(payment.id)) as
-          | { email?: { ok?: boolean; error?: string | null } }
-          | null;
-        if (finalizeResult?.email?.ok === false) {
-          toast.warning(
-            finalizeResult.email.error
-              ? `Paiement confirme, mais envoi email non declenche: ${finalizeResult.email.error}`
-              : 'Paiement confirme, mais envoi email non declenche.'
-          );
-        }
-      }
-    } catch (error) {
-      if (createdPaymentId) {
-        try {
-          await updatePaymentStatus(createdPaymentId, 'failed');
-        } catch (markFailedError) {
-          console.error('Payment mark failed error:', markFailedError);
-        }
-      }
-
-      // Roll back cart side effects when payment did not complete.
-      if (!createdPaymentId && createdOrderItems.length > 0 && paymentParticipantId) {
-        for (const created of createdOrderItems.slice().reverse()) {
-          try {
-            await removeItem(created.id, order.id, paymentParticipantId);
-          } catch (rollbackItemError) {
-            console.error('Rollback order item error:', rollbackItemError);
-          }
-        }
-      }
-
-      if (!createdPaymentId && participantCreatedInFlow && paymentParticipantId) {
-        try {
-          await deleteParticipantIfNoActivity({
-            orderId: order.id,
-            participantId: paymentParticipantId,
-            profileId: user.id,
-          });
-        } catch (rollbackParticipantError) {
-          console.error('Rollback participant error:', rollbackParticipantError);
-        }
-      }
-
-      console.error('Payment finalize error:', error);
-      const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
-      toast.error(message);
-      return;
-    }
-
-    const paidTotalEuros = centsToEuros(paidAmountCents);
-    const finalizedDraft: OrderPurchaseDraft = { ...draft, total: paidTotalEuros };
-    handlePurchaseOrder(draft.orderId, paidTotalEuros, draft.weight);
-    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
-    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
-    setRecentPurchase(finalizedDraft);
-    setPurchaseDraft(null);
-    navigate(`/cmd/${order.orderCode ?? draft.orderCode ?? resolveOrderCode(draft.orderId)}/partage`);
-    toast.success('Paiement confirme.');
   };
 
   const handleConfirmClosePayment = async (
@@ -3518,6 +3385,7 @@ export default function App() {
     navigate(`/cmd/${resolveOrderCode(order.id)}`);
     toast.success('Paiement confirme et commande cloturee.');
     return;
+    /*
     const closeData = draft.closeData;
     if (!closeData) {
       toast.error('Paiement de clôture incomplet.');
@@ -3606,6 +3474,7 @@ export default function App() {
     setPurchaseDraft(null);
     setRecentPurchase(null);
     navigate(`/cmd/${resolveOrderCode(order.id)}`);
+    */
     toast.success('Paiement confirmé et commande clôturée.');
   };
 
@@ -3955,6 +3824,8 @@ export default function App() {
         ...userData,
         role: normalizedRole,
         addressDetails: nextAddressDetails || undefined,
+        notificationEmailPreferences:
+          userData.notificationEmailPreferences ?? user.notificationEmailPreferences,
       };
       if (normalizedRole === 'producer') {
         updatedUser.producerId = updatedUser.producerId ?? 'current-user';
@@ -4045,6 +3916,8 @@ export default function App() {
       fresh_products_certified: userData.freshProductsCertified ?? user.freshProductsCertified ?? false,
       social_links: userData.socialLinks ?? user.socialLinks ?? null,
       opening_hours: userData.openingHours ?? user.openingHours ?? null,
+      notification_email_preferences:
+        userData.notificationEmailPreferences ?? user.notificationEmailPreferences ?? {},
       profile_visibility: userData.profileVisibility ?? user.profileVisibility ?? 'public',
       address_visibility: userData.addressVisibility ?? user.addressVisibility ?? 'private',
       producer_id: userData.producerId ?? user.producerId,

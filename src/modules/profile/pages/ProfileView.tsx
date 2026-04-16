@@ -16,6 +16,7 @@ import {
   Globe,
   Lock,
   Link2,
+  Mail,
   Phone,
   X,
 } from 'lucide-react';
@@ -29,6 +30,10 @@ import {
   Product,
   User,
 } from '../../../shared/types';
+import {
+  NOTIFICATION_EMAIL_PREFERENCE_DEFINITIONS,
+  normalizeNotificationEmailPreferences,
+} from '../../../shared/constants/notificationEmailPreferences';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { AvatarUploader } from '../components/AvatarUploader';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from '../../products/components/ProductGroup';
@@ -40,7 +45,7 @@ import {
 } from '../../../shared/constants/producerLabels';
 
 type TabKey = 'products' | 'orders' | 'selection';
-type EditTabKey = 'general' | 'public' | 'structure' | 'sharer' | 'producer_settings';
+type EditTabKey = 'general' | 'public' | 'notification' | 'structure' | 'sharer' | 'producer_settings';
 type LegalDocumentType =
   | 'producer_mandat'
   | 'sharer_autofacturation';
@@ -1166,6 +1171,9 @@ function ProfileEditPanel({
   const [editTab, setEditTab] = React.useState<EditTabKey>('general');
   const [phonePublic, setPhonePublic] = React.useState(user.phonePublic ?? '');
   const [contactEmailPublic, setContactEmailPublic] = React.useState(user.contactEmailPublic ?? '');
+  const [notificationEmailPreferences, setNotificationEmailPreferences] = React.useState(() =>
+    normalizeNotificationEmailPreferences(user.notificationEmailPreferences)
+  );
   const [offersOnSitePickup, setOffersOnSitePickup] = React.useState<boolean>(Boolean(user.offersOnSitePickup));
   const [freshProductsCertified, setFreshProductsCertified] = React.useState<boolean>(
     Boolean(user.freshProductsCertified)
@@ -2027,6 +2035,7 @@ function ProfileEditPanel({
       [
         { id: 'general' as EditTabKey, label: 'Profil général', visible: true },
         { id: 'public' as EditTabKey, label: 'Contacts publics', visible: true },
+        { id: 'notification' as EditTabKey, label: 'Notifications', visible: true },
         { id: 'structure' as EditTabKey, label: 'Structure', visible: structureTabVisible },
         { id: 'sharer' as EditTabKey, label: 'Créateur de commande', visible: true },
         { id: 'producer_settings' as EditTabKey, label: 'Réglages producteur', visible: producerSettingsVisible },
@@ -2313,6 +2322,7 @@ function ProfileEditPanel({
       website: website.trim(),
       phonePublic: phonePublic.trim() || undefined,
       contactEmailPublic: contactEmailPublic.trim() || undefined,
+      notificationEmailPreferences,
       offersOnSitePickup,
       ...(shouldPersistProducerSettings ? { freshProductsCertified } : {}),
       socialLinks: Object.keys(filteredSocials).length ? filteredSocials : undefined,
@@ -2727,6 +2737,55 @@ function ProfileEditPanel({
                 <p className="text-xs text-[#9CA3AF]">Laissez vide si vous ne souhaitez pas afficher ces liens.</p>
               </div>
             </div>
+          </div>
+        </section>
+      );
+    }
+    if (editTab === 'notification') {
+      return (
+        <section className="rounded-2xl border border-[#FFE0D1] bg-white p-4 space-y-4 shadow-sm">
+          <div className="flex items-start gap-3 rounded-xl bg-[#FFF8F3] border border-[#FFE0D1] p-4">
+            <div className="shrink-0 rounded-full bg-[#FF6B4A]/10 p-2 text-[#FF6B4A]">
+              <Mail className="h-5 w-5" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-[#1F2937] font-semibold">Notifications par e-mail</h3>
+              <p className="text-sm text-[#6B7280]">
+                Activez/Désactivez les notifications par e-mail.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {NOTIFICATION_EMAIL_PREFERENCE_DEFINITIONS.map((definition) => {
+              const isEnabled = notificationEmailPreferences[definition.type];
+              return (
+                <label
+                  key={definition.type}
+                  className="flex items-start justify-between gap-4 rounded-xl border border-gray-200 bg-[#FCFCFD] px-4 py-3 transition-colors hover:border-[#FFD7CA]"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-[#1F2937]">{definition.label}</p>
+                    <p className="text-sm text-[#6B7280]">{definition.description}</p>
+                  </div>
+                  <span className="flex shrink-0 items-center gap-3 pt-0.5">
+                    <span className={`text-xs font-medium ${isEnabled ? 'text-[#0F5132]' : 'text-[#6B7280]'}`}>
+                      {isEnabled ? 'Active' : 'Desactivee'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={isEnabled}
+                      onChange={(event) =>
+                        setNotificationEmailPreferences((prev) => ({
+                          ...prev,
+                          [definition.type]: event.target.checked,
+                        }))
+                      }
+                      className="h-4 w-4 rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
+                    />
+                  </span>
+                </label>
+              );
+            })}
           </div>
         </section>
       );
