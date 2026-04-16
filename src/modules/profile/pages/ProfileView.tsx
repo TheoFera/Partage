@@ -31,7 +31,7 @@ import {
   User,
 } from '../../../shared/types';
 import {
-  NOTIFICATION_EMAIL_PREFERENCE_DEFINITIONS,
+  filterNotificationEmailPreferencesByRole,
   normalizeNotificationEmailPreferences,
 } from '../../../shared/constants/notificationEmailPreferences';
 import { Avatar } from '../../../shared/ui/Avatar';
@@ -1173,6 +1173,10 @@ function ProfileEditPanel({
   const [contactEmailPublic, setContactEmailPublic] = React.useState(user.contactEmailPublic ?? '');
   const [notificationEmailPreferences, setNotificationEmailPreferences] = React.useState(() =>
     normalizeNotificationEmailPreferences(user.notificationEmailPreferences)
+  );
+  const visibleNotificationEmailPreferences = React.useMemo(
+    () => filterNotificationEmailPreferencesByRole(user.role),
+    [user.role]
   );
   const [offersOnSitePickup, setOffersOnSitePickup] = React.useState<boolean>(Boolean(user.offersOnSitePickup));
   const [freshProductsCertified, setFreshProductsCertified] = React.useState<boolean>(
@@ -2756,7 +2760,7 @@ function ProfileEditPanel({
             </div>
           </div>
           <div className="space-y-3">
-            {NOTIFICATION_EMAIL_PREFERENCE_DEFINITIONS.map((definition) => {
+            {visibleNotificationEmailPreferences.map((definition) => {
               const isEnabled = notificationEmailPreferences[definition.type];
               return (
                 <label
