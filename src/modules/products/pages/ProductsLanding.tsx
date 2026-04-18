@@ -704,8 +704,8 @@ export function ProductsLanding({
               margin: 0,
             }}
           >
-            Moins d’intermédiaires,{' '}
-            <span className="products-landing__hero-keep-together">plus de qualité</span>
+            Commandez ensemble,{' '}
+            <span className="products-landing__hero-keep-together">achetez en direct</span>
           </h2>
           <p
             style={{

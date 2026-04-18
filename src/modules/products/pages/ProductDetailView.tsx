@@ -30,6 +30,15 @@ import { generateBase62Code } from '../utils/codeGenerator';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from '../../../shared/lib/storageObjectPath';
 import { formatUnitWeightLabel } from '../utils/weight';
+import {
+  applyProductionLotPatch,
+  createEmptyProductionLot,
+  getLotSaveErrorMessage,
+  normalizeProductionLot,
+  persistProductionLot,
+  resolveProductionLotStartTimestamp,
+  validateProductionLotDraft,
+} from '../utils/lots';
 import { fetchLotBreakdown, saveProducerLotBreakdown } from '../utils/pricing';
 import { PRODUCT_CATEGORIES } from '../constants/productCategories';
 import {
@@ -127,26 +136,6 @@ const slugify = (value: string) =>
 const getLabelDescription = (label: string) => {
   const key = normalizeKey(label);
   return LABEL_DESCRIPTIONS[key] ?? `Cahier des charges à consulter pour "${label}".`;
-};
-
-const getErrorMessage = (error: unknown) => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    return typeof message === 'string' ? message : '';
-  }
-  return '';
-};
-
-const getLotSaveErrorMessage = (error: unknown) => {
-  const message = getErrorMessage(error);
-  if (message.includes('stock_kg must be set and stock_units must be null for kg products')) {
-    return "Produit vendu au kg : la base exige une quantite de lot en kg pour enregistrer ce lot. Laisser la quantite vide n'est pas accepte actuellement par la base.";
-  }
-  if (message.includes('stock_units must be set and stock_kg must be null for unit products')) {
-    return "Produit vendu a l'unite : la base exige une quantite de lot en nombre d'unites pour enregistrer ce lot. Laisser la quantite vide n'est pas accepte actuellement par la base.";
-  }
-  return message || "Impossible d'enregistrer le lot.";
 };
 
 const getPrimaryPickupLabel = (orders: GroupOrder[], fallback?: string) => {
@@ -2733,63 +2722,25 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     setEditMode(false);
   };
 
-  const resolveLotTimestamp = React.useCallback((lot: ProductionLot) => {
-    const candidates = [
-      lot.fin,
-      lot.periodeDisponibilite?.fin,
-      lot.debut,
-      lot.periodeDisponibilite?.debut,
-      lot.DLC_DDM,
-    ];
-    for (const value of candidates) {
-      if (!value) continue;
-      const timestamp = Date.parse(value);
-      if (Number.isFinite(timestamp)) return timestamp;
-    }
-    return 0;
-  }, []);
-
-  const resolveLotStartTimestamp = React.useCallback((lot: ProductionLot) => {
-    const candidates = [lot.periodeDisponibilite?.debut, lot.debut];
-    for (const value of candidates) {
-      if (!value) continue;
-      const timestamp = Date.parse(value);
-      if (Number.isFinite(timestamp)) return timestamp;
-    }
-    return 0;
-  }, []);
-
   const latestLotId = React.useMemo(() => {
     if (!lotList.length) return null;
     let latest = lotList[0];
-    let latestTimestamp = resolveLotStartTimestamp(latest);
+    let latestTimestamp = resolveProductionLotStartTimestamp(latest);
     lotList.slice(1).forEach((lot) => {
-      const timestamp = resolveLotStartTimestamp(lot);
+      const timestamp = resolveProductionLotStartTimestamp(lot);
       if (timestamp >= latestTimestamp) {
         latest = lot;
         latestTimestamp = timestamp;
       }
     });
     return latest.id;
-  }, [lotList, resolveLotStartTimestamp]);
+  }, [lotList]);
 
   const cloneLotLabels = (labels: ProducerLabelDetail[]) => labels.map((label) => ({ ...label }));
   const cloneLotPosts = (posts: RepartitionPoste[]) => posts.map((post) => ({ ...post }));
 
-  const createLotDraft = (): ProductionLot => ({
-    id: `temp-${generateBase62Code(8)}`,
-    nomLot: '',
-    debut: '',
-    fin: '',
-    periodeDisponibilite: { debut: '', fin: '' },
-    DLC_DDM: '',
-    commentaire: '',
-    numeroLot: '',
-    statut: 'a_venir',
-  });
-
   const handleAddLot = () => {
-    const draft = createLotDraft();
+    const draft = createEmptyProductionLot(`temp-${generateBase62Code(8)}`);
     const referenceLotId = latestLotId ?? selectedLotId ?? null;
     const baseLabelDetails =
       referenceLotId && lotLabelsByLot[referenceLotId]
@@ -2814,10 +2765,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   };
 
   const handleEditLot = (lot: ProductionLot) => {
-    setLotDraft({
-      ...lot,
-      periodeDisponibilite: lot.periodeDisponibilite ?? { debut: lot.debut, fin: lot.fin },
-    });
+    setLotDraft(normalizeProductionLot(lot));
     setLotEditMode('edit');
     setSelectedLotId(lot.id);
     setLotLabelsByLot((prev) =>
@@ -2832,14 +2780,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   const handleLotDraftChange = (patch: Partial<ProductionLot>) => {
     setLotDraft((prev) => {
       if (!prev) return prev;
-      const next = { ...prev, ...patch };
-      if (patch.debut !== undefined || patch.fin !== undefined) {
-        next.periodeDisponibilite = {
-          debut: patch.debut ?? prev.debut,
-          fin: patch.fin ?? prev.fin,
-        };
-      }
-      return next;
+      return applyProductionLotPatch(prev, patch);
     });
   };
 
@@ -2900,18 +2841,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
   const handleSaveLot = async (options?: { keepDraft?: boolean }) => {
     if (!lotDraft) return;
-    if (!lotDraft.nomLot.trim()) {
-      toast.error('Ajoutez un nom de lot.');
+    const validationMessage = validateProductionLotDraft(lotDraft);
+    if (validationMessage) {
+      toast.error(validationMessage);
       return;
     }
-    if (!lotDraft.debut) {
-      toast.error('Ajoutez une date de debut.');
-      return;
-    }
-    const normalized = {
-      ...lotDraft,
-      periodeDisponibilite: { debut: lotDraft.debut, fin: lotDraft.fin },
-    };
+    const normalized = normalizeProductionLot(lotDraft);
     if (isCreateMode) {
       setLotList((prev) => {
         if (lotEditMode === 'edit') {
@@ -2936,55 +2871,26 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       return;
     }
     try {
-      const productCode = product.productCode ?? product.id;
-      if (!productCode || productCode === 'draft') {
-        toast.error('Produit introuvable.');
-        return;
+      let productDbId = product.dbId?.trim() || '';
+      if (!productDbId) {
+        const productCode = product.productCode ?? product.id;
+        if (!productCode || productCode === 'draft') {
+          toast.error('Produit introuvable.');
+          return;
+        }
+        const { data: productRow, error: productError } = await supabaseClient
+          .from('products')
+          .select('id')
+          .eq('product_code', productCode)
+          .maybeSingle();
+        if (productError || !productRow?.id) {
+          toast.error('Produit introuvable.');
+          return;
+        }
+        productDbId = productRow.id;
       }
-      const { data: productRow, error: productError } = await supabaseClient
-        .from('products')
-        .select('id')
-        .eq('product_code', productCode)
-        .maybeSingle();
-      if (productError || !productRow?.id) {
-        toast.error('Produit introuvable.');
-        return;
-      }
-      const resolvedTotalQuantity =
-        typeof normalized.qteTotale === 'number'
-          ? normalized.qteTotale
-          : typeof normalized.qteRestante === 'number'
-            ? normalized.qteRestante
-            : undefined;
-      const resolvedRemainingQuantity =
-        typeof normalized.qteRestante === 'number' ? normalized.qteRestante : resolvedTotalQuantity;
-      const stockValue = resolvedRemainingQuantity ?? null;
       const lotPosts = lotPriceBreakdownByLot[normalized.id] ?? [];
-      const basePayload = {
-        product_id: productRow.id,
-        status:
-          normalized.statut === 'en_cours'
-            ? 'active'
-            : normalized.statut === 'a_venir'
-              ? 'draft'
-              : 'sold_out',
-        stock_units: localMeasurement === 'unit' ? stockValue : null,
-        stock_kg: localMeasurement === 'kg' ? stockValue : null,
-        lot_comment: normalized.nomLot || null,
-        produced_at: normalized.debut || null,
-        dlc: normalized.DLC_DDM || null,
-        ddm: normalized.DLC_DDM || null,
-        lot_reference: normalized.numeroLot || null,
-        notes: normalized.commentaire || null,
-        metadata: {
-          sale_period_start: normalized.debut || null,
-          sale_period_end: normalized.fin || null,
-        },
-      };
-      const createPayload = {
-        ...basePayload,
-        price_cents: estimateLotPriceCents(lotPosts),
-      };
+      const lotPriceCents = estimateLotPriceCents(lotPosts);
       const persistLotLabels = async (lotDbId: string, labels: ProducerLabelDetail[]) => {
         const cleaned = labels
           .map((label) => ({
@@ -3001,7 +2907,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         if (!cleaned.length) return;
         const { error: labelError } = await supabaseClient.from('lot_labels').insert(
           cleaned.map((label) => ({
-            product_id: productRow.id,
+            product_id: productDbId,
             lot_id: lotDbId,
             label: label.label,
             description: label.description,
@@ -3016,40 +2922,18 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
           defaultStakeholder: 'Producteur',
           defaultStakeholderKey: 'producer',
         });
-      let resolvedLotDbId = normalized.lotDbId ?? null;
-      if (lotEditMode === 'edit' && !resolvedLotDbId) {
-        const { data: existingLot, error: lotLookupError } = await supabaseClient
-          .from('lots')
-          .select('id, lot_code, lot_reference')
-          .eq('product_id', productRow.id)
-          .eq('lot_code', normalized.id)
-          .maybeSingle();
-        if (lotLookupError || !existingLot?.id) {
-          throw lotLookupError ?? new Error('Lot introuvable.');
-        }
-        resolvedLotDbId = existingLot.id;
-      }
-      if (lotEditMode === 'edit' && resolvedLotDbId) {
-        const { data: updated, error: updateError } = await supabaseClient
-          .from('lots')
-          .update(basePayload)
-          .eq('id', resolvedLotDbId)
-          .select('id, lot_code, lot_reference')
-          .maybeSingle();
-        if (updateError || !updated?.lot_code) {
-          throw updateError ?? new Error('Lot introuvable.');
-        }
-        const persisted = {
-          ...normalized,
-          qteTotale: resolvedTotalQuantity,
-          qteRestante: resolvedRemainingQuantity,
-          id: updated.lot_code,
-          lotDbId: updated.id,
-          numeroLot: updated.lot_reference ?? normalized.numeroLot,
-        };
+      const { lot: persisted, lotDbId } = await persistProductionLot({
+        client: supabaseClient,
+        productDbId,
+        lot: normalized,
+        measurement: localMeasurement,
+        priceCents: lotPriceCents,
+        mode: lotEditMode === 'edit' ? 'edit' : 'create',
+      });
+      if (lotEditMode === 'edit') {
         const lotLabels = lotLabelsByLot[normalized.id] ?? [];
-        await persistLotLabels(updated.id, lotLabels);
-        const { breakdown, lot } = await persistLotPriceBreakdown(updated.id, lotPosts);
+        await persistLotLabels(lotDbId, lotLabels);
+        const { breakdown, lot } = await persistLotPriceBreakdown(lotDbId, lotPosts);
         const mappedBreakdown = mapBreakdownRowsToPosts(breakdown);
         setLotPriceBreakdownByLot((prev) => ({ ...prev, [persisted.id]: mappedBreakdown }));
         setProductPosts(mappedBreakdown);
@@ -3066,27 +2950,11 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
         toast.success('Lot mis à jour.');
         return;
       }
-      const { data: created, error: createError } = await supabaseClient
-        .from('lots')
-        .insert(createPayload)
-        .select('id, lot_code, lot_reference')
-        .maybeSingle();
-      if (createError || !created?.lot_code) {
-        throw createError ?? new Error('Creation du lot impossible.');
-      }
-      const persisted = {
-        ...normalized,
-        qteTotale: resolvedTotalQuantity,
-        qteRestante: resolvedRemainingQuantity,
-        id: created.lot_code,
-        lotDbId: created.id,
-        numeroLot: created.lot_reference ?? normalized.numeroLot,
-      };
       const draftId = normalized.id;
       const draftLabels = lotLabelsByLot[draftId] ?? [];
       const draftPosts = lotPriceBreakdownByLot[draftId] ?? [];
-      await persistLotLabels(created.id, draftLabels);
-      const { breakdown, lot } = await persistLotPriceBreakdown(created.id, draftPosts);
+      await persistLotLabels(lotDbId, draftLabels);
+      const { breakdown, lot } = await persistLotPriceBreakdown(lotDbId, draftPosts);
       const mappedBreakdown = mapBreakdownRowsToPosts(breakdown);
       setLotLabelsByLot((prev) => {
         const { [draftId]: draftLabels, ...rest } = prev;
@@ -3157,19 +3025,21 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       setOverrideLotPriceCents(null);
     };
 
-    if (!supabaseClient && !isCreateMode) {
-      toast.error('Supabase n est pas configuré. Impossible de supprimer le lot.');
-      return;
-    }
-
     if (isCreateMode || !lotDbId) {
       removeLocalLot();
       toast.success('Lot supprimé.');
       return;
     }
 
+    if (!supabaseClient) {
+      toast.error('Supabase n est pas configuré. Impossible de supprimer le lot.');
+      return;
+    }
+
+    const client = supabaseClient;
+
     try {
-      const { data: existingItems, error: itemsError } = await supabaseClient
+      const { data: existingItems, error: itemsError } = await client
         .from('order_items')
         .select('id')
         .eq('lot_id', lotDbId)
@@ -3184,7 +3054,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       }
 
       const deleteForLot = async (table: string) => {
-        const { error } = await supabaseClient.from(table).delete().eq('lot_id', lotDbId);
+        const { error } = await client.from(table).delete().eq('lot_id', lotDbId);
         if (error) throw error;
       };
 
@@ -3193,7 +3063,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       await deleteForLot('lot_trace_steps');
       await deleteForLot('lot_inputs');
 
-      const { error: deleteError } = await supabaseClient.from('lots').delete().eq('id', lotDbId);
+      const { error: deleteError } = await client.from('lots').delete().eq('id', lotDbId);
       if (deleteError) throw deleteError;
 
       removeLocalLot();
@@ -3310,13 +3180,13 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       epuise: 2,
     };
     return [...lotList].sort((a, b) => {
-      const dateDiff = resolveLotStartTimestamp(a) - resolveLotStartTimestamp(b);
+      const dateDiff = resolveProductionLotStartTimestamp(a) - resolveProductionLotStartTimestamp(b);
       if (dateDiff !== 0) return dateDiff;
       const rankDiff = statusRank[a.statut] - statusRank[b.statut];
       if (rankDiff !== 0) return rankDiff;
       return a.nomLot.localeCompare(b.nomLot);
     });
-  }, [lotList, resolveLotStartTimestamp]);
+  }, [lotList]);
 
   const lotCarouselItems = React.useMemo(
     () => [...sortedLots.map((lot) => ({ type: 'lot' as const, lot })), { type: 'create' as const }],

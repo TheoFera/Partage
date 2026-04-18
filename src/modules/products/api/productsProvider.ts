@@ -2,6 +2,7 @@
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
 import { centsToEuros } from '../../../shared/lib/money';
 import { fetchLotByLotCode } from '../utils/pricing';
+import { mapDbLotToProductionLot } from '../utils/lots';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
@@ -115,39 +116,8 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
   };
 };
 
-const mapLotStatus = (status: DbLot['status']): ProductionLot['statut'] => {
-  if (status === 'active') return 'en_cours';
-  if (status === 'draft') return 'a_venir';
-  if (status === 'sold_out') return 'epuise';
-  return 'epuise';
-};
-
 const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']): ProductionLot[] =>
-  lots.map((lot) => {
-    const quantity = measurement === 'kg' ? toNumber(lot.stock_kg) : toNumber(lot.stock_units);
-    const metadata = lot.metadata as Record<string, unknown> | null;
-    const salePeriodStart =
-      metadata && typeof metadata.sale_period_start === 'string' ? metadata.sale_period_start : null;
-    const salePeriodEnd =
-      metadata && typeof metadata.sale_period_end === 'string' ? metadata.sale_period_end : null;
-    const startDate = salePeriodStart ?? lot.produced_at ?? lot.created_at.slice(0, 10);
-    const endDate = salePeriodEnd ?? '';
-    return {
-      id: lot.lot_code,
-      lotDbId: lot.id,
-      nomLot: lot.lot_comment || lot.lot_reference || lot.lot_code,
-      debut: startDate,
-      fin: endDate,
-      periodeDisponibilite: { debut: startDate, fin: endDate },
-      qteTotale: quantity,
-      qteRestante: quantity,
-      DLC_DDM: lot.dlc ?? lot.ddm ?? undefined,
-      DLC_aReceptionEstimee: lot.dlc ?? lot.ddm ?? undefined,
-      commentaire: lot.notes ?? lot.lot_comment ?? undefined,
-      numeroLot: lot.lot_reference ?? undefined,
-      statut: mapLotStatus(lot.status),
-    };
-  });
+  lots.map((lot) => mapDbLotToProductionLot(lot, measurement));
 
 const pickLatestActiveLot = (lots: DbLot[]) => {
   const activeLots = lots.filter((lot) => lot.status === 'active');

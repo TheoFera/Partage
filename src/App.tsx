@@ -1031,6 +1031,7 @@ type ProfileRouteProps = {
   onStartOrderFromProduct: (product: Product) => void;
   onAddProductClick?: () => void;
   onOpenProduct: (productId: string) => void;
+  onRefreshProducts?: () => Promise<void> | void;
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
   onRegisterSave?: (handler: (() => void) | null) => void;
@@ -1060,6 +1061,7 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
   onStartOrderFromProduct,
   onAddProductClick,
   onOpenProduct,
+  onRefreshProducts,
   supabaseClient,
   onAvatarUpdated,
   onRegisterSave,
@@ -1245,6 +1247,7 @@ const ProfileRoute: React.FC<ProfileRouteProps> = ({
       onStartOrderFromProduct={onStartOrderFromProduct}
       onAddProductClick={resolvedIsOwn && profileUser.role === 'producer' ? onAddProductClick : undefined}
       onOpenProduct={onOpenProduct}
+      onRefreshProducts={onRefreshProducts}
       supabaseClient={supabaseClient ?? null}
       onAvatarUpdated={onAvatarUpdated}
       onRegisterSave={onRegisterSave}
@@ -1767,22 +1770,18 @@ export default function App() {
   const [guestLocationStatus, setGuestLocationStatus] = React.useState<
     'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported' | 'error'
   >('idle');
-  React.useEffect(() => {
-    let active = true;
-    listProducts()
-      .then((nextProducts) => {
-        if (!active) return;
-        setProducts(nextProducts);
-      })
-      .catch((error) => {
-        console.warn('Products listing error:', error);
-        if (!active) return;
-        setProducts([]);
-      });
-    return () => {
-      active = false;
-    };
+  const reloadProducts = React.useCallback(async () => {
+    try {
+      const nextProducts = await listProducts();
+      setProducts(nextProducts);
+    } catch (error) {
+      console.warn('Products listing error:', error);
+      setProducts([]);
+    }
   }, []);
+  React.useEffect(() => {
+    void reloadProducts();
+  }, [reloadProducts]);
   const requestGuestLocation = React.useCallback(() => {
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return;
     if (!navigator.geolocation) {
@@ -4994,6 +4993,7 @@ export default function App() {
                   onStartOrderFromProduct={handleStartOrderFromProduct}
                   onAddProductClick={openAddProductForm}
                   onOpenProduct={openProductView}
+                  onRefreshProducts={reloadProducts}
                   supabaseClient={supabaseClient}
                   onAvatarUpdated={handleAvatarUpdated}
                   onRegisterSave={registerProfileSaveHandler}
@@ -5033,6 +5033,7 @@ export default function App() {
                 onStartOrderFromProduct={handleStartOrderFromProduct}
                 onAddProductClick={openAddProductForm}
                 onOpenProduct={openProductView}
+                onRefreshProducts={reloadProducts}
                 supabaseClient={supabaseClient}
                 onAvatarUpdated={handleAvatarUpdated}
                 onRegisterSave={registerProfileSaveHandler}

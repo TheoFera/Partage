@@ -8,6 +8,7 @@ import {
   MapPin,
   Shield,
   Apple,
+  CalendarDays,
   Heart,
   ShoppingBag,
   Plus,
@@ -36,6 +37,7 @@ import {
 } from '../../../shared/constants/notificationEmailPreferences';
 import { Avatar } from '../../../shared/ui/Avatar';
 import { AvatarUploader } from '../components/AvatarUploader';
+import { LotsPlanningTab } from '../components/LotsPlanningTab';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from '../../products/components/ProductGroup';
 import { toast } from 'sonner';
 import {
@@ -44,7 +46,7 @@ import {
   PRODUCER_LABELS_YEAR_COLUMN,
 } from '../../../shared/constants/producerLabels';
 
-type TabKey = 'products' | 'orders' | 'selection';
+type TabKey = 'products' | 'orders' | 'selection' | 'lots_planning';
 type EditTabKey = 'general' | 'public' | 'notification' | 'structure' | 'sharer' | 'producer_settings';
 type LegalDocumentType =
   | 'producer_mandat'
@@ -401,6 +403,7 @@ interface ProfileViewProps {
   onStartOrderFromProduct?: (product: Product) => void;
   onAddProductClick?: () => void;
   onOpenProduct?: (productId: string) => void;
+  onRefreshProducts?: () => Promise<void> | void;
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
   onRegisterSave?: (handler: (() => void) | null) => void;
@@ -425,6 +428,7 @@ export function ProfileView({
   onStartOrderFromProduct,
   onAddProductClick,
   onOpenProduct,
+  onRefreshProducts,
   supabaseClient,
   onAvatarUpdated,
   onRegisterSave,
@@ -598,6 +602,7 @@ React.useEffect(() => {
     products: { value: productCount, meta: '' },
     orders: { value: ordersCount, meta: '' },
     selection: { value: selectionCount, meta: '' },
+    lots_planning: { value: productCount, meta: '' },
   };
 
   const tabOptions = React.useMemo(
@@ -608,6 +613,12 @@ React.useEffect(() => {
           label: 'Produits',
           icon: Apple,
           visible: isProducerProfile && (isOwnProfile || productCount > 0),
+        },
+        {
+          id: 'lots_planning' as TabKey,
+          label: 'Planning des lots',
+          icon: CalendarDays,
+          visible: isOwnProfile && isProducerProfile,
         },
         {
           id: 'orders' as TabKey,
@@ -798,6 +809,18 @@ React.useEffect(() => {
             subtitle="Sauvegardez un produit depuis les produits ou le swipe pour le retrouver ici."
           />
         </div>
+      );
+    }
+
+    if (activeTab === 'lots_planning') {
+      return (
+        <LotsPlanningTab
+          products={producerProducts}
+          supabaseClient={supabaseClient ?? null}
+          onAddProductClick={onAddProductClick}
+          onOpenProduct={handleOpenProduct}
+          onRefreshProducts={onRefreshProducts}
+        />
       );
     }
 
