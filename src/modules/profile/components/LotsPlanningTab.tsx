@@ -818,7 +818,7 @@ export function LotsPlanningTab({
                         return (
                           <div
                             key={month.key}
-                            className="flex flex-col items-center justify-center border-r border-gray-200 px-3 py-2 text-center text-[#374151]"
+                            className="flex shrink-0 flex-col items-center justify-center border-r border-gray-200 px-3 py-2 text-center text-[#374151]"
                             style={{ width: timelineMonthWidths[monthIndex] }}
                           >
                             <span className="text-sm font-bold leading-tight">{monthHeader.month}</span>
