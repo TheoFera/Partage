@@ -234,28 +234,45 @@ export function LotsPlanningTab({
     return visibleTimelineWidth / Math.max(1, targetVisibleDays);
   }, [targetVisibleDays, visibleTimelineWidth]);
 
-  const timelineWidth = Math.max(visibleTimelineWidth, Math.ceil(renderRange.totalDays * targetDayWidth));
+  const hasHorizontalOverflow = renderRange.totalDays > targetVisibleDays;
+  const timelineWidth = hasHorizontalOverflow
+    ? Math.max(visibleTimelineWidth, Math.ceil(renderRange.totalDays * targetDayWidth))
+    : visibleTimelineWidth;
   const effectiveDayWidth = timelineWidth / Math.max(1, renderRange.totalDays);
+  const toTimelinePercent = React.useCallback(
+    (offsetDays: number) => {
+      const clampedOffset = Math.min(Math.max(0, offsetDays), renderRange.totalDays);
+      return `${(clampedOffset / Math.max(1, renderRange.totalDays)) * 100}%`;
+    },
+    [renderRange.totalDays]
+  );
   const timelineMonthWidths = React.useMemo(
     () =>
       planningMonths.map((month, monthIndex) => {
+        const nextMonthOffsetDays =
+          monthIndex < planningMonths.length - 1 ? planningMonths[monthIndex + 1].offsetDays : renderRange.totalDays;
+
+        if (!hasHorizontalOverflow) {
+          return `${((nextMonthOffsetDays - month.offsetDays) / Math.max(1, renderRange.totalDays)) * 100}%`;
+        }
+
         const monthStart = month.offsetDays * effectiveDayWidth;
-        const nextMonthOffset =
-          monthIndex < planningMonths.length - 1
-            ? planningMonths[monthIndex + 1].offsetDays * effectiveDayWidth
-            : timelineWidth;
+        const nextMonthOffset = nextMonthOffsetDays * effectiveDayWidth;
         return Math.max(0, nextMonthOffset - monthStart);
       }),
-    [effectiveDayWidth, planningMonths, timelineWidth]
+    [effectiveDayWidth, hasHorizontalOverflow, planningMonths, renderRange.totalDays]
   );
-  const todayLineLeft = getPlanningOffsetDays(renderRange, todayIso) * effectiveDayWidth;
+  const todayLineOffsetDays = getPlanningOffsetDays(renderRange, todayIso);
+  const todayLineLeft = todayLineOffsetDays * effectiveDayWidth;
   const clampedTodayLineLeft = Math.min(Math.max(0, todayLineLeft), Math.max(0, timelineWidth - 2));
   const monthBoundaryOffsets = React.useMemo(
     () =>
       planningMonths
         .slice(1)
-        .map((month) => month.offsetDays * effectiveDayWidth),
-    [effectiveDayWidth, planningMonths]
+        .map((month) =>
+          hasHorizontalOverflow ? month.offsetDays * effectiveDayWidth : toTimelinePercent(month.offsetDays)
+        ),
+    [effectiveDayWidth, hasHorizontalOverflow, planningMonths, toTimelinePercent]
   );
   const getPlanningRowHeight = React.useCallback(
     (laneCount: number) =>
@@ -766,7 +783,11 @@ export function LotsPlanningTab({
                 >
                   <div
                     className="relative"
-                    style={{ width: timelineWidth, minWidth: timelineWidth, height: totalTimelineHeight }}
+                    style={{
+                      width: hasHorizontalOverflow ? timelineWidth : '100%',
+                      minWidth: hasHorizontalOverflow ? timelineWidth : '100%',
+                      height: totalTimelineHeight,
+                    }}
                   >
                     {monthBoundaryOffsets.map((offset, index) => (
                       <div
@@ -794,7 +815,7 @@ export function LotsPlanningTab({
                     <div
                       className="pointer-events-none absolute top-0"
                       style={{
-                        left: clampedTodayLineLeft,
+                        left: hasHorizontalOverflow ? clampedTodayLineLeft : toTimelinePercent(todayLineOffsetDays),
                         width: 0,
                         height: totalTimelineHeight,
                         zIndex: 90,
@@ -847,15 +868,26 @@ export function LotsPlanningTab({
                               const effectiveEndDate =
                                 timelineLot.endDate || renderRange.end.toISOString().slice(0, 10);
                               const endOffsetDays = getPlanningOffsetDays(renderRange, effectiveEndDate);
-                              const left = Math.max(0, startOffsetDays * effectiveDayWidth);
-                              const rawWidth = Math.max(
-                                effectiveDayWidth * 2,
-                                (endOffsetDays - startOffsetDays + 1) * effectiveDayWidth
+                              const widthPx = Math.min(
+                                Math.max(
+                                  effectiveDayWidth * 2,
+                                  (endOffsetDays - startOffsetDays + 1) * effectiveDayWidth
+                                ),
+                                Math.max(
+                                  effectiveDayWidth * 2,
+                                  timelineWidth - startOffsetDays * effectiveDayWidth - TIMELINE_END_PADDING
+                                )
                               );
-                              const width = Math.min(
-                                rawWidth,
-                                Math.max(effectiveDayWidth * 2, timelineWidth - left - TIMELINE_END_PADDING)
-                              );
+                              const left = hasHorizontalOverflow
+                                ? Math.max(0, startOffsetDays * effectiveDayWidth)
+                                : toTimelinePercent(startOffsetDays);
+                              const width = hasHorizontalOverflow
+                                ? widthPx
+                                : `${Math.max(
+                                    (2 / Math.max(1, renderRange.totalDays)) * 100,
+                                    ((endOffsetDays - startOffsetDays + 1) / Math.max(1, renderRange.totalDays)) *
+                                      100
+                                  )}%`;
                               const top =
                                 rowVerticalOffset +
                                 ROW_PADDING +
@@ -911,7 +943,7 @@ export function LotsPlanningTab({
                                     color: statusStyle.color,
                                   }}
                                 >
-                                  {width >= LOT_TEXT_MIN_WIDTH ? (
+                                  {widthPx >= LOT_TEXT_MIN_WIDTH ? (
                                     <span className="truncate">{timelineLot.lot.nomLot || 'Lot sans nom'}</span>
                                   ) : null}
                                 </button>

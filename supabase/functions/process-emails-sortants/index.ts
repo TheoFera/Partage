@@ -60,6 +60,8 @@ type InvoicePdfPayload = {
   currency: string;
   producer: PartyInfo;
   client: PartyInfo;
+  producerTitle?: string;
+  clientTitle?: string;
   orderCode?: string | null;
   pickupCode?: string | null;
   pickupAddress?: string | null;
@@ -179,7 +181,9 @@ async function generateInvoicePdf(payload: InvoicePdfPayload) {
 
   const drawPartyBlock = (title: string, party: PartyInfo, x: number, startY: number) => {
     let yCursor = startY;
-    page.drawText(title, { x, y: yCursor, size: 11, font: fontBold, color: rgb(0.12, 0.12, 0.12) });
+    const resolvedTitle =
+      x <= margin ? payload.producerTitle ?? title : payload.clientTitle ?? title;
+    page.drawText(resolvedTitle, { x, y: yCursor, size: 11, font: fontBold, color: rgb(0.12, 0.12, 0.12) });
     yCursor -= 16;
     if (party.name) {
       page.drawText(party.name, { x, y: yCursor, size: 10, font });
@@ -201,7 +205,9 @@ async function generateInvoicePdf(payload: InvoicePdfPayload) {
     return yCursor;
   };
 
-  drawPartyBlock("Producteur", payload.producer, margin, y);
+  const producerTitle = payload.producerTitle ?? "Producteur";
+  const clientTitle = payload.clientTitle ?? "Participant à la commande";
+  drawPartyBlock(producerTitle, payload.producer, margin, y);
   drawPartyBlock("Participant à la commande", payload.client, margin + columnWidth + columnGap, y);
 
   y -= 92;
@@ -650,6 +656,8 @@ Deno.serve(async (req) => {
           city: clientProfile?.city ?? null,
           postcode: clientProfile?.postcode ?? null,
         },
+        producerTitle: facture.serie === "PLAT_PROD" ? "Plateforme" : "Producteur",
+        clientTitle: facture.serie === "PLAT_PROD" ? "Producteur" : "Participant à la commande",
         orderCode: orderRow?.order_code ?? null,
         pickupCode,
         pickupAddress: buildPickupAddress(orderRow ?? undefined),
