@@ -1,7 +1,7 @@
 ﻿import React from 'react';
 import { createPortal } from 'react-dom';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { Loader2, Package, Plus } from 'lucide-react';
+import { ArrowRight, Loader2, Package, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Product, ProductionLot } from '../../../shared/types';
 import '../../products/pages/ProductDetailView.css';
@@ -35,24 +35,38 @@ type HoveredLotState = {
   productName: string;
   lotName: string;
   statusLabel: string;
+  statusStyle: { backgroundColor: string; borderColor: string; color: string };
   startLabel: string;
   endLabel: string;
   priceLabel: string;
+  quantityLabel: string;
   viewportLeft: number;
   viewportY: number;
 };
+
+type PlanningConfirmationState =
+  | {
+      action: 'create' | 'delete';
+      title: string;
+      message: string;
+      confirmLabel: string;
+      tone?: 'danger' | 'default';
+    }
+  | null;
 
 const LEFT_COLUMN_WIDTH = 220;
 const LANE_HEIGHT = 28;
 const LANE_GAP = 8;
 const ROW_PADDING = 12;
-const HEADER_HEIGHT = 52;
+const HEADER_HEIGHT = 64;
 const ACTION_COLUMN_WIDTH = 56;
 const LOT_TEXT_MIN_WIDTH = 104;
 const TIMELINE_END_PADDING = 12;
 const LOT_TOOLTIP_WIDTH = 288;
 const FALLBACK_TIMELINE_VIEWPORT_WIDTH = 720;
 const TODAY_LINE_COLOR = '#FF6B4A';
+const PRODUCT_ROW_VERTICAL_PADDING = 32;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const planningViewOptions = [
   { id: 'fit', label: 'Ajuster', visibleMonths: null },
@@ -63,10 +77,13 @@ const planningViewOptions = [
 
 type PlanningViewId = (typeof planningViewOptions)[number]['id'];
 
-const statusClassNames: Record<ProductionLot['statut'], string> = {
-  a_venir: 'bg-[#E5E7EB] text-[#374151] border-[#D1D5DB]',
-  en_cours: 'bg-[#DCFCE7] text-[#166534] border-[#86EFAC]',
-  epuise: 'bg-[#FEE2E2] text-[#991B1B] border-[#FCA5A5]',
+const statusStyles: Record<
+  ProductionLot['statut'],
+  { backgroundColor: string; borderColor: string; color: string }
+> = {
+  a_venir: { backgroundColor: '#D1D5DB', borderColor: '#9CA3AF', color: '#1F2937' },
+  en_cours: { backgroundColor: '#86EFAC', borderColor: '#22C55E', color: '#14532D' },
+  epuise: { backgroundColor: '#FCA5A5', borderColor: '#EF4444', color: '#7F1D1D' },
 };
 
 const buildLocalTodayIso = () => {
@@ -74,21 +91,68 @@ const buildLocalTodayIso = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
+const toUtcDate = (year: number, month: number, day: number) => new Date(Date.UTC(year, month, day));
+
+const addDaysUtc = (value: Date, days: number) =>
+  toUtcDate(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate() + days);
+
+const endOfMonthUtc = (value: Date) => toUtcDate(value.getUTCFullYear(), value.getUTCMonth() + 1, 0);
+
+const diffDaysUtc = (start: Date, end: Date) =>
+  Math.round(
+    (Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()) -
+      Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())) /
+      MS_PER_DAY
+  );
+
+const getRangeDaysForVisibleMonths = (rangeStart: Date, visibleMonths: number) => {
+  let totalDays = 0;
+  for (let monthOffset = 0; monthOffset < visibleMonths; monthOffset += 1) {
+    const monthStart = toUtcDate(rangeStart.getUTCFullYear(), rangeStart.getUTCMonth() + monthOffset, 1);
+    const monthEnd = endOfMonthUtc(monthStart);
+    totalDays += diffDaysUtc(monthStart, monthEnd) + 1;
+  }
+  return totalDays;
+};
+
+const formatPlanningMonthHeader = (date: Date) => {
+  const monthLabel = date.toLocaleDateString('fr-FR', { month: 'long' });
+  return {
+    month: monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1),
+    year: String(date.getFullYear()),
+  };
+};
+
 const buildLotTooltipLabel = (
   product: Product,
   lot: ProductionLot,
   startDate: string,
   endDate: string,
-  priceLabel: string
+  priceLabel: string,
+  quantityLabel: string
 ) =>
   [
     product.name,
     lot.nomLot || 'Lot sans nom',
     `Statut : ${formatProductionLotStatusLabel(lot.statut)}`,
     `Début : ${formatPlanningDateLabel(startDate)}`,
-    `Fin : ${endDate ? formatPlanningDateLabel(endDate) : 'Sans fin visible'}`,
+    `Fin : ${endDate ? formatPlanningDateLabel(endDate) : 'Non précisée'}`,
     `Prix : ${priceLabel}`,
+    `Quantités : ${quantityLabel}`,
   ].join('\n');
+
+const formatLotQuantityLabel = (product: Product, lot: ProductionLot) => {
+  const unitLabel = product.measurement === 'kg' ? 'Kg' : 'unité';
+  const formatValue = (value?: number) => {
+    if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+    if (product.measurement === 'kg') {
+      const digits = Number.isInteger(value) ? 0 : 2;
+      return value.toFixed(digits).replace('.', ',');
+    }
+    return String(Math.round(value));
+  };
+  return `${formatValue(lot.qteTotale)} ${unitLabel} / ${formatValue(lot.qteRestante)} ${unitLabel}`;
+};
 
 export function LotsPlanningTab({
   products,
@@ -97,7 +161,17 @@ export function LotsPlanningTab({
   onOpenProduct,
   onRefreshProducts,
 }: LotsPlanningTabProps) {
-  const { items, loading, error, savingLotId, saveLot } = useProducerLotsPlanning({
+  const {
+    items,
+    loading,
+    error,
+    savingLotId,
+    deletingLotId,
+    lotOrderUsageByLotId,
+    ensureLotOrderUsage,
+    saveLot,
+    deleteLot,
+  } = useProducerLotsPlanning({
     enabled: true,
     products,
     supabaseClient,
@@ -113,17 +187,15 @@ export function LotsPlanningTab({
   const [planningView, setPlanningView] = React.useState<PlanningViewId>('fit');
   const [timelineViewportWidth, setTimelineViewportWidth] = React.useState(0);
   const [timelineScrollbarHeight, setTimelineScrollbarHeight] = React.useState(0);
+  const [productContentHeights, setProductContentHeights] = React.useState<Record<string, number>>({});
+  const [confirmationState, setConfirmationState] = React.useState<PlanningConfirmationState>(null);
   const timelineScrollRef = React.useRef<HTMLDivElement | null>(null);
   const didAutoScrollToTodayRef = React.useRef(false);
+  const productContentObserversRef = React.useRef(new Map<string, ResizeObserver>());
 
   const todayIso = React.useMemo(() => buildLocalTodayIso(), []);
   const allLots = React.useMemo(() => items.flatMap((item) => item.lots), [items]);
   const planningRange = React.useMemo(() => buildPlanningRange(allLots), [allLots]);
-  const planningMonths = React.useMemo(() => buildPlanningMonths(planningRange), [planningRange]);
-  const rows = React.useMemo(
-    () => buildPlanningRows(items, planningRange.end),
-    [items, planningRange.end]
-  );
   const selectedPlanningView = React.useMemo(
     () => planningViewOptions.find((option) => option.id === planningView) ?? planningViewOptions[0],
     [planningView]
@@ -134,27 +206,49 @@ export function LotsPlanningTab({
   );
 
   const targetVisibleDays = React.useMemo(() => {
-    if (!planningMonths.length) return 31;
-
     if (!selectedPlanningView.visibleMonths) {
-      return Math.min(planningRange.totalDays, 366);
-    }
-
-    if (planningMonths.length <= selectedPlanningView.visibleMonths) {
       return planningRange.totalDays;
     }
+    return getRangeDaysForVisibleMonths(planningRange.start, selectedPlanningView.visibleMonths);
+  }, [planningRange.start, planningRange.totalDays, selectedPlanningView.visibleMonths]);
 
-    return planningMonths
-      .slice(0, selectedPlanningView.visibleMonths)
-      .reduce((totalDays, month) => totalDays + month.days, 0);
-  }, [planningMonths, planningRange.totalDays, selectedPlanningView.visibleMonths]);
+  const renderRange = React.useMemo(() => {
+    if (!selectedPlanningView.visibleMonths || planningRange.totalDays >= targetVisibleDays) {
+      return planningRange;
+    }
+    const end = addDaysUtc(planningRange.start, targetVisibleDays - 1);
+    return {
+      start: planningRange.start,
+      end,
+      totalDays: targetVisibleDays,
+    };
+  }, [planningRange, selectedPlanningView.visibleMonths, targetVisibleDays]);
 
-  const effectiveDayWidth = React.useMemo(() => {
-    return Math.max(1, visibleTimelineWidth / Math.max(1, targetVisibleDays));
+  const planningMonths = React.useMemo(() => buildPlanningMonths(renderRange), [renderRange]);
+  const rows = React.useMemo(
+    () => buildPlanningRows(items, renderRange.end),
+    [items, renderRange.end]
+  );
+
+  const targetDayWidth = React.useMemo(() => {
+    return visibleTimelineWidth / Math.max(1, targetVisibleDays);
   }, [targetVisibleDays, visibleTimelineWidth]);
 
-  const timelineWidth = planningRange.totalDays * effectiveDayWidth;
-  const todayLineLeft = getPlanningOffsetDays(planningRange, todayIso) * effectiveDayWidth;
+  const timelineWidth = Math.max(visibleTimelineWidth, Math.ceil(renderRange.totalDays * targetDayWidth));
+  const effectiveDayWidth = timelineWidth / Math.max(1, renderRange.totalDays);
+  const timelineMonthWidths = React.useMemo(
+    () =>
+      planningMonths.map((month, monthIndex) => {
+        const monthStart = month.offsetDays * effectiveDayWidth;
+        const nextMonthOffset =
+          monthIndex < planningMonths.length - 1
+            ? planningMonths[monthIndex + 1].offsetDays * effectiveDayWidth
+            : timelineWidth;
+        return Math.max(0, nextMonthOffset - monthStart);
+      }),
+    [effectiveDayWidth, planningMonths, timelineWidth]
+  );
+  const todayLineLeft = getPlanningOffsetDays(renderRange, todayIso) * effectiveDayWidth;
   const clampedTodayLineLeft = Math.min(Math.max(0, todayLineLeft), Math.max(0, timelineWidth - 2));
   const monthBoundaryOffsets = React.useMemo(
     () =>
@@ -168,9 +262,19 @@ export function LotsPlanningTab({
       laneCount * LANE_HEIGHT + Math.max(0, laneCount - 1) * LANE_GAP + ROW_PADDING * 2,
     []
   );
-  const rowHeights = React.useMemo(
+  const baseRowHeights = React.useMemo(
     () => rows.map((row) => getPlanningRowHeight(row.laneCount)),
     [getPlanningRowHeight, rows]
+  );
+  const rowHeights = React.useMemo(
+    () =>
+      rows.map((row, rowIndex) =>
+        Math.max(
+          baseRowHeights[rowIndex],
+          (productContentHeights[row.product.id] ?? 0) + PRODUCT_ROW_VERTICAL_PADDING
+        )
+      ),
+    [baseRowHeights, productContentHeights, rows]
   );
   const timelineBodyHeight = React.useMemo(
     () => rowHeights.reduce((total, height) => total + height, 0),
@@ -183,6 +287,22 @@ export function LotsPlanningTab({
     () => items.find((item) => item.product.id === drawerProductId) ?? null,
     [drawerProductId, items]
   );
+  const activeDrawerLot = React.useMemo(() => {
+    if (!lotDraft) return null;
+    if (drawerMode === 'create') return lotDraft;
+    return activePlanningItem?.lots.find(
+      (item) => item.lot.id === lotDraft.id || item.lotDbId === lotDraft.lotDbId
+    )?.lot ?? lotDraft;
+  }, [activePlanningItem, drawerMode, lotDraft]);
+  const activeDrawerLotId = activeDrawerLot?.id ?? null;
+  const activeDrawerLotHasOrders =
+    activeDrawerLotId && drawerMode === 'edit' ? lotOrderUsageByLotId[activeDrawerLotId] : undefined;
+  const canDeleteDrawerLot = Boolean(
+    activeDrawerLot &&
+      drawerMode === 'edit' &&
+      (activeDrawerLot.statut === 'a_venir' ||
+        (activeDrawerLot.statut === 'en_cours' && activeDrawerLotHasOrders === false))
+  );
 
   const closeDrawer = React.useCallback(() => {
     setDrawerOpen(false);
@@ -190,6 +310,7 @@ export function LotsPlanningTab({
     setDrawerProductId(null);
     setLotDraft(null);
     setSelectedLotId(null);
+    setConfirmationState(null);
   }, []);
 
   React.useEffect(() => {
@@ -202,8 +323,85 @@ export function LotsPlanningTab({
   }, [closeDrawer, drawerOpen]);
 
   React.useEffect(() => {
+    if (
+      !drawerOpen ||
+      drawerMode !== 'edit' ||
+      !activeDrawerLotId ||
+      !activeDrawerLot?.lotDbId ||
+      activeDrawerLot.statut !== 'en_cours'
+    ) {
+      return;
+    }
+    void ensureLotOrderUsage({ lotId: activeDrawerLotId, lotDbId: activeDrawerLot.lotDbId });
+  }, [activeDrawerLot, activeDrawerLotId, drawerMode, drawerOpen, ensureLotOrderUsage]);
+
+  const updateProductContentHeight = React.useCallback((productId: string, height: number) => {
+    setProductContentHeights((previousHeights) => {
+      const nextHeight = Math.ceil(height);
+      if (previousHeights[productId] === nextHeight) {
+        return previousHeights;
+      }
+      return {
+        ...previousHeights,
+        [productId]: nextHeight,
+      };
+    });
+  }, []);
+
+  const setProductContentNode = React.useCallback(
+    (productId: string) => (node: HTMLDivElement | null) => {
+      const existingObserver = productContentObserversRef.current.get(productId);
+      if (existingObserver) {
+        existingObserver.disconnect();
+        productContentObserversRef.current.delete(productId);
+      }
+
+      if (!node) {
+        return;
+      }
+
+      updateProductContentHeight(productId, node.getBoundingClientRect().height);
+
+      if (typeof ResizeObserver === 'undefined') {
+        return;
+      }
+
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        updateProductContentHeight(productId, entry.contentRect.height);
+      });
+
+      observer.observe(node);
+      productContentObserversRef.current.set(productId, observer);
+    },
+    [updateProductContentHeight]
+  );
+
+  React.useEffect(
+    () => () => {
+      productContentObserversRef.current.forEach((observer) => observer.disconnect());
+      productContentObserversRef.current.clear();
+    },
+    []
+  );
+
+  React.useEffect(() => {
+    const currentProductIds = new Set(rows.map((row) => row.product.id));
+    setProductContentHeights((previousHeights) => {
+      const nextEntries = Object.entries(previousHeights).filter(([productId]) =>
+        currentProductIds.has(productId)
+      );
+      if (nextEntries.length === Object.keys(previousHeights).length) {
+        return previousHeights;
+      }
+      return Object.fromEntries(nextEntries);
+    });
+  }, [rows]);
+
+  React.useEffect(() => {
     didAutoScrollToTodayRef.current = false;
-  }, [planningRange.start.toISOString(), planningRange.end.toISOString(), planningView, timelineViewportWidth]);
+  }, [renderRange.start.toISOString(), renderRange.end.toISOString(), planningView, timelineViewportWidth]);
 
   React.useEffect(() => {
     const node = timelineScrollRef.current;
@@ -294,7 +492,8 @@ export function LotsPlanningTab({
       lot: ProductionLot,
       startDate: string,
       endDate: string,
-      priceLabel: string
+      priceLabel: string,
+      quantityLabel: string
     ) => {
       const rect = event.currentTarget.getBoundingClientRect();
       const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : rect.left + rect.width;
@@ -305,9 +504,11 @@ export function LotsPlanningTab({
         productName: product.name,
         lotName: lot.nomLot || 'Lot sans nom',
         statusLabel: formatProductionLotStatusLabel(lot.statut),
+        statusStyle: statusStyles[lot.statut],
         startLabel: formatPlanningDateLabel(startDate),
-        endLabel: endDate ? formatPlanningDateLabel(endDate) : 'Sans fin visible',
+        endLabel: endDate ? formatPlanningDateLabel(endDate) : 'Non précisée',
         priceLabel,
+        quantityLabel,
         viewportLeft,
         viewportY: rect.top - 12,
       });
@@ -390,7 +591,7 @@ export function LotsPlanningTab({
     });
   }, []);
 
-  const handleSave = React.useCallback(async () => {
+  const performSave = React.useCallback(async () => {
     if (!lotDraft || !activePlanningItem) return;
     const validationMessage = validateProductionLotDraft(lotDraft);
     if (validationMessage) {
@@ -412,6 +613,58 @@ export function LotsPlanningTab({
       toast.error(getLotSaveErrorMessage(saveError));
     }
   }, [activePlanningItem, closeDrawer, drawerMode, lotDraft, saveLot]);
+
+  const handleSave = React.useCallback(() => {
+    if (!lotDraft || !activePlanningItem) return;
+    if (drawerMode === 'create') {
+      setConfirmationState({
+        action: 'create',
+        title: 'Créer ce nouveau lot ?',
+        message: `Êtes-vous sûr de vouloir créer ce nouveau lot pour le produit ${activePlanningItem.product.name} ?`,
+        confirmLabel: 'Créer le lot',
+      });
+      return;
+    }
+    void performSave();
+  }, [activePlanningItem, drawerMode, lotDraft, performSave]);
+
+  const performDelete = React.useCallback(async () => {
+    if (!activePlanningItem || !activeDrawerLot) return;
+    try {
+      await deleteLot({ productId: activePlanningItem.product.id, lot: activeDrawerLot });
+      toast.success('Lot supprimé.');
+      closeDrawer();
+    } catch (deleteError) {
+      console.error('Profile lots planning delete error:', deleteError);
+      const message =
+        deleteError instanceof Error && deleteError.message
+          ? deleteError.message
+          : "Impossible de supprimer le lot.";
+      toast.error(message);
+    }
+  }, [activeDrawerLot, activePlanningItem, closeDrawer, deleteLot]);
+
+  const handleRequestDelete = React.useCallback(() => {
+    if (!activeDrawerLot || !canDeleteDrawerLot) return;
+    setConfirmationState({
+      action: 'delete',
+      title: 'Supprimer ce lot ?',
+      message: 'Voulez-vous vraiment supprimer ce lot ?',
+      confirmLabel: 'Supprimer',
+      tone: 'danger',
+    });
+  }, [activeDrawerLot, canDeleteDrawerLot]);
+
+  const handleConfirmAction = React.useCallback(async () => {
+    if (!confirmationState) return;
+    if (confirmationState.action === 'create') {
+      setConfirmationState(null);
+      await performSave();
+      return;
+    }
+    setConfirmationState(null);
+    await performDelete();
+  }, [confirmationState, performDelete, performSave]);
 
   if (!products.length) {
     return (
@@ -560,20 +813,25 @@ export function LotsPlanningTab({
                     </div>
 
                     <div className="flex items-stretch border-b border-gray-200 bg-[#FAFAFA]" style={{ height: HEADER_HEIGHT }}>
-                      {planningMonths.map((month) => (
-                        <div
-                          key={month.key}
-                          className="flex items-center border-r border-gray-200 px-3 py-3 text-xs font-semibold text-[#374151]"
-                          style={{ width: month.days * effectiveDayWidth }}
-                        >
-                          {month.label}
-                        </div>
-                      ))}
+                      {planningMonths.map((month, monthIndex) => {
+                        const monthHeader = formatPlanningMonthHeader(month.start);
+                        return (
+                          <div
+                            key={month.key}
+                            className="flex flex-col items-center justify-center border-r border-gray-200 px-3 py-2 text-center text-[#374151]"
+                            style={{ width: timelineMonthWidths[monthIndex] }}
+                          >
+                            <span className="text-sm font-bold leading-tight">{monthHeader.month}</span>
+                            <span className="text-sm font-bold leading-tight">{monthHeader.year}</span>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div className="bg-white">
                       {rows.map((row, rowIndex) => {
                         const rowHeight = rowHeights[rowIndex];
+                        const rowVerticalOffset = Math.max(0, (rowHeight - baseRowHeights[rowIndex]) / 2);
 
                         return (
                           <div
@@ -585,10 +843,10 @@ export function LotsPlanningTab({
                             }}
                           >
                             {row.lots.map((timelineLot) => {
-                              const startOffsetDays = getPlanningOffsetDays(planningRange, timelineLot.startDate);
+                              const startOffsetDays = getPlanningOffsetDays(renderRange, timelineLot.startDate);
                               const effectiveEndDate =
-                                timelineLot.endDate || planningRange.end.toISOString().slice(0, 10);
-                              const endOffsetDays = getPlanningOffsetDays(planningRange, effectiveEndDate);
+                                timelineLot.endDate || renderRange.end.toISOString().slice(0, 10);
+                              const endOffsetDays = getPlanningOffsetDays(renderRange, effectiveEndDate);
                               const left = Math.max(0, startOffsetDays * effectiveDayWidth);
                               const rawWidth = Math.max(
                                 effectiveDayWidth * 2,
@@ -598,9 +856,14 @@ export function LotsPlanningTab({
                                 rawWidth,
                                 Math.max(effectiveDayWidth * 2, timelineWidth - left - TIMELINE_END_PADDING)
                               );
-                              const top = ROW_PADDING + timelineLot.laneIndex * (LANE_HEIGHT + LANE_GAP);
+                              const top =
+                                rowVerticalOffset +
+                                ROW_PADDING +
+                                timelineLot.laneIndex * (LANE_HEIGHT + LANE_GAP);
                               const lotPriceLabel = formatLotPriceWithUnit(row.product, timelineLot.priceCents);
+                              const lotQuantityLabel = formatLotQuantityLabel(row.product, timelineLot.lot);
                               const isSelected = selectedLotId === (timelineLot.lot.lotDbId || timelineLot.lot.id);
+                              const statusStyle = statusStyles[timelineLot.lot.statut];
 
                               return (
                                 <button
@@ -613,7 +876,8 @@ export function LotsPlanningTab({
                                       timelineLot.lot,
                                       timelineLot.startDate,
                                       timelineLot.endDate,
-                                      lotPriceLabel
+                                      lotPriceLabel,
+                                      lotQuantityLabel
                                     )
                                   }
                                   onMouseLeave={hideHoveredLot}
@@ -624,7 +888,8 @@ export function LotsPlanningTab({
                                       timelineLot.lot,
                                       timelineLot.startDate,
                                       timelineLot.endDate,
-                                      lotPriceLabel
+                                      lotPriceLabel,
+                                      lotQuantityLabel
                                     )
                                   }
                                   onBlur={hideHoveredLot}
@@ -635,12 +900,15 @@ export function LotsPlanningTab({
                                   }}
                                   className={`absolute z-10 flex cursor-pointer items-center overflow-hidden rounded-full border px-3 text-left text-sm font-medium shadow-sm transition hover:brightness-[0.98] focus:outline-none focus:ring-2 focus:ring-[#FF6B4A] ${
                                     isSelected ? 'ring-2 ring-[#FF6B4A] ring-offset-1' : ''
-                                  } ${statusClassNames[timelineLot.lot.statut]}`}
+                                  }`}
                                   style={{
                                     left,
                                     top,
                                     width,
                                     height: LANE_HEIGHT,
+                                    backgroundColor: statusStyle.backgroundColor,
+                                    borderColor: statusStyle.borderColor,
+                                    color: statusStyle.color,
                                   }}
                                 >
                                   {width >= LOT_TEXT_MIN_WIDTH ? (
@@ -668,23 +936,23 @@ export function LotsPlanningTab({
                   {rows.map((row, rowIndex) => (
                     <div
                       key={`planning-product-row-${row.product.id}`}
-                      className="flex items-center px-4 py-4"
+                      className="flex items-center min-w-0 px-4 py-4"
                       style={{
                         height: rowHeights[rowIndex],
                         borderTop: rowIndex === 0 ? 'none' : '1px solid #E5E7EB',
                       }}
                     >
-                      <div className="space-y-1">
+                      <div ref={setProductContentNode(row.product.id)} className="min-w-0 w-full space-y-1">
                         {onOpenProduct ? (
                           <button
                             type="button"
                             onClick={() => handleOpenProduct(row.product.id)}
-                            className="text-left font-semibold text-[#1F2937] transition hover:text-[#FF6B4A] focus:outline-none focus:text-[#FF6B4A]"
+                            className="block w-full whitespace-normal break-words text-left font-semibold text-[#1F2937] transition hover:text-[#FF6B4A] focus:outline-none focus:text-[#FF6B4A]"
                           >
                             {row.product.name}
                           </button>
                         ) : (
-                          <p className="font-semibold text-[#1F2937]">{row.product.name}</p>
+                          <p className="whitespace-normal break-words font-semibold text-[#1F2937]">{row.product.name}</p>
                         )}
                         <p className="text-xs text-[#6B7280]">
                           {row.lots.length ? `${row.lots.length} lot${row.lots.length > 1 ? 's' : ''}` : 'Aucun lot planifié'}
@@ -725,7 +993,7 @@ export function LotsPlanningTab({
 
         {drawerOpen && lotDraft ? (
           <aside className="xl:sticky xl:top-24 xl:self-start">
-            <div className="pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--md">
+            <div className="relative pd-card pd-card--soft pd-card--dashed pd-stack pd-stack--md">
               <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
                 <div className="pd-row pd-gap-sm">
                   <Package className="pd-icon pd-icon--accent" />
@@ -739,11 +1007,22 @@ export function LotsPlanningTab({
                   </div>
                 </div>
                 <div className="pd-row pd-row--wrap pd-gap-sm">
+                  {canDeleteDrawerLot ? (
+                    <button
+                      type="button"
+                      onClick={handleRequestDelete}
+                      className="pd-btn pd-btn--outline pd-btn--pill"
+                      disabled={deletingLotId === activeDrawerLotId || savingLotId === lotDraft.id}
+                    >
+                      {deletingLotId === activeDrawerLotId ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Supprimer
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => void handleSave()}
+                    onClick={handleSave}
                     className="pd-btn pd-btn--primary pd-btn--pill"
-                    disabled={!lotDraft || savingLotId === lotDraft.id}
+                    disabled={!lotDraft || savingLotId === lotDraft.id || deletingLotId === activeDrawerLotId}
                   >
                     {savingLotId === lotDraft?.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                     Enregistrer
@@ -752,6 +1031,7 @@ export function LotsPlanningTab({
                     type="button"
                     onClick={closeDrawer}
                     className="pd-btn pd-btn--outline pd-btn--pill"
+                    disabled={savingLotId === lotDraft.id || deletingLotId === activeDrawerLotId}
                   >
                     Fermer
                   </button>
@@ -856,6 +1136,40 @@ export function LotsPlanningTab({
                   rows={3}
                 />
               </label>
+              {confirmationState ? (
+                <div className="absolute inset-0 z-30 flex items-center justify-center rounded-[inherit] bg-white/82 p-4 backdrop-blur-[1px]">
+                  <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-5 shadow-xl">
+                    <div className="space-y-2">
+                      <p className="text-base font-semibold text-[#1F2937]">{confirmationState.title}</p>
+                      <p className="text-sm text-[#6B7280]">{confirmationState.message}</p>
+                    </div>
+                    <div className="mt-4 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmationState(null)}
+                        className="pd-btn pd-btn--outline pd-btn--pill"
+                        disabled={savingLotId === lotDraft.id || deletingLotId === activeDrawerLotId}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleConfirmAction()}
+                        className={`pd-btn pd-btn--pill ${
+                          confirmationState.tone === 'danger' ? 'pd-btn--outline' : 'pd-btn--primary'
+                        }`}
+                        disabled={savingLotId === lotDraft.id || deletingLotId === activeDrawerLotId}
+                      >
+                        {(savingLotId === lotDraft.id && confirmationState.action === 'create') ||
+                        (deletingLotId === activeDrawerLotId && confirmationState.action === 'delete') ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : null}
+                        {confirmationState.confirmLabel}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </aside>
         ) : null}
@@ -888,22 +1202,33 @@ export function LotsPlanningTab({
                     <p className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">{hoveredLot.productName}</p>
                     <p className="text-base font-semibold text-[#1F2937]">{hoveredLot.lotName}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="inline-flex rounded-full border border-gray-200 bg-[#F9FAFB] px-2.5 py-1 text-xs font-medium text-[#374151]">
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-[#F9FAFB] px-3 py-2.5">
+                    <span
+                      className="inline-flex shrink-0 items-center rounded-full border px-3 py-1.5 text-xs font-semibold leading-none"
+                      style={{
+                        backgroundColor: hoveredLot.statusStyle.backgroundColor,
+                        borderColor: hoveredLot.statusStyle.borderColor,
+                        color: hoveredLot.statusStyle.color,
+                      }}
+                    >
                       {hoveredLot.statusLabel}
                     </span>
-                    <span className="inline-flex rounded-full border border-gray-200 bg-[#F9FAFB] px-2.5 py-1 text-xs text-[#6B7280]">
+                    <span className="text-sm font-semibold text-[#374151]">
                       {hoveredLot.priceLabel}
                     </span>
                   </div>
-                  <dl className="grid grid-cols-1 gap-2 text-sm">
-                    <div className="flex items-start justify-between gap-3">
-                      <dt className="text-[#6B7280]">Début</dt>
-                      <dd className="text-right text-[#1F2937]">{hoveredLot.startLabel}</dd>
+                  <dl className="space-y-2 text-sm">
+                    <div className="flex items-center gap-3">
+                      <dt className="w-20 shrink-0 text-[#6B7280]">Période</dt>
+                      <dd className="flex flex-1 items-center justify-center whitespace-nowrap text-xs font-medium text-[#1F2937]">
+                        <span>{hoveredLot.startLabel}</span>
+                        <ArrowRight className="h-2.5 w-4.5 shrink-0 text-[#9CA3AF]" />
+                        <span>{hoveredLot.endLabel}</span>
+                      </dd>
                     </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <dt className="text-[#6B7280]">Fin</dt>
-                      <dd className="text-right text-[#1F2937]">{hoveredLot.endLabel}</dd>
+                    <div className="flex items-center gap-3">
+                      <dt className="w-20 shrink-0 text-[#6B7280]">Quantités</dt>
+                      <dd className="flex-1 text-center font-medium text-[#1F2937]">{hoveredLot.quantityLabel}</dd>
                     </div>
                   </dl>
                 </div>
