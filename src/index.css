@@ -2494,31 +2494,50 @@ html {
     width: 100%;
   }
 
-  .profile-tabs {
+  .profile-tabs--compact {
     justify-content: space-between;
     gap: 0;
     overflow-x: hidden;
     width: 100%;
   }
 
-  .profile-tab {
+  .profile-tabs--compact .profile-tab {
     flex: 1 1 0;
     justify-content: center;
   }
 
-  .profile-tab-label,
-  .profile-tab-count {
+  .profile-tabs--compact .profile-tab-label,
+  .profile-tabs--compact .profile-tab-count {
     display: none;
   }
 
-  .profile-tabs {
-    justify-content: space-between;
-    gap: 0;
+  .profile-tabs--edit {
+    gap: 0.5rem;
+    overflow-x: auto;
+    width: 100%;
+    padding-bottom: 0.75rem;
+    scroll-snap-type: x proximity;
   }
 
-  .profile-tab {
-    flex: 1;
+  .profile-tabs--edit .profile-tab {
+    flex: 0 0 auto;
     justify-content: center;
+    padding: 0.625rem 0.9rem;
+    border: 1px solid #E5E7EB;
+    border-radius: 9999px;
+    border-bottom-width: 1px;
+    background: #FFFFFF;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
+
+  .profile-tabs--edit .profile-tab--active {
+    border-color: #FF6B4A;
+    background: #FFF1E6;
+  }
+
+  .profile-tabs--edit .profile-tab-label {
+    display: inline;
   }
 
   .profile-stat-value {

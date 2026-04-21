@@ -862,17 +862,22 @@ React.useEffect(() => {
                   )}
                 </div>
                 {(shouldShowAddressLine || user.website) && (
-                  <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-[#6B7280] md:justify-start">
+                  <div className="flex w-full flex-col items-center gap-2 text-sm text-[#6B7280] md:flex-row md:flex-wrap md:items-center md:justify-start md:gap-4">
                     {shouldShowAddressLine && (
-                      <div className="profile-contact-row flex items-center gap-2">
-                        <MapPin className="w-4 h-4" />
+                      <div className="profile-contact-row flex w-full items-start justify-center gap-2 text-center md:w-auto md:justify-start md:text-left">
+                        <MapPin className="h-4 w-4 shrink-0 mt-0.5" />
                         <span>{addressLine}</span>
                       </div>
                     )}
                     {user.website && (
-                      <div className="profile-contact-row flex items-center gap-2">
-                        <Link2 className="w-4 h-4" />
-                        <a href={user.website} className="text-[#FF6B4A] hover:underline" target="_blank" rel="noreferrer">
+                      <div className="profile-contact-row flex w-full items-start justify-center gap-2 text-center md:w-auto md:justify-start md:text-left">
+                        <Link2 className="h-4 w-4 shrink-0 mt-0.5" />
+                        <a
+                          href={user.website}
+                          className="text-[#FF6B4A] hover:underline"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           {user.website}
                         </a>
                       </div>
@@ -880,8 +885,8 @@ React.useEffect(() => {
                   </div>
                 )}
                 {user.phonePublic && (
-                  <div className="profile-contact-row flex items-center justify-center gap-2 text-sm text-[#6B7280] md:justify-start">
-                    <Phone className="w-4 h-4" />
+                  <div className="profile-contact-row flex w-full items-start justify-center gap-2 text-sm text-[#6B7280] text-center md:justify-start md:text-left">
+                    <Phone className="h-4 w-4 shrink-0 mt-0.5" />
                     <span>{user.phonePublic}</span>
                   </div>
                 )}
@@ -945,7 +950,7 @@ React.useEffect(() => {
           )}
         </div>
         <div className="profile-tabs-wrapper" aria-label="Sections du profil">
-          <div className="profile-tabs">
+          <div className="profile-tabs profile-tabs--compact">
             {tabStats.map((stat) => {
               const isActive = activeTab === stat.id;
               const Icon = stat.icon;
@@ -1192,6 +1197,7 @@ function ProfileEditPanel({
     user.accountType ?? 'individual'
   );
   const [editTab, setEditTab] = React.useState<EditTabKey>('general');
+  const isProducerSettingsTabActive = editTab === 'producer_settings';
   const [phonePublic, setPhonePublic] = React.useState(user.phonePublic ?? '');
   const [contactEmailPublic, setContactEmailPublic] = React.useState(user.contactEmailPublic ?? '');
   const [notificationEmailPreferences, setNotificationEmailPreferences] = React.useState(() =>
@@ -1899,7 +1905,7 @@ function ProfileEditPanel({
   };
 
   React.useEffect(() => {
-    if (producerDeliveryEnabled) return;
+    if (producerDeliveryEnabled && isProducerSettingsTabActive) return;
     deliveryMapInvalidateCleanupRef.current?.();
     deliveryMapInvalidateCleanupRef.current = null;
     deliveryMapLifecycleCleanupRef.current?.();
@@ -1909,10 +1915,12 @@ function ProfileEditPanel({
       deliveryMapRef.current = null;
       deliveryMapLayerRef.current = null;
     }
-  }, [producerDeliveryEnabled]);
+  }, [isProducerSettingsTabActive, producerDeliveryEnabled]);
 
   React.useEffect(() => {
-    if (!producerDeliveryEnabled || !deliveryMapContainerRef.current || deliveryMapRef.current) return;
+    if (!isProducerSettingsTabActive || !producerDeliveryEnabled || !deliveryMapContainerRef.current || deliveryMapRef.current) {
+      return;
+    }
     const container = deliveryMapContainerRef.current;
     const map = L.map(container, {
       zoomControl: true,
@@ -1957,7 +1965,7 @@ function ProfileEditPanel({
         deliveryMapRef.current = null;
       }
     };
-  }, [producerDeliveryEnabled]);
+  }, [isProducerSettingsTabActive, producerDeliveryEnabled]);
 
   React.useEffect(() => {
     if (!producerDeliveryEnabled) return;
@@ -1978,7 +1986,7 @@ function ProfileEditPanel({
 
   React.useEffect(() => {
     const map = deliveryMapRef.current;
-    if (!producerDeliveryEnabled || !map) return;
+    if (!isProducerSettingsTabActive || !producerDeliveryEnabled || !map) return;
 
     const handleMapClick = (event: L.LeafletMouseEvent) => {
       if (producerDeliveryUseProfileAddress || producerSettingsDisabled) return;
@@ -1993,10 +2001,10 @@ function ProfileEditPanel({
     return () => {
       map.off('click', handleMapClick);
     };
-  }, [producerDeliveryEnabled, producerDeliveryUseProfileAddress, producerSettingsDisabled]);
+  }, [isProducerSettingsTabActive, producerDeliveryEnabled, producerDeliveryUseProfileAddress, producerSettingsDisabled]);
 
   React.useEffect(() => {
-    if (!producerDeliveryEnabled || !deliveryMapRef.current) return;
+    if (!isProducerSettingsTabActive || !producerDeliveryEnabled || !deliveryMapRef.current) return;
     if (!deliveryMapLayerRef.current) {
       deliveryMapLayerRef.current = L.layerGroup().addTo(deliveryMapRef.current);
     }
@@ -2037,6 +2045,7 @@ function ProfileEditPanel({
     deliveryMapInvalidateCleanupRef.current?.();
     deliveryMapInvalidateCleanupRef.current = scheduleLeafletInvalidate(deliveryMapRef.current);
   }, [
+    isProducerSettingsTabActive,
     producerDeliveryEnabled,
     deliveryMapCenter,
     normalizedDeliveryRadiusKm,
@@ -3649,7 +3658,7 @@ function ProfileEditPanel({
         </div>
 
         <div className="profile-tabs-wrapper" aria-label="Onglets de profil">
-          <div className="profile-tabs">
+          <div className="profile-tabs profile-tabs--edit">
             {editTabs.map((tab) => {
               const isActive = editTab === tab.id;
               return (
