@@ -577,6 +577,7 @@ export function OrderClientView({
   const [participantsPanelOpen, setParticipantsPanelOpen] = React.useState(false);
   const participantsPanelRef = React.useRef<HTMLDivElement | null>(null);
   const participantsButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const participantsPrintScopeRef = React.useRef<HTMLDivElement | null>(null);
   const [participantInvoices, setParticipantInvoices] = React.useState<Facture[]>(
     () => cachedOrderClientSnapshot?.participantInvoices ?? []
   );
@@ -2611,6 +2612,7 @@ const sharerAvatarUpdatedAt =
       : isOwner
         ? 'Aucun participant pour le moment à la commande'
         : 'Liste des participants à la commande';
+  const canPrintParticipantsTable = isProducer && canShowParticipants && participantsWithTotals.length > 0;
   const participantsCountFooterLabel = `${participantsWithTotals.length} participant${
     participantsWithTotals.length > 1 ? 's' : ''
   }`;
@@ -2639,6 +2641,179 @@ const sharerAvatarUpdatedAt =
   const canReviewPickupSlots = isOwner && !autoApprovePickupSlots;
   const formatUnitsTotal = (value: number) =>
     Number.isInteger(value) ? String(value) : value.toFixed(2);
+  const handlePrintParticipantsTable = React.useCallback(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const printScope = participantsPrintScopeRef.current;
+    if (!printScope) return;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error("Impossible d'ouvrir la fenêtre d'impression.");
+      return;
+    }
+    try {
+      printWindow.opener = null;
+    } catch {
+      // Certains navigateurs bloquent cette affectation, ce n'est pas bloquant.
+    }
+
+    const printDocument = printWindow.document;
+    printDocument.open();
+    printDocument.write(`<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Impression du tableau</title>
+    <style>
+      @page {
+        size: landscape;
+        margin: 10mm;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: Arial, sans-serif;
+        color: #111827;
+        background: #ffffff;
+      }
+
+      .order-client-view__participants-print-scope {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .order-client-view__participants-title--print {
+        display: block !important;
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .order-client-view__participants-table-wrapper {
+        overflow: visible;
+        border: 1px solid #d1d5db;
+      }
+
+      .order-client-view__participants-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: auto;
+      }
+
+      .order-client-view__participants-table th,
+      .order-client-view__participants-table td {
+        padding: 6px 8px;
+        border: 1px solid #e5e7eb;
+        font-size: 11px;
+        line-height: 1.25;
+        text-align: center;
+        vertical-align: middle;
+        color: #111827;
+        background: #ffffff;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+
+      .order-client-view__participants-table th {
+        background: #f9fafb;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        white-space: normal;
+      }
+
+      .order-client-view__participants-table-product-button,
+      .order-client-view__participant-avatar,
+      .order-client-view__participant-name {
+        border: none;
+        background: none;
+        padding: 0;
+        margin: 0;
+        color: inherit;
+        font: inherit;
+        text-decoration: none;
+      }
+
+      .order-client-view__participants-table-product-button {
+        display: block;
+        width: 100%;
+        white-space: normal;
+      }
+
+      .order-client-view__participants-table-product {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+
+      .order-client-view__participants-table-unit {
+        display: block;
+        font-size: 9px;
+        color: #6b7280;
+      }
+
+      .order-client-view__participant-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .order-client-view__participant-avatar {
+        width: 32px;
+        height: 32px;
+        overflow: hidden;
+        border-radius: 9999px;
+      }
+
+      .order-client-view__participant-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .order-client-view__participant-name {
+        font-weight: 600;
+      }
+
+      .order-client-view__participants-total-row td {
+        background: #f9fafb;
+        font-weight: 700;
+      }
+
+      .order-client-view__participants-table-muted {
+        color: #6b7280;
+      }
+
+      .order-client-view__participants-table-invoice {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    ${printScope.outerHTML}
+  </body>
+</html>`);
+    printDocument.close();
+
+    const closePrintWindow = () => {
+      printWindow.removeEventListener('afterprint', closePrintWindow);
+      printWindow.close();
+    };
+
+    printWindow.addEventListener('afterprint', closePrintWindow);
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  }, []);
   const canShowPreview = isAuthenticated && Boolean(myParticipant) && !isOwner && !isProducer;
   const otherParticipants = React.useMemo(
     () =>
@@ -3674,23 +3849,29 @@ const sharerAvatarUpdatedAt =
               </div>
             )}
 
-            {!canShowParticipants ? (
-              <div className="order-client-view__participants-masked">
-                {!isOwner && !isAuthenticated
-                  ? 'Connectez-vous pour voir la liste des participants'
-                  : 'Liste des participants masquée par le créateur de la commande'}
-              </div>
-            ) : participantsWithTotals.length === 0 ? (
-              <div className="order-client-view__participants-empty">
-                {isOwner ? 'Aucun participant pour le moment' : 'Liste des participants indisponible pour le moment'}
-              </div>
-            ) : (
-              <>
+            <div ref={participantsPrintScopeRef} className="order-client-view__participants-print-scope">
+              <p className="order-client-view__participants-title order-client-view__participants-title--print">
+                {participantsTitle}
+              </p>
+              {!canShowParticipants ? (
+                <div className="order-client-view__participants-masked">
+                  {!isOwner && !isAuthenticated
+                    ? 'Connectez-vous pour voir la liste des participants'
+                    : 'Liste des participants masquée par le créateur de la commande'}
+                </div>
+              ) : participantsWithTotals.length === 0 ? (
+                <div className="order-client-view__participants-empty">
+                  {isOwner ? 'Aucun participant pour le moment' : 'Liste des participants indisponible pour le moment'}
+                </div>
+              ) : (
                 <div className="order-client-view__participants-table-wrapper">
                   <table className="order-client-view__participants-table">
                     <thead>
                       <tr>
                         {viewerVisibility.profile && <th>Participant</th>}
+                        {shouldShowPickupCodeColumn && (
+                          <th className="order-client-view__participants-table-number">Code</th>
+                        )}
                         {viewerVisibility.content &&
                           products.map((product) => {
                             const unitLabel = (product.unit ?? '').trim();
@@ -3725,11 +3906,10 @@ const sharerAvatarUpdatedAt =
                         {viewerVisibility.amount && (
                           <th className="order-client-view__participants-table-number">Montant</th>
                         )}
-                        {shouldShowPickupCodeColumn && (
-                          <th className="order-client-view__participants-table-number">Code</th>
-                        )}
                         {shouldShowInvoiceColumn && (
-                          <th className="order-client-view__participants-table-number">Facture</th>
+                          <th className="order-client-view__participants-table-number order-client-view__participants-table-invoice">
+                            Facture
+                          </th>
                         )}
                       </tr>
                     </thead>
@@ -3745,14 +3925,14 @@ const sharerAvatarUpdatedAt =
                                   onClick={() => handleParticipantClick(participant)}
                                   aria-label={`Voir le profil de ${participant.name}`}
                                 >
-                                <Avatar
-                                  supabaseClient={supabaseClient ?? null}
-                                  path={participant.avatarPath ?? null}
-                                  updatedAt={participant.avatarUpdatedAt ?? null}
-                                  fallbackSrc={DEFAULT_PROFILE_AVATAR}
-                                  alt={participant.name}
-                                  className="w-full h-full object-cover"
-                                />
+                                  <Avatar
+                                    supabaseClient={supabaseClient ?? null}
+                                    path={participant.avatarPath ?? null}
+                                    updatedAt={participant.avatarUpdatedAt ?? null}
+                                    fallbackSrc={DEFAULT_PROFILE_AVATAR}
+                                    alt={participant.name}
+                                    className="w-full h-full object-cover"
+                                  />
                                 </button>
                                 <button
                                   type="button"
@@ -3762,6 +3942,11 @@ const sharerAvatarUpdatedAt =
                                   {participant.name}
                                 </button>
                               </div>
+                            </td>
+                          )}
+                          {shouldShowPickupCodeColumn && (
+                            <td className="order-client-view__participants-table-number">
+                              {participant.pickupCode ?? 'En attente'}
                             </td>
                           )}
                           {viewerVisibility.content &&
@@ -3788,13 +3973,8 @@ const sharerAvatarUpdatedAt =
                               {formatPrice(participant.totalAmount)}
                             </td>
                           )}
-                          {shouldShowPickupCodeColumn && (
-                            <td className="order-client-view__participants-table-number">
-                              {participant.pickupCode ?? 'En attente'}
-                            </td>
-                          )}
                           {shouldShowInvoiceColumn && (
-                            <td className="order-client-view__participants-table-number">
+                            <td className="order-client-view__participants-table-number order-client-view__participants-table-invoice">
                               {participant.role === 'sharer' && !isLockedOrAfter ? (
                                 <span className="order-client-view__participants-table-muted">Après clôture</span>
                               ) : (
@@ -3817,6 +3997,9 @@ const sharerAvatarUpdatedAt =
                         <tr className="order-client-view__participants-total-row">
                           {viewerVisibility.profile && (
                             <td className="order-client-view__participants-total-label">Total</td>
+                          )}
+                          {shouldShowPickupCodeColumn && (
+                            <td className="order-client-view__participants-table-number" />
                           )}
                           {viewerVisibility.content &&
                             products.map((product, index) => {
@@ -3841,36 +4024,44 @@ const sharerAvatarUpdatedAt =
                               {formatPrice(totalAmountAll)}
                             </td>
                           )}
-                          {shouldShowPickupCodeColumn && (
-                            <td className="order-client-view__participants-table-number" />
-                          )}
                           {shouldShowInvoiceColumn && (
-                            <td className="order-client-view__participants-table-number" />
+                            <td className="order-client-view__participants-table-number order-client-view__participants-table-invoice" />
                           )}
                         </tr>
                       </tfoot>
                     )}
                   </table>
                 </div>
-                {canShowPreview && (
-                  <div className="order-client-view__participants-preview">
-                    <p className="order-client-view__participants-preview-title">
-                      Ce que les autres ont pris (aperçu)
-                    </p>
-                    {previewItems.length > 0 ? (
-                      <ul className="order-client-view__participants-preview-list">
-                        {previewItems.map((item) => (
-                          <li key={item.id} className="order-client-view__participants-preview-item">
-                            {item.label}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="order-client-view__participants-preview-fallback">{previewFallbackLabel}</p>
-                    )}
-                  </div>
+              )}
+            </div>
+            {canPrintParticipantsTable && (
+              <div className="order-client-view__participants-print-actions">
+                <button
+                  type="button"
+                  onClick={handlePrintParticipantsTable}
+                  className="order-client-view__purchase-button order-client-view__participants-print-button"
+                >
+                  Imprimer le tableau
+                </button>
+              </div>
+            )}
+            {canShowPreview && (
+              <div className="order-client-view__participants-preview">
+                <p className="order-client-view__participants-preview-title">
+                  Ce que les autres ont pris (aperçu)
+                </p>
+                {previewItems.length > 0 ? (
+                  <ul className="order-client-view__participants-preview-list">
+                    {previewItems.map((item) => (
+                      <li key={item.id} className="order-client-view__participants-preview-item">
+                        {item.label}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="order-client-view__participants-preview-fallback">{previewFallbackLabel}</p>
                 )}
-              </>
+              </div>
             )}
             {isOwner && pendingParticipants.length > 0 && (
               <div className="mt-4 rounded-2xl border border-[#FFDCC4] bg-[#FFF7ED] p-4 text-sm space-y-3">

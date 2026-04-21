@@ -1366,11 +1366,31 @@
   gap: 4px;
 }
 
+.order-client-view__participants-print-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.order-client-view__participants-print-button {
+  align-self: flex-end;
+}
+
+.order-client-view__participants-print-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .order-client-view__participants-title {
   font-size: 1rem;
   font-weight: 600;
   color: #1f2937;
   margin-left: 0;
+}
+
+.order-client-view__participants-title--print {
+  display: none;
+  margin: 0;
 }
 
 .order-client-view__participants-subtitle {
@@ -1591,6 +1611,8 @@
   margin: 0 auto 2px;
   width: 100%;
   text-align: center;
+  white-space: normal;
+  line-height: 1.25;
   font: inherit;
   cursor: pointer;
 }
