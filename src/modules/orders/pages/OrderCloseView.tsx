@@ -397,6 +397,9 @@ export function OrderCloseView({
           productId: entry.productId,
           lotId: entry.product?.activeLotId ?? null,
           quantityUnits: targetQty,
+          isSharerShare: true,
+          reservationStatus: 'consumed',
+          reservationKind: 'close_extra',
         });
       }
     }

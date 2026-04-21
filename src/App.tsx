@@ -261,6 +261,8 @@ const buildGroupOrderFromContext = (context: OrderFull | null): GroupOrder | nul
         producerId: order.producerProfileId,
         producerName: producerProfile?.name ?? product.producerName ?? 'Producteur',
         producerLocation: product.producerLocation ?? '',
+        producerProfileCity: producerProfile?.city ?? null,
+        producerProfilePostcode: producerProfile?.postcode ?? null,
         inStock: true,
         measurement: product.measurement ?? 'unit',
         weightKg: entry.unitWeightKg ?? product.unitWeightKg ?? undefined,

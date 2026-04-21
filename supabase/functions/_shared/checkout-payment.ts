@@ -104,10 +104,40 @@ type ProductListingRow = {
 type DbOrderItemRow = {
   id: string;
   product_id: string;
+  lot_id: string | null;
+  participant_id: string;
   quantity_units: number;
   unit_label: string | null;
   unit_weight_kg: number | null;
+  unit_base_price_cents: number;
+  unit_delivery_cents: number;
+  unit_sharer_fee_cents: number;
+  unit_final_price_cents: number;
+  line_total_cents: number;
   line_weight_kg: number | null;
+  is_sharer_share?: boolean | null;
+};
+
+type LotReservationStatus = "active" | "released" | "consumed" | "expired";
+
+type DbLotReservationRow = {
+  id: string;
+  lot_id: string;
+  order_id: string;
+  order_item_id: string | null;
+  participant_id: string | null;
+  checkout_payment_session_id: string | null;
+  reserved_units: number | null;
+  reserved_kg: number | null;
+  status: LotReservationStatus;
+  expires_at: string | null;
+  reservation_kind: string;
+  created_at: string;
+};
+
+type DbLotRow = {
+  id: string;
+  product_id: string;
 };
 
 type FinalizeResult = {
@@ -397,6 +427,143 @@ async function updateCheckoutPaymentSession(
   return data as CheckoutPaymentSessionRow;
 }
 
+async function reserveLotStock(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    lotId: string;
+    orderId: string;
+    reservedUnits?: number | null;
+    reservedKg?: number | null;
+    status?: Extract<LotReservationStatus, "active" | "consumed">;
+    reservationKind?: string;
+    orderItemId?: string | null;
+    participantId?: string | null;
+    checkoutPaymentSessionId?: string | null;
+    expiresAt?: string | null;
+    reservationId?: string | null;
+  },
+) {
+  const { data, error } = await serviceClient.rpc("reserve_lot_stock", {
+    p_lot_id: params.lotId,
+    p_order_id: params.orderId,
+    p_reserved_units: params.reservedUnits ?? null,
+    p_reserved_kg: params.reservedKg ?? null,
+    p_status: params.status ?? "active",
+    p_reservation_kind: params.reservationKind ?? "order_item",
+    p_order_item_id: params.orderItemId ?? null,
+    p_participant_id: params.participantId ?? null,
+    p_checkout_payment_session_id: params.checkoutPaymentSessionId ?? null,
+    p_expires_at: params.expiresAt ?? null,
+    p_reservation_id: params.reservationId ?? null,
+  });
+  if (error || !data) throw error ?? new Error("Unable to reserve lot stock");
+  return String(data);
+}
+
+async function consumeLotReservation(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    reservationId: string;
+    orderItemId?: string | null;
+    participantId?: string | null;
+    reservationKind?: string | null;
+  },
+) {
+  const { error } = await serviceClient.rpc("consume_lot_reservation", {
+    p_reservation_id: params.reservationId,
+    p_order_item_id: params.orderItemId ?? null,
+    p_participant_id: params.participantId ?? null,
+    p_reservation_kind: params.reservationKind ?? null,
+  });
+  if (error) throw error;
+}
+
+async function releaseCheckoutSessionLotReservations(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  checkoutPaymentSessionId: string,
+  status: Extract<LotReservationStatus, "released" | "expired"> = "released",
+) {
+  const { error } = await serviceClient.rpc("release_checkout_session_lot_reservations", {
+    p_checkout_payment_session_id: checkoutPaymentSessionId,
+    p_status: status,
+  });
+  if (error) throw error;
+}
+
+async function releaseReservationsForOrderItem(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  orderItemId: string,
+  status: Extract<LotReservationStatus, "released" | "expired"> = "released",
+) {
+  const { data, error } = await serviceClient
+    .from("lot_reservations")
+    .select("*")
+    .eq("order_item_id", orderItemId)
+    .in("status", ["active", "consumed"])
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  const reservations = (data as DbLotReservationRow[] | null) ?? [];
+  for (const reservation of reservations) {
+    const { error: releaseError } = await serviceClient.rpc("release_lot_reservation", {
+      p_reservation_id: reservation.id,
+      p_status: status,
+    });
+    if (releaseError) throw releaseError;
+  }
+  return reservations;
+}
+
+async function fetchPrimaryReservationForOrderItem(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  orderItemId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("lot_reservations")
+    .select("*")
+    .eq("order_item_id", orderItemId)
+    .in("status", ["active", "consumed"])
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as DbLotReservationRow | null) ?? null;
+}
+
+async function listCheckoutSessionReservations(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  checkoutPaymentSessionId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("lot_reservations")
+    .select("*")
+    .eq("checkout_payment_session_id", checkoutPaymentSessionId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  const reservations = (data as DbLotReservationRow[] | null) ?? [];
+  const lotIds = Array.from(new Set(reservations.map((reservation) => reservation.lot_id).filter(Boolean)));
+  const lotMap = new Map<string, DbLotRow>();
+  if (lotIds.length > 0) {
+    const { data: lotsData, error: lotsError } = await serviceClient
+      .from("lots")
+      .select("id, product_id")
+      .in("id", lotIds);
+    if (lotsError) throw lotsError;
+    ((lotsData as DbLotRow[] | null) ?? []).forEach((lot) => {
+      lotMap.set(lot.id, lot);
+    });
+  }
+  return reservations
+    .map((reservation) => {
+      const lot = lotMap.get(reservation.lot_id);
+      if (!lot?.product_id) return null;
+      return {
+        ...reservation,
+        product_id: lot.product_id,
+      };
+    })
+    .filter(Boolean) as Array<DbLotReservationRow & { product_id: string }>;
+}
+
 async function retrieveStripeCheckoutSession(checkoutSessionId: string) {
   assertServerEnv();
   const response = await fetch(
@@ -633,6 +800,14 @@ async function insertOrderItem(
     participantId: string;
     productId: string;
     quantityUnits: number;
+    lotId?: string | null;
+    isSharerShare?: boolean;
+    skipStockReservation?: boolean;
+    reservationStatus?: Extract<LotReservationStatus, "active" | "consumed">;
+    reservationKind?: string;
+    reservationExpiresAt?: string | null;
+    checkoutPaymentSessionId?: string | null;
+    skipRecompute?: boolean;
   },
 ) {
   const [orderProduct, productListing, activeLotsByProductId] = await Promise.all([
@@ -641,7 +816,8 @@ async function insertOrderItem(
     fetchLatestActiveLotsByProductId(serviceClient, [params.productId]),
   ]);
   const fallbackLot = activeLotsByProductId.get(params.productId) ?? null;
-  const resolvedLotId = normalizeText(productListing.active_lot_id) || normalizeText(fallbackLot?.id);
+  const resolvedLotId = normalizeText(params.lotId) || normalizeText(productListing.active_lot_id) ||
+    normalizeText(fallbackLot?.id);
   if (!resolvedLotId) {
     throw new Error("Active lot not found for product");
   }
@@ -687,25 +863,37 @@ async function insertOrderItem(
       unit_final_price_cents: pricing.unitFinalPriceCents,
       line_total_cents: pricing.lineTotalCents,
       line_weight_kg: pricing.lineWeightKg,
-      is_sharer_share: false,
+      is_sharer_share: Boolean(params.isSharerShare),
     })
     .select("id")
     .single();
   if (error || !data) throw error ?? new Error("Unable to add order item");
-  const { error: reservationError } = await serviceClient
-    .from("lot_reservations")
-    .insert({
-      lot_id: resolvedLotId,
-      order_id: params.order.id,
-      order_item_id: normalizeText((data as Record<string, unknown>).id),
-      reserved_units: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
-      reserved_kg: isKgSaleUnit(productListing.sale_unit) ? pricing.lineWeightKg : null,
-      status: "active",
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    });
-  if (reservationError) throw reservationError;
-  await recomputeCaches(serviceClient, params.order.id, params.participantId);
-  return normalizeText((data as Record<string, unknown>).id);
+  const orderItemId = normalizeText((data as Record<string, unknown>).id);
+  if (!params.skipStockReservation) {
+    try {
+      await reserveLotStock(serviceClient, {
+        lotId: resolvedLotId,
+        orderId: params.order.id,
+        orderItemId,
+        participantId: params.participantId,
+        checkoutPaymentSessionId: params.checkoutPaymentSessionId ?? null,
+        reservedUnits: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
+        reservedKg: isKgSaleUnit(productListing.sale_unit) ? pricing.lineWeightKg : null,
+        status: params.reservationStatus ?? "active",
+        reservationKind: params.reservationKind ?? (params.isSharerShare ? "sharer_initial" : "order_item"),
+        expiresAt: params.reservationStatus === "consumed"
+          ? null
+          : params.reservationExpiresAt ?? new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      });
+    } catch (reservationError) {
+      await serviceClient.from("order_items").delete().eq("id", orderItemId);
+      throw reservationError;
+    }
+  }
+  if (!params.skipRecompute) {
+    await recomputeCaches(serviceClient, params.order.id, params.participantId);
+  }
+  return orderItemId;
 }
 
 async function updateOrderItemQuantity(
@@ -716,6 +904,8 @@ async function updateOrderItemQuantity(
     orderItemId: string;
     productId: string;
     quantityUnits: number;
+    skipStockReservation?: boolean;
+    skipRecompute?: boolean;
   },
 ) {
   const [orderProduct, productListing] = await Promise.all([
@@ -748,46 +938,96 @@ async function updateOrderItemQuantity(
     unitWeightKg,
     quantityUnits: storedQuantityUnits,
   });
+  const { data: currentItemData, error: currentItemError } = await serviceClient
+    .from("order_items")
+    .select("*")
+    .eq("id", params.orderItemId)
+    .maybeSingle();
+  if (currentItemError || !currentItemData) throw currentItemError ?? new Error("Order item not found");
+  const previousItem = currentItemData as DbOrderItemRow;
+  const reservation = await fetchPrimaryReservationForOrderItem(serviceClient, params.orderItemId);
+  const nextItemPayload = {
+    quantity_units: storedQuantityUnits,
+    unit_weight_kg: unitWeightKg,
+    unit_base_price_cents: unitBasePriceCents,
+    unit_delivery_cents: pricing.unitDeliveryCents,
+    unit_sharer_fee_cents: pricing.unitSharerFeeCents,
+    unit_final_price_cents: pricing.unitFinalPriceCents,
+    line_total_cents: pricing.lineTotalCents,
+    line_weight_kg: pricing.lineWeightKg,
+  };
   const { error } = await serviceClient
     .from("order_items")
-    .update({
-      quantity_units: storedQuantityUnits,
-      unit_weight_kg: unitWeightKg,
-      unit_base_price_cents: unitBasePriceCents,
-      unit_delivery_cents: pricing.unitDeliveryCents,
-      unit_sharer_fee_cents: pricing.unitSharerFeeCents,
-      unit_final_price_cents: pricing.unitFinalPriceCents,
-      line_total_cents: pricing.lineTotalCents,
-      line_weight_kg: pricing.lineWeightKg,
-    })
+    .update(nextItemPayload)
     .eq("id", params.orderItemId);
   if (error) throw error;
-  const { data: reservationRow, error: reservationFetchError } = await serviceClient
-    .from("lot_reservations")
-    .select("id")
-    .eq("order_item_id", params.orderItemId)
-    .maybeSingle();
-  if (reservationFetchError) throw reservationFetchError;
-  if (reservationRow?.id) {
-    const { error: reservationUpdateError } = await serviceClient
-      .from("lot_reservations")
-      .update({
-        reserved_units: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
-        reserved_kg: isKgSaleUnit(productListing.sale_unit) ? pricing.lineWeightKg : null,
-        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-      })
-      .eq("id", reservationRow.id);
-    if (reservationUpdateError) throw reservationUpdateError;
+  if (!params.skipStockReservation && reservation?.id && previousItem.lot_id) {
+    try {
+      await reserveLotStock(serviceClient, {
+        lotId: previousItem.lot_id,
+        orderId: params.order.id,
+        orderItemId: params.orderItemId,
+        participantId: params.participantId,
+        checkoutPaymentSessionId: reservation.checkout_payment_session_id,
+        reservedUnits: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
+        reservedKg: isKgSaleUnit(productListing.sale_unit) ? pricing.lineWeightKg : null,
+        status: reservation.status === "consumed" ? "consumed" : "active",
+        reservationKind: reservation.reservation_kind,
+        expiresAt: reservation.status === "consumed"
+          ? null
+          : new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        reservationId: reservation.id,
+      });
+    } catch (reservationError) {
+      await serviceClient
+        .from("order_items")
+        .update({
+          quantity_units: previousItem.quantity_units,
+          unit_weight_kg: previousItem.unit_weight_kg,
+          unit_base_price_cents: previousItem.unit_base_price_cents,
+          unit_delivery_cents: previousItem.unit_delivery_cents,
+          unit_sharer_fee_cents: previousItem.unit_sharer_fee_cents,
+          unit_final_price_cents: previousItem.unit_final_price_cents,
+          line_total_cents: previousItem.line_total_cents,
+          line_weight_kg: previousItem.line_weight_kg,
+        })
+        .eq("id", params.orderItemId);
+      throw reservationError;
+    }
   }
-  await recomputeCaches(serviceClient, params.order.id, params.participantId);
+  if (!params.skipRecompute) {
+    await recomputeCaches(serviceClient, params.order.id, params.participantId);
+  }
 }
 
 async function deleteOrderItem(
   serviceClient: ReturnType<typeof createServiceClient>,
   params: { orderItemId: string; orderId: string; participantId: string },
 ) {
+  const releasedReservations = await releaseReservationsForOrderItem(serviceClient, params.orderItemId);
   const { error } = await serviceClient.from("order_items").delete().eq("id", params.orderItemId);
-  if (error) throw error;
+  if (error) {
+    for (const reservation of releasedReservations) {
+      try {
+        await reserveLotStock(serviceClient, {
+          lotId: reservation.lot_id,
+          orderId: reservation.order_id,
+          orderItemId: reservation.order_item_id,
+          participantId: reservation.participant_id,
+          checkoutPaymentSessionId: reservation.checkout_payment_session_id,
+          reservedUnits: reservation.reserved_units,
+          reservedKg: reservation.reserved_kg,
+          status: reservation.status === "consumed" ? "consumed" : "active",
+          reservationKind: reservation.reservation_kind,
+          expiresAt: reservation.expires_at,
+          reservationId: reservation.id,
+        });
+      } catch (restoreError) {
+        console.error("Restore reservation error:", restoreError);
+      }
+    }
+    throw error;
+  }
   await recomputeCaches(serviceClient, params.orderId, params.participantId);
 }
 
@@ -824,6 +1064,105 @@ function parseCloseDraft(draftPayload: JsonRecord | null) {
   };
 }
 
+async function buildCheckoutReservationPlans(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  checkoutPaymentSession: CheckoutPaymentSessionRow,
+) {
+  const quantities =
+    checkoutPaymentSession.flow_kind === "close"
+      ? parseCloseDraft(checkoutPaymentSession.draft_payload).extraQuantities
+      : parseParticipantDraft(checkoutPaymentSession.draft_payload).quantities;
+
+  const productIds = Object.entries(quantities)
+    .filter(([, quantity]) => quantity > 0)
+    .map(([productId]) => productId);
+  const activeLotsByProductId = await fetchLatestActiveLotsByProductId(serviceClient, productIds);
+
+  const plans: Array<{
+    productId: string;
+    lotId: string;
+    quantityUnits: number;
+    saleUnit: string | null;
+    reservedUnits: number | null;
+    reservedKg: number | null;
+  }> = [];
+  for (const [productId, quantityUnits] of Object.entries(quantities)) {
+    if (quantityUnits <= 0) continue;
+    const [orderProduct, productListing] = await Promise.all([
+      getOrderProductRow(serviceClient, checkoutPaymentSession.order_id, productId),
+      getProductListingRow(serviceClient, productId),
+    ]);
+    const fallbackLot = activeLotsByProductId.get(productId) ?? null;
+    const resolvedLotId = normalizeText(productListing.active_lot_id) || normalizeText(fallbackLot?.id);
+    if (!resolvedLotId) {
+      throw new Error("Lot actif introuvable pour ce produit.");
+    }
+    const fallbackUnitWeightKg = resolveUnitWeightKg(
+      productListing.sale_unit,
+      productListing.unit_weight_kg,
+      productListing.packaging,
+    );
+    const unitWeightKg = resolveStoredUnitWeightKg(
+      productListing.sale_unit,
+      orderProduct.unit_weight_kg ?? fallbackUnitWeightKg,
+      quantityUnits,
+    );
+    const storedQuantityUnits = normalizeQuantityUnitsForStorage(productListing.sale_unit, quantityUnits);
+    plans.push({
+      productId,
+      lotId: resolvedLotId,
+      quantityUnits,
+      saleUnit: productListing.sale_unit,
+      reservedUnits: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
+      reservedKg: isKgSaleUnit(productListing.sale_unit) ? unitWeightKg * storedQuantityUnits : null,
+    });
+  }
+
+  return plans;
+}
+
+export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSessionId: string) {
+  assertServerEnv();
+  const serviceClient = createServiceClient();
+  const checkoutPaymentSession = await getCheckoutPaymentSession(serviceClient, { id: checkoutPaymentSessionId });
+  if (!checkoutPaymentSession) {
+    throw new Error("Checkout payment session not found");
+  }
+  if (!["draft", "failed", "expired"].includes(checkoutPaymentSession.status)) {
+    return checkoutPaymentSession;
+  }
+
+  await releaseCheckoutSessionLotReservations(serviceClient, checkoutPaymentSession.id, "released");
+
+  try {
+    const reservationKind = checkoutPaymentSession.flow_kind === "close"
+      ? "close_checkout"
+      : "participant_checkout";
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    const plans = await buildCheckoutReservationPlans(serviceClient, checkoutPaymentSession);
+    for (const plan of plans) {
+      await reserveLotStock(serviceClient, {
+        lotId: plan.lotId,
+        orderId: checkoutPaymentSession.order_id,
+        reservedUnits: plan.reservedUnits,
+        reservedKg: plan.reservedKg,
+        status: "active",
+        reservationKind,
+        checkoutPaymentSessionId: checkoutPaymentSession.id,
+        expiresAt,
+      });
+    }
+    return await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
+      status: "draft",
+      error_code: null,
+      error_message: null,
+    });
+  } catch (error) {
+    await releaseCheckoutSessionLotReservations(serviceClient, checkoutPaymentSession.id, "released");
+    throw error;
+  }
+}
+
 async function finalizeParticipantCheckoutSession(
   serviceClient: ReturnType<typeof createServiceClient>,
   checkoutPaymentSession: CheckoutPaymentSessionRow,
@@ -858,36 +1197,35 @@ async function finalizeParticipantCheckoutSession(
   }
 
   const draft = parseParticipantDraft(checkoutPaymentSession.draft_payload);
-  const createdItemIds: string[] = [];
   let createdPaymentId: string | null = null;
+  const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
 
   try {
-    for (const [productId, quantityUnits] of Object.entries(draft.quantities)) {
+    for (const reservation of sessionReservations) {
+      if (reservation.status === "consumed" && reservation.order_item_id) {
+        continue;
+      }
+      const quantityUnits = isPositiveNumber(reservation.reserved_kg)
+        ? Number(reservation.reserved_kg)
+        : Number(reservation.reserved_units ?? 0);
+      if (quantityUnits <= 0) continue;
       const createdItemId = await insertOrderItem(serviceClient, {
         order,
         participantId: participant.id,
-        productId,
+        productId: reservation.product_id,
+        lotId: reservation.lot_id,
         quantityUnits,
+        skipStockReservation: true,
+        skipRecompute: true,
       });
-      createdItemIds.push(createdItemId);
-    }
-
-    const { data: participantItems, error: participantItemsError } = await serviceClient
-      .from("order_items")
-      .select("id, product_id, quantity_units, unit_label, line_weight_kg")
-      .eq("order_id", order.id)
-      .eq("participant_id", participant.id);
-    if (participantItemsError) throw participantItemsError;
-
-    for (const item of (participantItems as DbOrderItemRow[] | null) ?? []) {
-      await updateOrderItemQuantity(serviceClient, {
-        order,
+      await consumeLotReservation(serviceClient, {
+        reservationId: reservation.id,
+        orderItemId: createdItemId,
         participantId: participant.id,
-        orderItemId: item.id,
-        productId: item.product_id,
-        quantityUnits: getOrderItemQuantity(item),
+        reservationKind: "participant_checkout",
       });
     }
+    await recomputeCaches(serviceClient, order.id, participant.id);
 
     const refreshedParticipant = await getParticipantByProfile(serviceClient, order.id, checkoutPaymentSession.profile_id);
     if (!refreshedParticipant) {
@@ -949,27 +1287,14 @@ async function finalizeParticipantCheckoutSession(
     createdPaymentId = payment.id;
     await finalizePaymentSimulation(serviceClient, payment.id);
   } catch (error) {
-    if (!createdPaymentId) {
-      for (const orderItemId of createdItemIds.slice().reverse()) {
-        try {
-          await deleteOrderItem(serviceClient, {
-            orderItemId,
-            orderId: order.id,
-            participantId: participant.id,
-          });
-        } catch (rollbackError) {
-          console.error("Participant order item rollback error:", rollbackError);
-        }
-      }
-      if (participantCreatedInFlow) {
-        try {
-          await deleteParticipantIfNoActivity(serviceClient, {
-            orderId: order.id,
-            participantId: participant.id,
-          });
-        } catch (rollbackError) {
-          console.error("Participant rollback error:", rollbackError);
-        }
+    if (!createdPaymentId && participantCreatedInFlow) {
+      try {
+        await deleteParticipantIfNoActivity(serviceClient, {
+          orderId: order.id,
+          participantId: participant.id,
+        });
+      } catch (rollbackError) {
+        console.error("Participant rollback error:", rollbackError);
       }
     }
     throw error;
@@ -1048,39 +1373,59 @@ async function finalizeCloseCheckoutSession(
     acc[item.product_id] = (acc[item.product_id] ?? 0) + getOrderItemQuantity(item);
     return acc;
   }, {});
-
-  const rollbackUpdates: Array<{ orderItemId: string; productId: string; previousQuantity: number }> = [];
-  const createdItemIds: string[] = [];
   let paymentId: string | null = null;
+  const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
 
   try {
-    for (const [productId, extraQty] of Object.entries(draft.extraQuantities)) {
+    for (const reservation of sessionReservations) {
+      if (reservation.status === "consumed") {
+        continue;
+      }
+      const productId = reservation.product_id;
+      const extraQty = isPositiveNumber(reservation.reserved_kg)
+        ? Number(reservation.reserved_kg)
+        : Number(reservation.reserved_units ?? 0);
+      if (extraQty <= 0) continue;
       const existingQty = currentSharerQuantities[productId] ?? 0;
       const targetQty = existingQty + extraQty;
       const existingItem = sharerItems.find((item) => item.product_id === productId);
       if (existingItem) {
-        rollbackUpdates.push({
-          orderItemId: existingItem.id,
-          productId,
-          previousQuantity: existingQty,
-        });
         await updateOrderItemQuantity(serviceClient, {
           order,
           participantId: sharerParticipant.id,
           orderItemId: existingItem.id,
           productId,
           quantityUnits: targetQty,
+          skipStockReservation: true,
+          skipRecompute: true,
+        });
+        await consumeLotReservation(serviceClient, {
+          reservationId: reservation.id,
+          orderItemId: existingItem.id,
+          participantId: sharerParticipant.id,
+          reservationKind: "close_checkout",
         });
       } else {
         const createdItemId = await insertOrderItem(serviceClient, {
           order,
           participantId: sharerParticipant.id,
           productId,
-          quantityUnits: targetQty,
+          lotId: reservation.lot_id,
+          quantityUnits: extraQty,
+          isSharerShare: true,
+          skipStockReservation: true,
+          skipRecompute: true,
         });
-        createdItemIds.push(createdItemId);
+        await consumeLotReservation(serviceClient, {
+          reservationId: reservation.id,
+          orderItemId: createdItemId,
+          participantId: sharerParticipant.id,
+          reservationKind: "close_checkout",
+        });
       }
+      currentSharerQuantities[productId] = targetQty;
     }
+    await recomputeCaches(serviceClient, order.id, sharerParticipant.id);
 
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
@@ -1106,32 +1451,6 @@ async function finalizeCloseCheckoutSession(
     await ensureSharerInvoiceExists(serviceClient, order.id, checkoutPaymentSession.profile_id);
     await triggerOutgoingEmails(serviceClient);
   } catch (error) {
-    if (!paymentId) {
-      for (const orderItemId of createdItemIds.slice().reverse()) {
-        try {
-          await deleteOrderItem(serviceClient, {
-            orderItemId,
-            orderId: order.id,
-            participantId: sharerParticipant.id,
-          });
-        } catch (rollbackError) {
-          console.error("Close payment created item rollback error:", rollbackError);
-        }
-      }
-      for (const rollbackUpdate of rollbackUpdates.slice().reverse()) {
-        try {
-          await updateOrderItemQuantity(serviceClient, {
-            order,
-            participantId: sharerParticipant.id,
-            orderItemId: rollbackUpdate.orderItemId,
-            productId: rollbackUpdate.productId,
-            quantityUnits: rollbackUpdate.previousQuantity,
-          });
-        } catch (rollbackError) {
-          console.error("Close payment quantity rollback error:", rollbackError);
-        }
-      }
-    }
     throw error;
   }
 }
@@ -1184,6 +1503,11 @@ export async function finalizeCheckoutPaymentSession(params: {
   const stripeSession = await retrieveStripeCheckoutSession(stripeSessionId);
   const paymentStatus = mapStripeStatusToInternal(stripeSession.status ?? null, stripeSession.payment_status ?? null);
   if (paymentStatus === "failed") {
+    await releaseCheckoutSessionLotReservations(
+      serviceClient,
+      checkoutPaymentSession.id,
+      stripeSession.status === "expired" ? "expired" : "released",
+    );
     const updated = await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
       status: stripeSession.status === "expired" ? "expired" : "failed",
       error_code: stripeSession.status === "expired" ? "stripe_session_expired" : "stripe_payment_failed",

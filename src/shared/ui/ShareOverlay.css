@@ -34,6 +34,17 @@
   backdrop-filter: blur(4px);
 }
 
+.share-overlay__print-title {
+  margin: 0;
+  flex: 1;
+  text-align: center;
+  color: rgba(15, 23, 42, 1);
+  font-size: clamp(28px, 3vw, 44px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
 .share-overlay__actions {
   display: flex;
   align-items: center;
@@ -408,20 +419,6 @@
   text-overflow: ellipsis;
 }
 
-.share-overlay__order-product-category {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid #ffe1d4;
-  background: #fff4ed;
-  color: #b45309;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 .share-overlay__order-product-title {
   margin: 0;
   font-size: 13px;
@@ -430,6 +427,7 @@
   line-height: 1.15;
   min-height: 30px;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -845,7 +843,7 @@
 
 .share-overlay__qr-section {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 192px minmax(0, 1fr);
   gap: 16px;
   align-items: center;
 }
@@ -869,6 +867,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.share-overlay__qr-description {
+  white-space: nowrap;
 }
 
 .share-overlay__link-value {
@@ -956,6 +958,10 @@
     width: 100%;
   }
 
+  .share-overlay__qr-description {
+    white-space: normal;
+  }
+
   .share-overlay__pie-layout {
     grid-template-columns: 1fr;
   }
@@ -974,6 +980,13 @@
     padding: 12px;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .share-overlay__print-title {
+    order: 3;
+    width: 100%;
+    flex: 0 0 100%;
+    font-size: 24px;
   }
 
   .share-overlay__actions {
@@ -1077,63 +1090,77 @@
     background: #ffffff;
   }
 
+  .share-overlay__qr-section {
+    grid-template-columns: 192px minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+  }
+
+  .share-overlay__link-box {
+    align-items: flex-start;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .share-overlay__qr-description {
+    max-width: 42ch;
+    white-space: nowrap;
+  }
+
+  .share-overlay__link-value {
+    width: 100%;
+  }
+
   .share-overlay__calendar-day {
-    min-height: 36px;
+    min-height: 44px;
     position: relative;
-    border: 1px solid #6b7280 !important;
+    border: 1px solid #e5e7eb !important;
     background: #ffffff !important;
-    color: #111827 !important;
-    border-left-width: 5px !important;
   }
 
   .share-overlay__calendar-day--open-window {
-    border-left-color: #1d4ed8 !important;
-    border-left-style: solid !important;
-    box-shadow: none !important;
+    background-color: #dbeafe !important;
+    background-image: none !important;
+    border-color: #bfdbfe !important;
+    color: #1d4ed8 !important;
   }
 
   .share-overlay__calendar-day--delivery-window {
-    border-left-color: #b91c1c !important;
-    border-left-style: solid !important;
-    box-shadow: none !important;
+    background-color: #fee2e2 !important;
+    background-image: none !important;
+    border-color: #fecaca !important;
+    color: #b91c1c !important;
   }
 
   .share-overlay__calendar-day--pickup-window {
-    border-left-color: #166534 !important;
-    border-left-style: solid !important;
-    box-shadow: none !important;
+    background-color: #dcfce7 !important;
+    background-image: none !important;
+    border-color: #bbf7d0 !important;
+    color: #166534 !important;
   }
 
   .share-overlay__calendar-day--open-window .share-overlay__calendar-day-number {
     color: #1d4ed8 !important;
-    font-weight: 800 !important;
   }
 
   .share-overlay__calendar-day--delivery-window .share-overlay__calendar-day-number {
     color: #b91c1c !important;
-    font-weight: 800 !important;
   }
 
   .share-overlay__calendar-day--pickup-window .share-overlay__calendar-day-number {
     color: #166534 !important;
-    font-weight: 800 !important;
   }
 
   .share-overlay__calendar-day--marker-deadline {
-    border-width: 2px !important;
-    border-color: #111827 !important;
+    box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.25) !important;
   }
 
   .share-overlay__calendar-day--marker-delivery {
-    border-width: 2px !important;
-    border-style: dashed !important;
-    border-color: #374151 !important;
+    box-shadow: inset 0 0 0 1px rgba(185, 28, 28, 0.25) !important;
   }
 
   .share-overlay__calendar-day--marker-pickup {
-    border-width: 2px !important;
-    border-style: solid !important;
-    border-color: #6b7280 !important;
+    box-shadow: inset 0 0 0 1px rgba(22, 101, 52, 0.25) !important;
   }
 
   .share-overlay__calendar-dot--deadline {
@@ -1146,21 +1173,20 @@
 
   .share-overlay__calendar-dot--pickup {
     background: #166534 !important;
-    border: 1px solid #111827 !important;
   }
 
   .share-overlay__calendar-legend-swatch--deadline {
-    background: transparent !important;
-    border: 2px solid #1d4ed8 !important;
+    background: #dbeafe !important;
+    border-color: #bfdbfe !important;
   }
 
   .share-overlay__calendar-legend-swatch--delivery {
-    background: transparent !important;
-    border: 2px solid #b91c1c !important;
+    background: #fee2e2 !important;
+    border-color: #fecaca !important;
   }
 
   .share-overlay__calendar-legend-swatch--pickup {
-    background: transparent !important;
-    border: 2px solid #166534 !important;
+    background: #dcfce7 !important;
+    border-color: #bbf7d0 !important;
   }
 }

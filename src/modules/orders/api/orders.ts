@@ -596,6 +596,84 @@ const calculateOrderItemPricing = (params: {
   };
 };
 
+type LotReservationStatus = DbLotReservation['status'];
+
+type ReserveLotStockParams = {
+  lotId: string;
+  orderId: string;
+  reservedUnits?: number | null;
+  reservedKg?: number | null;
+  status?: Extract<LotReservationStatus, 'active' | 'consumed'>;
+  reservationKind?: string;
+  orderItemId?: string | null;
+  participantId?: string | null;
+  checkoutPaymentSessionId?: string | null;
+  expiresAt?: string | null;
+  reservationId?: string | null;
+};
+
+const reserveLotStock = async (client: SupabaseClient, params: ReserveLotStockParams) => {
+  const { data, error } = await client.rpc('reserve_lot_stock', {
+    p_lot_id: params.lotId,
+    p_order_id: params.orderId,
+    p_reserved_units: params.reservedUnits ?? null,
+    p_reserved_kg: params.reservedKg ?? null,
+    p_status: params.status ?? 'active',
+    p_reservation_kind: params.reservationKind ?? 'order_item',
+    p_order_item_id: params.orderItemId ?? null,
+    p_participant_id: params.participantId ?? null,
+    p_checkout_payment_session_id: params.checkoutPaymentSessionId ?? null,
+    p_expires_at: params.expiresAt ?? null,
+    p_reservation_id: params.reservationId ?? null,
+  });
+  if (error || !data) throw error ?? new Error('Réservation de stock impossible.');
+  return data as string;
+};
+
+const releaseLotReservation = async (
+  client: SupabaseClient,
+  reservationId: string,
+  status: Extract<LotReservationStatus, 'released' | 'expired'> = 'released'
+) => {
+  const { error } = await client.rpc('release_lot_reservation', {
+    p_reservation_id: reservationId,
+    p_status: status,
+  });
+  if (error) throw error;
+};
+
+const releaseReservationsForOrderItem = async (
+  client: SupabaseClient,
+  orderItemId: string,
+  status: Extract<LotReservationStatus, 'released' | 'expired'> = 'released'
+) => {
+  const { data, error } = await client
+    .from('lot_reservations')
+    .select('*')
+    .eq('order_item_id', orderItemId)
+    .in('status', ['active', 'consumed'])
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  const reservations = (data as DbLotReservation[] | null) ?? [];
+  for (const reservation of reservations) {
+    await releaseLotReservation(client, reservation.id, status);
+  }
+  return reservations;
+};
+
+const fetchPrimaryReservationForOrderItem = async (client: SupabaseClient, orderItemId: string) => {
+  const { data, error } = await client
+    .from('lot_reservations')
+    .select('*')
+    .eq('order_item_id', orderItemId)
+    .in('status', ['active', 'consumed'])
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as DbLotReservation | null) ?? null;
+};
+
 export type CreateOrderPayload = {
   userId: string;
   productCodes: string[];
@@ -733,155 +811,125 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
   if (insertError || !insertedOrder) throw insertError ?? new Error('Creation commande impossible.');
 
   const order = mapOrderRow(insertedOrder as DbOrder);
-  const orderProductsPayload = productRows.map((productRow, index) => {
-    const unitWeightKg = resolveUnitWeightKg(
-      productRow.sale_unit,
-      productRow.unit_weight_kg,
-      productRow.packaging
-    );
-    const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
-    const basePriceCents = Number(
-      productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
-    );
-    const pricing = calculateOrderItemPricing({
-      order,
-      basePriceCents,
-      unitWeightKg,
-      quantityUnits: 1,
+  const createdSharerItemIds: string[] = [];
+
+  try {
+    const orderProductsPayload = productRows.map((productRow, index) => {
+      const unitWeightKg = resolveUnitWeightKg(
+        productRow.sale_unit,
+        productRow.unit_weight_kg,
+        productRow.packaging
+      );
+      const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
+      const basePriceCents = Number(
+        productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
+      );
+      const pricing = calculateOrderItemPricing({
+        order,
+        basePriceCents,
+        unitWeightKg,
+        quantityUnits: 1,
+      });
+      return {
+        order_id: order.id,
+        product_id: productRow.product_id,
+        sort_order: index,
+        is_enabled: true,
+        unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
+        unit_weight_kg: unitWeightKg,
+        unit_base_price_cents: basePriceCents,
+        unit_delivery_cents: pricing.unitDeliveryCents,
+        unit_sharer_fee_cents: pricing.unitSharerFeeCents,
+        unit_final_price_cents: pricing.unitFinalPriceCents,
+        price_breakdown_snapshot: {
+          base_cents: basePriceCents,
+          delivery_cents: pricing.unitDeliveryCents,
+          sharer_cents: pricing.unitSharerFeeCents,
+          final_cents: pricing.unitFinalPriceCents,
+        },
+      };
     });
-    return {
-      order_id: order.id,
-      product_id: productRow.product_id,
-      sort_order: index,
-      is_enabled: true,
-      unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
-      unit_weight_kg: unitWeightKg,
-      unit_base_price_cents: basePriceCents,
-      unit_delivery_cents: pricing.unitDeliveryCents,
-      unit_sharer_fee_cents: pricing.unitSharerFeeCents,
-      unit_final_price_cents: pricing.unitFinalPriceCents,
-      price_breakdown_snapshot: {
-        base_cents: basePriceCents,
-        delivery_cents: pricing.unitDeliveryCents,
-        sharer_cents: pricing.unitSharerFeeCents,
-        final_cents: pricing.unitFinalPriceCents,
-      },
-    };
-  });
-  const orderProductsById = new Map<string, (typeof orderProductsPayload)[number]>();
-  orderProductsPayload.forEach((row) => {
-    orderProductsById.set(row.product_id as string, row);
-  });
-  if (orderProductsPayload.length) {
-    const { error: orderProductsError } = await client.from('order_products').insert(orderProductsPayload);
-    if (orderProductsError) throw orderProductsError;
-  }
+    if (orderProductsPayload.length) {
+      const { error: orderProductsError } = await client.from('order_products').insert(orderProductsPayload);
+      if (orderProductsError) throw orderProductsError;
+    }
 
-  if (payload.slots.length) {
-    const slotRows = payload.slots.map((slot, index) => ({
-      order_id: order.id,
-      slot_type: slot.slotType,
-      day: slot.slotType === 'weekday' ? slot.day ?? null : null,
-      slot_date: slot.slotType === 'date' ? slot.slotDate ?? null : null,
-      label: slot.label,
-      enabled: slot.enabled,
-      start_time: slot.startTime,
-      end_time: slot.endTime,
-      sort_order: index,
-    }));
-    const { error: slotError } = await client.from('order_pickup_slots').insert(slotRows);
-    if (slotError) throw slotError;
-  }
+    if (payload.slots.length) {
+      const slotRows = payload.slots.map((slot, index) => ({
+        order_id: order.id,
+        slot_type: slot.slotType,
+        day: slot.slotType === 'weekday' ? slot.day ?? null : null,
+        slot_date: slot.slotType === 'date' ? slot.slotDate ?? null : null,
+        label: slot.label,
+        enabled: slot.enabled,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
+        sort_order: index,
+      }));
+      const { error: slotError } = await client.from('order_pickup_slots').insert(slotRows);
+      if (slotError) throw slotError;
+    }
 
-  const { data: sharerParticipant, error: sharerError } = await client
-    .from('order_participants')
-    .insert({
-      order_id: order.id,
-      profile_id: payload.userId,
-      role: 'sharer',
-      participation_status: 'accepted',
-    })
-    .select('*')
-    .single();
-  if (sharerError || !sharerParticipant) throw sharerError ?? new Error('Participant partageur manquant.');
+    const { data: sharerParticipant, error: sharerError } = await client
+      .from('order_participants')
+      .insert({
+        order_id: order.id,
+        profile_id: payload.userId,
+        role: 'sharer',
+        participation_status: 'accepted',
+      })
+      .select('*')
+      .single();
+    if (sharerError || !sharerParticipant) throw sharerError ?? new Error('Participant partageur manquant.');
 
-  if (payload.shareMode === 'products') {
-    const sharerItems = payload.productCodes
-      .map((code) => ({
-        code,
-        quantity: Math.max(0, Number(payload.sharerQuantities[code] ?? 0)),
-      }))
-      .filter((entry) => entry.quantity > 0);
+    if (payload.shareMode === 'products') {
+      const sharerItems = payload.productCodes
+        .map((code) => ({
+          code,
+          quantity: Math.max(0, Number(payload.sharerQuantities[code] ?? 0)),
+        }))
+        .filter((entry) => entry.quantity > 0);
 
-    if (sharerItems.length) {
-      const itemsPayload = sharerItems
-        .map((entry) => {
-          const productRow = productRows.find((row) => row.product_code === entry.code);
-          if (!productRow) return null;
-          const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
-          const resolvedLotId = (productRow.active_lot_id as string | null) ?? fallbackLot?.id ?? null;
-          if (!resolvedLotId) {
-            throw new Error(`Lot actif introuvable pour le produit ${productRow.product_code}.`);
-          }
-          const orderProduct = orderProductsById.get(productRow.product_id as string);
-          const fallbackUnitWeightKg = resolveUnitWeightKg(
-            productRow.sale_unit,
-            productRow.unit_weight_kg,
-            productRow.packaging
-          );
-          const unitWeightKg = resolveStoredUnitWeightKg(
-            productRow.sale_unit,
-            orderProduct?.unit_weight_kg ?? fallbackUnitWeightKg,
-            entry.quantity
-          );
-          const basePriceCents = Number(
-            productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
-          );
-          const unitBasePriceCents = resolveStoredUnitBasePriceCents(
-            productRow.sale_unit,
-            orderProduct?.unit_base_price_cents ?? basePriceCents,
-            entry.quantity
-          );
-          const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, entry.quantity);
-          const pricing = calculateOrderItemPricing({
-            order,
-            basePriceCents: unitBasePriceCents,
-            unitWeightKg,
-            quantityUnits: storedQuantityUnits,
-          });
-          const unitDeliveryCents = pricing.unitDeliveryCents;
-          const unitSharerFeeCents = pricing.unitSharerFeeCents;
-          const unitFinalPriceCents = pricing.unitFinalPriceCents;
-          const lineTotalCents = pricing.lineTotalCents;
-          const lineWeightKg = pricing.lineWeightKg;
-          return {
-            order_id: order.id,
-            participant_id: (sharerParticipant as DbOrderParticipant).id,
-            product_id: productRow.product_id,
-            lot_id: resolvedLotId,
-            quantity_units: storedQuantityUnits,
-            unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
-            unit_weight_kg: unitWeightKg,
-            unit_base_price_cents: unitBasePriceCents,
-            unit_delivery_cents: unitDeliveryCents,
-            unit_sharer_fee_cents: unitSharerFeeCents,
-            unit_final_price_cents: unitFinalPriceCents,
-            line_total_cents: lineTotalCents,
-            line_weight_kg: lineWeightKg,
-            is_sharer_share: true,
-          };
-        })
-        .filter(Boolean) as Array<Record<string, unknown>>;
+      for (const entry of sharerItems) {
+        const productRow = productRows.find((row) => row.product_code === entry.code);
+        if (!productRow) {
+          throw new Error(`Produit introuvable pour le code ${entry.code}.`);
+        }
+        const item = await addItem({
+          orderId: order.id,
+          participantId: (sharerParticipant as DbOrderParticipant).id,
+          productId: productRow.product_id,
+          lotId: (productRow.active_lot_id as string | null) ?? activeLotsByProductId.get(productRow.product_id as string)?.id ?? null,
+          quantityUnits: entry.quantity,
+          isSharerShare: true,
+          reservationStatus: 'consumed',
+          reservationKind: 'sharer_initial',
+          skipRecompute: true,
+        });
+        createdSharerItemIds.push(item.id);
+      }
 
-      if (itemsPayload.length) {
-        const { error: itemsError } = await client.from('order_items').insert(itemsPayload);
-        if (itemsError) throw itemsError;
+      if (createdSharerItemIds.length > 0) {
         await recomputeCaches(order.id, (sharerParticipant as DbOrderParticipant).id);
       }
     }
-  }
 
-  return order.orderCode;
+    return order.orderCode;
+  } catch (error) {
+    for (const orderItemId of createdSharerItemIds.slice().reverse()) {
+      try {
+        await removeItem(orderItemId, order.id);
+      } catch (rollbackError) {
+        console.error('Rollback sharer item error:', rollbackError);
+      }
+    }
+    try {
+      await client.from('orders').delete().eq('id', order.id);
+    } catch (deleteError) {
+      console.error('Rollback order delete error:', deleteError);
+    }
+    throw error;
+  }
 };
 
 export const getOrderByCode = async (orderCode: string): Promise<Order> => {
@@ -1105,6 +1153,12 @@ export const addItem = async (params: {
   productId: string;
   lotId?: string | null;
   quantityUnits: number;
+  isSharerShare?: boolean;
+  reservationStatus?: Extract<LotReservationStatus, 'active' | 'consumed'>;
+  reservationKind?: string;
+  reservationExpiresAt?: string | null;
+  checkoutPaymentSessionId?: string | null;
+  skipRecompute?: boolean;
 }) => {
   const client = getClient();
   const [
@@ -1204,34 +1258,66 @@ export const addItem = async (params: {
       unit_final_price_cents: unitFinalPriceCents,
       line_total_cents: lineTotalCents,
       line_weight_kg: lineWeightKg,
-      is_sharer_share: false,
+      is_sharer_share: Boolean(params.isSharerShare),
     })
     .select('*')
     .single();
   if (itemError || !itemRow) throw itemError ?? new Error('Impossible d\'ajouter la ligne.');
 
-  if (resolvedLotId) {
-    const reservationPayload = {
-      lot_id: resolvedLotId,
-      order_id: params.orderId,
-      order_item_id: (itemRow as DbOrderItem).id,
-      reserved_units: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
-      reserved_kg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
-      status: 'active',
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    };
-    const { error: reservationError } = await client.from('lot_reservations').insert(reservationPayload);
-    if (reservationError) throw reservationError;
+  try {
+    await reserveLotStock(client, {
+      lotId: resolvedLotId,
+      orderId: params.orderId,
+      orderItemId: (itemRow as DbOrderItem).id,
+      participantId: params.participantId,
+      checkoutPaymentSessionId: params.checkoutPaymentSessionId ?? null,
+      reservedUnits: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
+      reservedKg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
+      status: params.reservationStatus ?? 'active',
+      reservationKind:
+        params.reservationKind ?? (params.isSharerShare ? 'sharer_initial' : 'order_item'),
+      expiresAt:
+        params.reservationStatus === 'consumed'
+          ? null
+          : params.reservationExpiresAt ?? new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    });
+  } catch (error) {
+    await client.from('order_items').delete().eq('id', (itemRow as DbOrderItem).id);
+    throw error;
   }
 
-  await recomputeCaches(params.orderId, params.participantId);
+  if (!params.skipRecompute) {
+    await recomputeCaches(params.orderId, params.participantId);
+  }
   return mapItemRow(itemRow as DbOrderItem);
 };
 
 export const removeItem = async (orderItemId: string, orderId: string, participantId?: string) => {
   const client = getClient();
+  const releasedReservations = await releaseReservationsForOrderItem(client, orderItemId);
   const { error } = await client.from('order_items').delete().eq('id', orderItemId);
-  if (error) throw error;
+  if (error) {
+    for (const reservation of releasedReservations) {
+      try {
+        await reserveLotStock(client, {
+          lotId: reservation.lot_id,
+          orderId: reservation.order_id,
+          orderItemId: reservation.order_item_id,
+          participantId: reservation.participant_id,
+          checkoutPaymentSessionId: reservation.checkout_payment_session_id,
+          reservedUnits: reservation.reserved_units,
+          reservedKg: reservation.reserved_kg,
+          status: reservation.status === 'consumed' ? 'consumed' : 'active',
+          reservationKind: reservation.reservation_kind,
+          expiresAt: reservation.expires_at,
+          reservationId: reservation.id,
+        });
+      } catch (restoreError) {
+        console.error('Restore reservation error:', restoreError);
+      }
+    }
+    throw error;
+  }
   await recomputeCaches(orderId, participantId);
 };
 
@@ -1298,34 +1384,60 @@ export const updateOrderItemQuantity = async (
   const unitFinalPriceCents = pricing.unitFinalPriceCents;
   const lineTotalCents = pricing.lineTotalCents;
   const lineWeightKg = pricing.lineWeightKg;
+  const previousItem = itemRow as DbOrderItem;
+  const reservation = await fetchPrimaryReservationForOrderItem(client, orderItemId);
+
+  const nextItemPayload = {
+    quantity_units: storedQuantityUnits,
+    unit_weight_kg: unitWeightKg,
+    unit_base_price_cents: unitBasePriceCents,
+    unit_delivery_cents: unitDeliveryCents,
+    unit_sharer_fee_cents: unitSharerFeeCents,
+    unit_final_price_cents: unitFinalPriceCents,
+    line_total_cents: lineTotalCents,
+    line_weight_kg: lineWeightKg,
+  };
 
   const { error: updateError } = await client
     .from('order_items')
-    .update({
-      quantity_units: storedQuantityUnits,
-      unit_weight_kg: unitWeightKg,
-      unit_base_price_cents: unitBasePriceCents,
-      unit_delivery_cents: unitDeliveryCents,
-      unit_sharer_fee_cents: unitSharerFeeCents,
-      unit_final_price_cents: unitFinalPriceCents,
-      line_total_cents: lineTotalCents,
-      line_weight_kg: lineWeightKg,
-    })
+    .update(nextItemPayload)
     .eq('id', orderItemId);
   if (updateError) throw updateError;
 
-  const { data: reservationRow } = await client
-    .from('lot_reservations')
-    .select('id')
-    .eq('order_item_id', orderItemId)
-    .maybeSingle();
-  if (reservationRow?.id) {
-    const payload = {
-      reserved_units: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
-      reserved_kg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
-      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-    };
-    await client.from('lot_reservations').update(payload).eq('id', reservationRow.id);
+  if (reservation?.id && previousItem.lot_id) {
+    try {
+      await reserveLotStock(client, {
+        lotId: previousItem.lot_id,
+        orderId,
+        orderItemId,
+        participantId,
+        checkoutPaymentSessionId: reservation.checkout_payment_session_id,
+        reservedUnits: productRow.sale_unit === 'kg' ? null : storedQuantityUnits,
+        reservedKg: productRow.sale_unit === 'kg' ? lineWeightKg : null,
+        status: reservation.status === 'consumed' ? 'consumed' : 'active',
+        reservationKind: reservation.reservation_kind,
+        expiresAt:
+          reservation.status === 'consumed'
+            ? null
+            : new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        reservationId: reservation.id,
+      });
+    } catch (error) {
+      await client
+        .from('order_items')
+        .update({
+          quantity_units: previousItem.quantity_units,
+          unit_weight_kg: previousItem.unit_weight_kg,
+          unit_base_price_cents: previousItem.unit_base_price_cents,
+          unit_delivery_cents: previousItem.unit_delivery_cents,
+          unit_sharer_fee_cents: previousItem.unit_sharer_fee_cents,
+          unit_final_price_cents: previousItem.unit_final_price_cents,
+          line_total_cents: previousItem.line_total_cents,
+          line_weight_kg: previousItem.line_weight_kg,
+        })
+        .eq('id', orderItemId);
+      throw error;
+    }
   }
 
   await recomputeCaches(orderId, participantId);
@@ -1458,18 +1570,28 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
   const profiles = await fetchProfilesByIds(client, profileIds);
   const profileMap = new Map<
     string,
-    { name?: string | null; avatarPath?: string | null; avatarUpdatedAt?: string | null }
+    {
+      name?: string | null;
+      avatarPath?: string | null;
+      avatarUpdatedAt?: string | null;
+      city?: string | null;
+      postcode?: string | null;
+    }
   >();
   profiles.forEach((profile) => {
     profileMap.set(profile.id as string, {
       name: (profile.name as string | null) ?? null,
       avatarPath: (profile.avatar_path as string | null) ?? null,
       avatarUpdatedAt: (profile.avatar_updated_at as string | null) ?? null,
+      city: (profile.city as string | null) ?? null,
+      postcode: (profile.postcode as string | null) ?? null,
     });
   });
 
   return rows.map((row) => {
     const order = mapOrderRow(row);
+    const sharerProfile = profileMap.get(row.sharer_profile_id);
+    const producerProfile = profileMap.get(row.producer_profile_id);
     const orderProductsForRow = (orderProductMap.get(row.id) ?? [])
       .slice()
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
@@ -1478,10 +1600,16 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .filter((slot) => slot.enabled);
     const products = orderProductsForRow
-      .map((entry) => productMap.get(entry.productId))
+      .map((entry) => {
+        const product = productMap.get(entry.productId);
+        if (!product) return null;
+        return {
+          ...product,
+          producerProfileCity: producerProfile?.city ?? null,
+          producerProfilePostcode: producerProfile?.postcode ?? null,
+        } satisfies Product;
+      })
       .filter(Boolean) as Product[];
-    const sharerProfile = profileMap.get(row.sharer_profile_id);
-    const producerProfile = profileMap.get(row.producer_profile_id);
     const sharerName = sharerProfile?.name ?? 'Partageur';
     const producerName = producerProfile?.name ?? products[0]?.producerName ?? 'Producteur';
     const prefersPickupLocation = order.deliveryOption === 'producer_pickup';

@@ -177,6 +177,18 @@ const getAccountTypeLabel = (accountType?: User['accountType']) => {
   return '';
 };
 
+const formatProductLocationLabel = (product: {
+  producerLocation?: string | null;
+  producerProfileCity?: string | null;
+  producerProfilePostcode?: string | null;
+}) => {
+  const compact = [product.producerProfilePostcode, product.producerProfileCity]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(' ');
+  return compact || product.producerLocation?.trim() || '';
+};
+
 export function ShareOverlay({
   open,
   kind,
@@ -393,33 +405,33 @@ export function ShareOverlay({
   const filterOptions = React.useMemo<FilterOption[]>(() => {
     if (kind === 'order') {
       return [
-        { id: 'hero', label: 'Entete' },
-        ...(hasOrderMessage ? [{ id: 'message', label: 'Message commande' }] : []),
-        { id: 'products', label: 'Produits commande' },
-        { id: 'calendar', label: 'Calendrier commande' },
-        ...(hasPickupAddressPrecise ? [{ id: 'pickupAddressPrecise', label: 'Adresse precise retrait' }] : []),
-        ...(hasPickupAddressCity ? [{ id: 'pickupAddressCity', label: 'Code postal + ville retrait' }] : []),
+        { id: 'hero', label: 'Entête de la commande' },
+        ...(hasOrderMessage ? [{ id: 'message', label: 'Message de la commande' }] : []),
+        { id: 'products', label: 'Produits de la commande' },
+        { id: 'calendar', label: 'Calendrier de la commande' },
+        ...(hasPickupAddressPrecise ? [{ id: 'pickupAddressPrecise', label: 'Adresse précise de retrait' }] : []),
+        ...(hasPickupAddressCity ? [{ id: 'pickupAddressCity', label: 'Code postal & Ville de retrait' }] : []),
         { id: 'qrUrl', label: 'QR code + URL' },
       ];
     }
     if (kind === 'product') {
       return [
-        { id: 'hero', label: 'Hero produit' },
-        { id: 'parcours', label: 'Parcours produit' },
-        { id: 'repartition', label: 'Repartition prix' },
+        { id: 'hero', label: 'Entête du produit' },
+        { id: 'parcours', label: 'Parcours du produit' },
+        { id: 'repartition', label: 'Répartition du prix' },
         { id: 'qrUrl', label: 'QR code + URL' },
       ];
     }
     if (kind === 'profile') {
       return [
-        { id: 'hero', label: 'Hero profil' },
+        { id: 'hero', label: 'Entête du profil' },
         ...(hasProfileContacts ? [{ id: 'contacts', label: 'Contacts publics' }] : []),
         { id: 'qrUrl', label: 'QR code + URL' },
       ];
     }
     return [
-      { id: 'hero', label: 'Entete' },
-      ...(hasGenericDetails ? [{ id: 'details', label: 'Details' }] : []),
+      { id: 'hero', label: 'Entête' },
+      ...(hasGenericDetails ? [{ id: 'details', label: 'Détails' }] : []),
       { id: 'qrUrl', label: 'QR code + URL' },
     ];
   }, [hasGenericDetails, hasOrderMessage, hasPickupAddressCity, hasPickupAddressPrecise, hasProfileContacts, kind]);
@@ -475,7 +487,7 @@ export function ShareOverlay({
     if (!text) return;
     navigator.clipboard
       ?.writeText(text)
-      .then(() => toast.success('Lien copie dans le presse-papier'))
+      .then(() => toast.success('Lien copié dans le presse-papier'))
       .catch(() => toast.error('Impossible de copier le lien'));
   }, [link]);
 
@@ -634,9 +646,10 @@ export function ShareOverlay({
             <div className="share-overlay__order-product-grid">
               {order.products.map((item) => {
                 const hasPrice = item.price > 0;
-                const measurementLabel = item.measurement === 'kg' ? '/ Kg' : '/ unite';
+                const measurementLabel = item.measurement === 'kg' ? '/ Kg' : '/ unité';
                 const sanitizedUnitLabel = (item.unit || '').trim();
                 const weightLabel = item.measurement === 'unit' ? formatUnitWeightLabel(item.weightKg) : '';
+                const producerLocationLabel = formatProductLocationLabel(item);
                 const measurementDetails = [sanitizedUnitLabel, weightLabel].filter(Boolean).join(' ');
                 const measurementInline = measurementDetails
                   ? `${measurementLabel} (${measurementDetails})`
@@ -653,17 +666,16 @@ export function ShareOverlay({
                     <div className="share-overlay__order-product-content">
                       <div className="share-overlay__order-product-topline">
                         <p className="share-overlay__order-product-producer">{item.producerName}</p>
-                        {item.category ? <span className="share-overlay__order-product-category">{item.category}</span> : null}
                       </div>
                       <p className="share-overlay__order-product-title">{item.name}</p>
                       <div className="share-overlay__order-product-pricing">
                         <p className="share-overlay__order-product-price-main">
-                          {hasPrice ? formatCurrency(item.price) : 'Prix a venir'}
+                          {hasPrice ? formatCurrency(item.price) : 'Prix à venir'}
                         </p>
                         {hasPrice ? <p className="share-overlay__order-product-unit">{measurementInline}</p> : null}
                       </div>
-                      {item.producerLocation ? (
-                        <p className="share-overlay__order-product-location">{item.producerLocation}</p>
+                      {producerLocationLabel ? (
+                        <p className="share-overlay__order-product-location">{producerLocationLabel}</p>
                       ) : null}
                     </div>
                   </article>
@@ -680,7 +692,7 @@ export function ShareOverlay({
               <span>
                 {orderCalendar?.months.length === 2
                   ? `${orderCalendar.months[0].monthLabel} - ${orderCalendar.months[1].monthLabel}`
-                  : orderCalendar?.months[0]?.monthLabel ?? 'Date a confirmer'}
+                  : orderCalendar?.months[0]?.monthLabel ?? 'Date à confirmer'}
               </span>
             </div>
             {orderCalendar ? (
@@ -710,7 +722,7 @@ export function ShareOverlay({
                   return (
                   <div className="share-overlay__calendar-address">
                     <p>
-                      Adresse: <strong>{addressLine}</strong>
+                      Adresse de retrait de la commande : <strong>{addressLine}</strong>
                     </p>
                   </div>
                   );
@@ -776,7 +788,7 @@ export function ShareOverlay({
                 ) : null}
               </>
             ) : (
-              <p className="share-overlay__body-text">Le calendrier de retrait sera confirme prochainement.</p>
+              <p className="share-overlay__body-text">Le calendrier de retrait sera confirmé prochainement.</p>
             )}
           </section>
         )}
@@ -833,7 +845,7 @@ export function ShareOverlay({
                 ))}
               </ol>
             ) : (
-              <p className="share-overlay__body-text">Parcours detaille a consulter directement sur la page produit.</p>
+              <p className="share-overlay__body-text">Parcours détaillé à consulter directement sur la page du produit.</p>
             )}
           </section>
         )}
@@ -841,7 +853,7 @@ export function ShareOverlay({
         {isSectionVisible('repartition') && (
           <section className="share-overlay__section">
             <div className="share-overlay__section-head">
-              <h3>Repartition du prix</h3>
+              <h3>Répartition du prix</h3>
               <span>{detail?.repartitionValeur?.mode === 'detaille' ? 'Montants exacts' : 'Montants estimatifs'}</span>
             </div>
             {productBreakdownPie.slices.length ? (
@@ -868,7 +880,7 @@ export function ShareOverlay({
                 </ul>
               </div>
             ) : (
-              <p className="share-overlay__body-text">La repartition sera visible des que le producteur aura renseigne les postes.</p>
+              <p className="share-overlay__body-text">La répartition sera visible dès que le producteur l'aura renseignée.</p>
             )}
           </section>
         )}
@@ -973,6 +985,7 @@ export function ShareOverlay({
         <div className="share-overlay__print-canvas" ref={printCanvasRef}>
           <header className="share-overlay__header">
             <Logo className="text-[#FF6B4A]" />
+            <p className="share-overlay__print-title share-overlay__hide-print">Page imprimable</p>
             <div className="share-overlay__actions">
               <div className="share-overlay__filter" ref={filterPanelRef}>
                 <button
@@ -986,7 +999,7 @@ export function ShareOverlay({
                 </button>
                 {filtersOpen && (
                   <div className="share-overlay__filter-panel">
-                    <p className="share-overlay__filter-title">Sections affichees</p>
+                    <p className="share-overlay__filter-title">Sections affichées</p>
                     {filterOptions.map((option) => (
                       <label key={option.id} className="share-overlay__filter-row">
                         <input
@@ -1017,7 +1030,7 @@ export function ShareOverlay({
                 type="button"
                 className="share-overlay__close-button share-overlay__hide-print"
                 onClick={onClose}
-                aria-label="Fermer la fenetre de partage"
+                aria-label="Fermer la fenêtre de partage"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1033,11 +1046,9 @@ export function ShareOverlay({
                   <img src={qrUrl} alt="QR code vers la page a partager" />
                 </div>
                 <div className="share-overlay__link-box">
+                  <p className="share-overlay__body-text share-overlay__qr-description">Scannez ce QR code ou utilisez le lien pour ouvrir la page directement.</p>
                   <p className="share-overlay__section-label">Lien direct</p>
                   <p className="share-overlay__link-value">{link}</p>
-                  <p className="share-overlay__body-text">
-                    Scannez ce QR code ou utilisez le lien pour ouvrir cette page directement.
-                  </p>
                   <button
                     type="button"
                     className="share-overlay__copy-button share-overlay__hide-print"

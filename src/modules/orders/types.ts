@@ -219,11 +219,14 @@ export type DbLotReservation = {
   id: string;
   lot_id: string;
   order_id: string;
-  order_item_id: string;
+  order_item_id: string | null;
+  participant_id: string | null;
+  checkout_payment_session_id: string | null;
   reserved_units: number | null;
   reserved_kg: number | null;
   status: 'active' | 'released' | 'consumed' | 'expired';
   expires_at: string | null;
+  reservation_kind: string;
   created_at: string;
 };
 
@@ -449,11 +452,14 @@ export type LotReservation = {
   id: string;
   lotId: string;
   orderId: string;
-  orderItemId: string;
+  orderItemId: string | null;
+  participantId: string | null;
+  checkoutPaymentSessionId: string | null;
   reservedUnits: number | null;
   reservedKg: number | null;
   status: DbLotReservation['status'];
   expiresAt: Date | null;
+  reservationKind: string;
   createdAt: Date;
 };
 

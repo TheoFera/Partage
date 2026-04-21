@@ -389,8 +389,8 @@ const sumPaidCentsForParticipant = (payments: OrderFull['payments'], participant
 };
 
 const ORDER_DELIVERY_OPTION_LABELS = {
-  chronofresh: 'Chronofresh',
-  producer_delivery: 'Livraison producteur',
+  chronofresh: 'Livraison par Chronofresh',
+  producer_delivery: 'Livraison par le producteur',
   producer_pickup: 'Retrait par le partageur',
 } as const;
 
@@ -1756,6 +1756,8 @@ const sharerAvatarUpdatedAt =
           productId: product.dbId,
           lotId: product.activeLotId ?? null,
           quantityUnits: qty,
+          reservationStatus: 'consumed',
+          reservationKind: 'participant_direct',
         });
         createdOrderItems.push({ id: item.id });
       }
@@ -2324,7 +2326,7 @@ const sharerAvatarUpdatedAt =
     const lines = [`Adresse de livraison : ${deliveryAddress}`];
     if (deliveryInfo) lines.push(`Infos livraison : ${deliveryInfo}`);
     if (order.deliveryOption === 'producer_delivery') {
-      if (deliveryPhone) lines.push(`Telephone livraison : ${deliveryPhone}`);
+      if (deliveryPhone) lines.push(`Téléphone livraison : ${deliveryPhone}`);
       if (deliveryEmail) lines.push(`Email livraison : ${deliveryEmail}`);
     }
     if (order.deliveryOption === 'producer_pickup') {
