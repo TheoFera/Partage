@@ -11,6 +11,7 @@ import { formatUnitWeightLabel } from '../../products/utils/weight';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { toast } from 'sonner';
 import { createOrder } from '../api/orders';
+import { orderParticipantFeatures, resolveOrderParticipantFeatureValue } from '../participantFeatures';
 import {
   formatQuantityInputValue,
   isKgMeasurement,
@@ -1164,6 +1165,22 @@ export function CreateOrderForm({
     }`;
   };
 
+  const effectiveAutoApproveParticipationRequests = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.participationApproval,
+    autoApproveParticipationRequests,
+    true
+  );
+  const effectiveAllowSharerMessages = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.sharerMessages,
+    allowSharerMessages,
+    true
+  );
+  const effectiveAutoApprovePickupSlots = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.pickupSlotApproval,
+    autoApprovePickupSlots,
+    true
+  );
+
   React.useEffect(() => {
     if (preselectedProductIds && preselectedProductIds.length > 0) {
       setSelectedProducts((prev) => {
@@ -1472,9 +1489,9 @@ export function CreateOrderForm({
       status: 'open',
       deadline: deadline ? new Date(deadline) : null,
       message,
-      autoApproveParticipationRequests,
-      allowSharerMessages,
-      autoApprovePickupSlots,
+      autoApproveParticipationRequests: effectiveAutoApproveParticipationRequests,
+      allowSharerMessages: effectiveAllowSharerMessages,
+      autoApprovePickupSlots: effectiveAutoApprovePickupSlots,
       minWeight: normalizedMinWeight,
       maxWeight: normalizedMaxWeight,
       deliveryPhone,
@@ -1511,9 +1528,9 @@ export function CreateOrderForm({
       status: 'open',
       deadline: deadline ? new Date(deadline) : null,
       message,
-      autoApproveParticipationRequests,
-      allowSharerMessages,
-      autoApprovePickupSlots,
+      autoApproveParticipationRequests: effectiveAutoApproveParticipationRequests,
+      allowSharerMessages: effectiveAllowSharerMessages,
+      autoApprovePickupSlots: effectiveAutoApprovePickupSlots,
       minWeightKg: normalizedMinWeight,
       maxWeightKg: normalizedMaxWeight,
       orderedWeightKg: shareMode === 'products' ? sharerSelectionWeight : 0,
@@ -1714,6 +1731,7 @@ export function CreateOrderForm({
                 </p>
               </div>
 
+                {orderParticipantFeatures.participationApproval.enabled && (
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
                   <p>Validation des participants à la commande</p>
                   <div className="flex flex-wrap gap-2 mt-3">
@@ -1736,6 +1754,8 @@ export function CreateOrderForm({
                     La validation des demandes de participation à la commande peut se faire directement ou au cas par cas par vous.
                   </p>
                 </div>
+                )}
+                {orderParticipantFeatures.sharerMessages.enabled && (
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
                   <p>Messages de potentiels participants à la commande</p>
                   <div className="flex flex-wrap gap-2 mt-3">
@@ -1758,6 +1778,8 @@ export function CreateOrderForm({
                     Si les messages sont acceptés, vous pourrez recevoir des messages privés de personnes souhaitant, par exemple, participer à la commande mais ayant des questions.
                   </p>
                 </div>
+                )}
+                {orderParticipantFeatures.pickupSlotApproval.enabled && (
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
                   <p>Validation des rendez-vous de récupération des produits</p>
                   <div className="flex flex-wrap gap-2 mt-3">
@@ -1780,6 +1802,7 @@ export function CreateOrderForm({
                     La validation des demandes de rendez-vous proposées par les participants peut se faire directement ou au cas par cas par vous.
                   </p>
                 </div>
+                )}
           </div>
           <div className="bg-white rounded-xl p-6 shadow-sm space-y-4">
             <div>

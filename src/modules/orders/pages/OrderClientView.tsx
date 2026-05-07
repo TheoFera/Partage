@@ -36,6 +36,7 @@ import {
   readOrderPageSnapshot,
   writeOrderPageSnapshot,
 } from '../utils/orderPageSnapshot';
+import { orderParticipantFeatures, resolveOrderParticipantFeatureValue } from '../participantFeatures';
 import {
   addItem,
   approveParticipation,
@@ -1119,9 +1120,21 @@ const sharerAvatarUpdatedAt =
     [quantities]
   );
 
-  const autoApproveParticipationRequests = Boolean(order.autoApproveParticipationRequests);
-  const allowSharerMessages = order.allowSharerMessages ?? true;
-  const autoApprovePickupSlots = Boolean(order.autoApprovePickupSlots);
+  const autoApproveParticipationRequests = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.participationApproval,
+    order.autoApproveParticipationRequests,
+    false
+  );
+  const allowSharerMessages = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.sharerMessages,
+    order.allowSharerMessages,
+    true
+  );
+  const autoApprovePickupSlots = resolveOrderParticipantFeatureValue(
+    orderParticipantFeatures.pickupSlotApproval,
+    order.autoApprovePickupSlots,
+    false
+  );
 
   const shouldShowParticipationRequestButton =
     !isOwner && !myParticipant && !autoApproveParticipationRequests;
@@ -1518,7 +1531,9 @@ const sharerAvatarUpdatedAt =
   };
 
   const updateAutoApproveParticipationRequests = (value: boolean) => {
-    if (!isOwner || value === autoApproveParticipationRequests) return;
+    if (!orderParticipantFeatures.participationApproval.enabled || !isOwner || value === autoApproveParticipationRequests) {
+      return;
+    }
     setIsWorking(true);
     updateOrderParticipantSettings(order.id, { autoApproveParticipationRequests: value })
       .then(() => {
@@ -1537,7 +1552,9 @@ const sharerAvatarUpdatedAt =
   };
 
   const updateAllowSharerMessages = (value: boolean) => {
-    if (!isOwner || value === allowSharerMessages) return;
+    if (!orderParticipantFeatures.sharerMessages.enabled || !isOwner || value === allowSharerMessages) {
+      return;
+    }
     setIsWorking(true);
     updateOrderParticipantSettings(order.id, { allowSharerMessages: value })
       .then(() => {
@@ -1556,7 +1573,9 @@ const sharerAvatarUpdatedAt =
   };
 
   const updateAutoApprovePickupSlots = (value: boolean) => {
-    if (!isOwner || value === autoApprovePickupSlots) return;
+    if (!orderParticipantFeatures.pickupSlotApproval.enabled || !isOwner || value === autoApprovePickupSlots) {
+      return;
+    }
     setIsWorking(true);
     updateOrderParticipantSettings(order.id, { autoApprovePickupSlots: value })
       .then(() => {
@@ -2920,6 +2939,7 @@ const sharerAvatarUpdatedAt =
               {order.visibility === 'public' ? <Globe2 className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               {order.visibility === 'public' ? 'Commande publique' : 'Commande privée'}
             </button>
+            {orderParticipantFeatures.participationApproval.enabled && (
             <button
               type="button"
               onClick={() => updateAutoApproveParticipationRequests(!autoApproveParticipationRequests)}
@@ -2935,6 +2955,8 @@ const sharerAvatarUpdatedAt =
                 Validation des participants {autoApproveParticipationRequests ? 'automatique' : 'manuelle'}
               </span>
             </button>
+            )}
+            {orderParticipantFeatures.sharerMessages.enabled && (
             <button
               type="button"
               onClick={() => updateAllowSharerMessages(!allowSharerMessages)}
@@ -2950,6 +2972,8 @@ const sharerAvatarUpdatedAt =
                 Messages {allowSharerMessages ? 'acceptés' : 'désactivés'}
               </span>
             </button>
+            )}
+            {orderParticipantFeatures.pickupSlotApproval.enabled && (
             <button
               type="button"
               onClick={() => updateAutoApprovePickupSlots(!autoApprovePickupSlots)}
@@ -2965,6 +2989,7 @@ const sharerAvatarUpdatedAt =
                 Validation des rendez-vous {autoApprovePickupSlots ? 'automatique' : 'manuelle'}
               </span>
             </button>
+            )}
           </div>
         )}
       </div>
@@ -4065,7 +4090,7 @@ const sharerAvatarUpdatedAt =
                 )}
               </div>
             )}
-            {isOwner && pendingParticipants.length > 0 && (
+            {isOwner && orderParticipantFeatures.participationApproval.enabled && pendingParticipants.length > 0 && (
               <div className="mt-4 rounded-2xl border border-[#FFDCC4] bg-[#FFF7ED] p-4 text-sm space-y-3">
                 <p className="font-semibold text-[#B45309]">Demandes en attente</p>
                 {pendingParticipants.map((participant) => (
