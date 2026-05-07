@@ -829,7 +829,7 @@ React.useEffect(() => {
 
   return (
     <div className="space-y-6 md:space-y-8 pb-16">
-      <div className="bg-white text-[#1F2937] rounded-2xl p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-4">
+      <div className="bg-white text-[#1F2937] rounded-2xl p-4 sm:p-6 md:p-8 shadow-sm border border-gray-100 relative space-y-4">
         <div className="relative flex flex-col gap-6">
           <div className="profile-header-main flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="flex flex-col items-center gap-4 text-center md:flex-row md:items-center md:text-left">

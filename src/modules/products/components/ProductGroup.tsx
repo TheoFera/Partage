@@ -279,7 +279,7 @@ export function ProductResultCard({
   onOpen: (productId: string) => void;
   showSelectionControl?: boolean;
   compact?: boolean;
-  cardWidth?: number;
+  cardWidth?: number | string;
   priceLabelOverride?: string;
 }) {
   const [heartPulse, setHeartPulse] = React.useState(false);
@@ -292,14 +292,14 @@ export function ProductResultCard({
   const priceLabel =
     priceLabelOverride ?? (hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir');
   const canShowPriceDetails = Boolean(priceLabelOverride) || hasPrice;
-  const width = cardWidth ?? CARD_WIDTH;
+  const width = typeof cardWidth === 'number' ? `${cardWidth}px` : cardWidth ?? `${CARD_WIDTH}px`;
   const cardStyle = {
-    width: `${width}px`,
-    minWidth: `${width}px`,
-    maxWidth: `${width}px`,
-    flex: '0 0 auto',
-    minHeight: `${CARD_HEIGHT}px`,
-    height: `${CARD_HEIGHT}px`,
+    width,
+    minWidth: width,
+    maxWidth: width,
+    flex: compact ? '1 1 auto' : '0 0 auto',
+    minHeight: compact ? 'auto' : `${CARD_HEIGHT}px`,
+    height: compact ? 'auto' : `${CARD_HEIGHT}px`,
   };
   const sanitizedUnitLabel = (product.unit || '').trim();
   const weightLabel =
@@ -319,7 +319,7 @@ export function ProductResultCard({
   ) : (
     measurementLabel
   );
-  const imageStyle = { height: '105px' };
+  const imageStyle = compact ? { height: 'clamp(82px, 28vw, 105px)' } : { height: '105px' };
   const headerText = product.producerName?.trim() ?? '';
   const handleHeartClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -344,7 +344,9 @@ export function ProductResultCard({
 
   return (
     <div
-      className="bg-white rounded-2xl border border-[#F1E3DA] shadow-[0_12px_30px_-18px_rgba(31,41,55,0.35)] overflow-hidden flex flex-col hover:shadow-lg transition-shadow flex-shrink-0 h-full"
+      className={`products-landing__product-card bg-white rounded-2xl border border-[#F1E3DA] shadow-[0_12px_30px_-18px_rgba(31,41,55,0.35)] overflow-hidden flex flex-col hover:shadow-lg transition-shadow flex-shrink-0 h-full${
+        compact ? ' products-landing__product-card--compact' : ''
+      }`}
       style={cardStyle}
     >
     <div
@@ -388,7 +390,7 @@ export function ProductResultCard({
         )}
       </div>
       <div
-        className="p-3.5 space-y-2 flex-1 flex flex-col"
+        className="products-landing__product-card-content p-3.5 space-y-2 flex-1 flex flex-col"
         style={{ paddingLeft: '4px' }}
       >
         <div className="space-y-1 min-w-0">
@@ -396,7 +398,7 @@ export function ProductResultCard({
             <button
               type="button"
               onClick={() => onOpenProducer?.(product)}
-              className="block w-full text-xs text-[#6B7280] truncate text-left hover:text-[#FF6B4A] transition-colors"
+              className="products-landing__product-producer block w-full text-xs text-[#6B7280] truncate text-left hover:text-[#FF6B4A] transition-colors"
             >
               {headerText}
             </button>
@@ -404,14 +406,14 @@ export function ProductResultCard({
           <button
             type="button"
             onClick={() => onOpen(product.productCode ?? product.id)}
-            className="block w-full text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
+            className="products-landing__product-name block w-full text-left text-base font-semibold text-[#1F2937] hover:text-[#FF6B4A] transition-colors"
           >
             {product.name}
           </button>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-[#1F2937] flex-wrap">
-          <span className="text-lg font-semibold text-[#FF6B4A]">
+        <div className="products-landing__product-meta flex items-center gap-2 text-xs text-[#1F2937] flex-wrap">
+          <span className="products-landing__product-price text-lg font-semibold text-[#FF6B4A]">
             {priceLabel}
           </span>
               {canShowPriceDetails ? (
@@ -499,7 +501,7 @@ export function ProductGroupContainer({
     CONTAINER_SIDE_PADDING * 2;
 
   const containerStyle: React.CSSProperties = {
-    minWidth: `${containerMinWidth}px`,
+    minWidth: `min(100%, ${containerMinWidth}px)`,
     maxWidth: `${containerMaxWidth}px`,
     width: '100%',
     flex: '0 0 auto',
@@ -1220,7 +1222,7 @@ export function ProductGroupContainer({
           </div>
         ) : (
           <div
-            className="flex flex-wrap gap-2 sm:gap-3 pb-1 w-full justify-center"
+            className="products-landing__product-grid flex flex-wrap gap-2 sm:gap-3 pb-1 w-full justify-center"
             style={{ alignItems: 'stretch' }}
           >
               {group.products.map((product) => (
@@ -1237,7 +1239,7 @@ export function ProductGroupContainer({
                   onOpen={(productId) => handleOpenProduct(product, productId)}
                   showSelectionControl={showSelectionControl}
                   compact
-                  cardWidth={CARD_WIDTH}
+                  cardWidth="var(--products-landing-compact-card-width, min(145px, calc((100% - 8px) / 2)))"
                   priceLabelOverride={orderPriceLabels?.[product.id]}
                 />
               ))}

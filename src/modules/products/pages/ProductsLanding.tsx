@@ -637,13 +637,7 @@ export function ProductsLanding({
       <div
         className="products-landing__hero-wrap"
         style={{
-          position: 'relative',
-          left: '50%',
-          marginLeft: '-50vw',
-          marginRight: '-50vw',
-          width: '100vw',
           overflowX: 'hidden',
-          zIndex: 1,
         }}
       >
         <section

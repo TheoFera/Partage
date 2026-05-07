@@ -103,25 +103,25 @@ export function Header({
 
   return (
     <header className="app-header fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-[0_2px_8px_rgba(0,0,0,0.04)] z-50">
-      <div className="max-w-screen-xl mx-auto px-4 py-3">
-        <div className="flex items-center gap-4 md:gap-4 w-full min-w-0">
-          <Logo onClick={onLogoClick} className={onLogoClick ? 'cursor-pointer' : ''} />
+      <div className="app-header__inner max-w-screen-xl mx-auto px-4 py-3">
+        <div className="app-header__row flex items-center gap-4 md:gap-4 w-full min-w-0">
+          <Logo onClick={onLogoClick} className={`app-header__logo ${onLogoClick ? 'cursor-pointer' : ''}`} />
 
           {showSearch ? (
             <div className="flex-1 min-w-0 flex items-center gap-2">
               <div
-                className="flex items-center gap-2"
+                className="app-header__search-shell flex items-center gap-2"
                 style={{ flex: '0 1 580px', minWidth: '20px', maxWidth: '400px' }}
               >
-                <div className="relative flex-1 min-w-[140px]" ref={searchWrapperRef}>
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
+                <div className="app-header__search-field relative flex-1 min-w-[140px]" ref={searchWrapperRef}>
+                  <Search className="app-header__search-icon absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6B7280]" />
                   <input
                     type="text"
                     placeholder={searchPlaceholder}
                     value={searchQuery}
                     onChange={handleSearch}
                     onFocus={handleSearchFocus}
-                    className="w-full pl-10 pr-4 py-2 bg-[#F9FAFB] border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A] transition-colors"
+                    className="app-header__search-input w-full pl-10 pr-4 py-2 bg-[#F9FAFB] border border-gray-200 rounded-full focus:outline-none focus:border-[#FF6B4A] transition-colors"
                   />
                   {showSuggestions && (
                     <div className="header-search-suggestions">
@@ -264,7 +264,7 @@ export function Header({
             <div className="flex-1" />
           )}
 
-          <div className="flex items-center gap-2 ml-auto">
+          <div className="app-header__actions flex items-center gap-2 ml-auto">
             {actions}
             <div className="relative shrink-0 overflow-visible" id="notifications-anchor">
               <button
@@ -272,9 +272,11 @@ export function Header({
                 onClick={onToggleNotifications}
                 aria-expanded={notificationsOpen}
                 aria-controls="notifications-popover"
-                className={bellButtonClassName}
+                className={`app-header__notification-button ${bellButtonClassName}`}
               >
-                <Bell className={`w-6 h-6 ${notificationsOpen ? 'text-[#FF6B4A]' : 'text-[#6B7280]'}`} />
+                <Bell
+                  className={`app-header__notification-icon w-6 h-6 ${notificationsOpen ? 'text-[#FF6B4A]' : 'text-[#6B7280]'}`}
+                />
               </button>
               {notificationsUnreadCount > 0 && (
                 <span
