@@ -1812,7 +1812,8 @@ export default function App() {
   const updateScrollbarCompensation = React.useCallback(() => {
     if (typeof window === 'undefined') return;
     const root = document.documentElement;
-    const width = Math.max(0, window.innerWidth - root.clientWidth);
+    const isMobileViewport = window.matchMedia('(max-width: 768px)').matches;
+    const width = isMobileViewport ? 0 : Math.max(0, window.innerWidth - root.clientWidth);
     root.style.setProperty('--scrollbar-compensation', `${width}px`);
   }, []);
 
