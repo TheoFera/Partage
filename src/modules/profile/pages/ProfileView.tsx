@@ -82,6 +82,10 @@ type StripeConnectionState = {
   dueCount: number;
   lastSyncedAt: string | null;
   outstandingRequirements: string[];
+  readyForOrders: boolean;
+  transfersStatus: string | null;
+  requirementsStatus: string | null;
+  requirementsDisabledReason: string | null;
 };
 
 const LEGAL_DOCUMENT_TEMPLATE_VERSION = 'v1';
@@ -158,15 +162,53 @@ const extractEdgeInvokeErrorMessage = async (error: unknown, fallback: string) =
 
 const buildInitialStripeConnectionState = (legalEntity?: LegalEntity): StripeConnectionState => {
   const accountId = legalEntity?.stripeAccountId?.trim() || null;
-  const onboardingComplete = Boolean(legalEntity?.stripeOnboardingComplete);
+  const onboardingComplete = Boolean(legalEntity?.stripeOnboardingComplete || legalEntity?.stripeReadyForOrders);
   return {
-    status: accountId ? (onboardingComplete ? 'connected' : 'action_required') : 'not_connected',
+    status:
+      legalEntity?.stripeConnectionStatus ??
+      (accountId ? (onboardingComplete ? 'connected' : 'action_required') : 'not_connected'),
     accountId,
-    country: legalEntity?.stripeAccountCountry?.trim() || null,
+    country: legalEntity?.stripeAccountCountry?.trim() || legalEntity?.country?.trim() || 'FR',
     dueCount: legalEntity?.stripeRequirementsDueCount ?? 0,
     lastSyncedAt: legalEntity?.stripeLastSyncedAt ?? null,
-    outstandingRequirements: [],
+    outstandingRequirements: legalEntity?.stripeRequirementsCurrentlyDue ?? [],
+    readyForOrders: Boolean(legalEntity?.stripeReadyForOrders),
+    transfersStatus: legalEntity?.stripeTransfersStatus ?? null,
+    requirementsStatus: legalEntity?.stripeRequirementsStatus ?? null,
+    requirementsDisabledReason: legalEntity?.stripeRequirementsDisabledReason ?? null,
   };
+};
+
+const normalizeStripeRequirementLabel = (value: string) =>
+  value
+    .split(".")
+    .map((segment) => segment.replace(/_/g, " ").trim())
+    .filter(Boolean)
+    .join(" > ");
+
+const getMissingStripePrefillFields = (params: {
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  postcode?: string;
+  legalEntity?: LegalEntity;
+}) => {
+  const legalEntity = params.legalEntity;
+  const checks: Array<[boolean, string]> = [
+    [Boolean(legalEntity?.legalName?.trim()), 'Raison sociale'],
+    [Boolean(legalEntity?.siret?.trim()), 'SIRET'],
+    [Boolean(params.email?.trim()), 'E-mail du compte'],
+    [Boolean(params.phone?.trim()), 'Téléphone du profil'],
+    [Boolean(params.address?.trim() && params.city?.trim() && params.postcode?.trim()), 'Adresse du profil'],
+    [Boolean(legalEntity?.accountHolderName?.trim()), 'Titulaire du compte bancaire'],
+    [Boolean(legalEntity?.iban?.trim()), 'IBAN à vérifier sur votre site avant Stripe'],
+    [Boolean(legalEntity?.representativeFirstName?.trim()), 'Prénom du représentant légal'],
+    [Boolean(legalEntity?.representativeLastName?.trim()), 'Nom du représentant légal'],
+    [Boolean(legalEntity?.representativeBirthDate?.trim()), 'Date de naissance du représentant légal'],
+    [Boolean(legalEntity?.representativeTitle?.trim()), 'Fonction du représentant légal'],
+  ];
+  return checks.filter(([isComplete]) => !isComplete).map(([, label]) => label);
 };
 
 const getSignedDocumentPath = (docType: LegalDocumentType, profileId: string, docId: string) => {
@@ -437,6 +479,8 @@ export function ProfileView({
   const mode = modeProp ?? internalMode;
   const setMode = onModeChange ?? setInternalMode;
   const [activeTab, setActiveTab] = React.useState<TabKey>('orders');
+  const [preferredEditTab, setPreferredEditTab] = React.useState<EditTabKey | null>(null);
+  const [stripePromptDismissed, setStripePromptDismissed] = React.useState(false);
   const profileHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
   const profileVisibility = user.profileVisibility ?? 'public';
   const addressVisibility = user.addressVisibility ?? 'private';
@@ -467,6 +511,26 @@ export function ProfileView({
   const avatarFallbackSrc = user.profileImage?.trim() || DEFAULT_PROFILE_AVATAR;
   const avatarVersion = user.avatarUpdatedAt ?? user.updatedAt ?? undefined;
   const [avatarLightboxOpen, setAvatarLightboxOpen] = React.useState(false);
+  const profileStripeMissingFields = React.useMemo(
+    () =>
+      getMissingStripePrefillFields({
+        email: user.email,
+        phone: user.phone,
+        address: user.address,
+        city: user.city,
+        postcode: user.postcode,
+        legalEntity: user.legalEntity,
+      }),
+    [user.address, user.city, user.email, user.legalEntity, user.phone, user.postcode]
+  );
+  const profileStripeStatus =
+    user.legalEntity?.stripeConnectionStatus ??
+    (user.legalEntity?.stripeReadyForOrders ? 'connected' : user.legalEntity?.stripeAccountId ? 'action_required' : 'not_connected');
+  const stripePromptNeeded =
+    isOwnProfile &&
+    isProducerProfile &&
+    (profileStripeMissingFields.length > 0 || !user.legalEntity?.stripeReadyForOrders);
+  const showStripePrompt = mode === 'view' && stripePromptNeeded && !stripePromptDismissed;
 
   const handleFollowClick = React.useCallback(() => {
     if (!onToggleFollow) {
@@ -483,6 +547,17 @@ export function ProfileView({
       toast.info('La messagerie arrive bientôt.');
     }
   }, [onMessageUser]);
+
+  React.useEffect(() => {
+    if (stripePromptNeeded) return;
+    setStripePromptDismissed(false);
+  }, [stripePromptNeeded]);
+
+  const handleOpenStripeStructure = React.useCallback(() => {
+    setPreferredEditTab('structure');
+    setStripePromptDismissed(true);
+    setMode('edit');
+  }, [setMode]);
 
 const buildProfileHandle = React.useCallback((value?: string | null) => {
   return value ? value.toLowerCase().replace(/\s+/g, '') : '';
@@ -671,10 +746,14 @@ React.useEffect(() => {
       <ProfileEditPanel
         user={user}
         onUpdateUser={onUpdateUser}
-        onClose={() => setMode('view')}
+        onClose={() => {
+          setPreferredEditTab(null);
+          setMode('view');
+        }}
         supabaseClient={supabaseClient ?? null}
         onAvatarUpdated={onAvatarUpdated}
         onRegisterSave={onRegisterSave}
+        initialEditTab={preferredEditTab ?? undefined}
       />
     );
   }
@@ -984,6 +1063,14 @@ React.useEffect(() => {
         updatedAt={avatarVersion}
         supabaseClient={supabaseClient ?? null}
       />
+      <StripeConnectPromptOverlay
+        open={showStripePrompt}
+        onClose={() => setStripePromptDismissed(true)}
+        onPrimaryAction={handleOpenStripeStructure}
+        missingFields={profileStripeMissingFields}
+        dueCount={user.legalEntity?.stripeRequirementsDueCount ?? 0}
+        status={profileStripeStatus}
+      />
     </div>
   );
 }
@@ -1161,6 +1248,103 @@ function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
   );
 }
 
+function StripeConnectPromptOverlay({
+  open,
+  onClose,
+  onPrimaryAction,
+  missingFields,
+  dueCount,
+  status,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onPrimaryAction: () => void;
+  missingFields: string[];
+  dueCount: number;
+  status: StripeConnectionStatus;
+}) {
+  if (!open) return null;
+
+  const statusLabel =
+    status === 'connected'
+      ? 'Compte prêt'
+      : status === 'action_required'
+        ? 'Action requise'
+        : 'Compte à connecter';
+
+  const content = (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-[#111827]/55 px-4 py-6">
+      <div className="relative w-full max-w-xl rounded-[28px] bg-white p-6 shadow-2xl">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 text-[#6B7280] transition-colors hover:border-[#FF6B4A] hover:text-[#FF6B4A]"
+          aria-label="Fermer l'invitation Stripe"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <div className="space-y-4 pr-10">
+          <span className="inline-flex items-center rounded-full bg-[#FFF1E6] px-3 py-1 text-xs font-semibold text-[#B45309]">
+            Producteur à finaliser
+          </span>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-semibold text-[#1F2937]">Complétez votre structure avant d’encaisser</h2>
+            <p className="text-sm leading-6 text-[#6B7280]">
+              Votre profil producteur n’est pas encore prêt pour Stripe Connect. Complétez les champs
+              structure, vérifiez l’IBAN sur votre site, puis terminez l’onboarding Stripe.
+            </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-[#D9E7F9] bg-[#F8FBFF] px-4 py-3">
+              <div className="text-xs font-medium uppercase tracking-[0.08em] text-[#6B7280]">Statut Stripe</div>
+              <div className="mt-2 text-sm font-semibold text-[#1F2937]">{statusLabel}</div>
+            </div>
+            <div className="rounded-2xl border border-[#D9E7F9] bg-[#F8FBFF] px-4 py-3">
+              <div className="text-xs font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+                Informations encore attendues
+              </div>
+              <div className="mt-2 text-sm font-semibold text-[#1F2937]">{dueCount}</div>
+            </div>
+          </div>
+
+          {missingFields.length > 0 && (
+            <div className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] px-4 py-3">
+              <p className="text-sm font-semibold text-[#1F2937]">Champs à compléter sur votre site</p>
+              <ul className="mt-2 space-y-1 text-sm text-[#6B7280]">
+                {missingFields.slice(0, 6).map((field) => (
+                  <li key={field}>• {field}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={onPrimaryAction}
+              className="inline-flex items-center justify-center rounded-xl bg-[#FF6B4A] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#FF5A39]"
+            >
+              Compléter ma structure
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-4 py-3 text-sm font-medium text-[#1F2937] transition-colors hover:border-[#FF6B4A] hover:text-[#FF6B4A]"
+            >
+              Plus tard
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return content;
+  return createPortal(content, document.body);
+}
+
 function ProfileEditPanel({
   user,
   onUpdateUser,
@@ -1168,6 +1352,7 @@ function ProfileEditPanel({
   supabaseClient,
   onAvatarUpdated,
   onRegisterSave,
+  initialEditTab,
 }: {
   user: User;
   onUpdateUser: (user: Partial<User>) => void;
@@ -1175,6 +1360,7 @@ function ProfileEditPanel({
   supabaseClient?: SupabaseClient | null;
   onAvatarUpdated?: (payload: { avatarPath: string; avatarUpdatedAt?: string | null }) => void;
   onRegisterSave?: (handler: (() => void) | null) => void;
+  initialEditTab?: EditTabKey;
 }) {
   const location = useLocation();
   const defaultHandle = user.handle ?? user.name.toLowerCase().replace(/\s+/g, '');
@@ -1196,7 +1382,7 @@ function ProfileEditPanel({
   const [accountType, setAccountType] = React.useState<User['accountType']>(
     user.accountType ?? 'individual'
   );
-  const [editTab, setEditTab] = React.useState<EditTabKey>('general');
+  const [editTab, setEditTab] = React.useState<EditTabKey>(initialEditTab ?? 'general');
   const isProducerSettingsTabActive = editTab === 'producer_settings';
   const [phonePublic, setPhonePublic] = React.useState(user.phonePublic ?? '');
   const [contactEmailPublic, setContactEmailPublic] = React.useState(user.contactEmailPublic ?? '');
@@ -1240,12 +1426,50 @@ function ProfileEditPanel({
   const [vatRegime, setVatRegime] = React.useState<LegalEntity['vatRegime']>(
     user.legalEntity?.vatRegime ?? 'unknown'
   );
+  const [country, setCountry] = React.useState(user.legalEntity?.country ?? 'FR');
+  const [legalForm, setLegalForm] = React.useState(user.legalEntity?.legalForm ?? '');
   const [producerCategory, setProducerCategory] = React.useState(
     user.legalEntity?.producerCategory ?? ''
   );
   const [iban, setIban] = React.useState(user.legalEntity?.iban ?? '');
   const [accountHolderName, setAccountHolderName] = React.useState(
     user.legalEntity?.accountHolderName ?? ''
+  );
+  const [representativeFirstName, setRepresentativeFirstName] = React.useState(
+    user.legalEntity?.representativeFirstName ?? ''
+  );
+  const [representativeLastName, setRepresentativeLastName] = React.useState(
+    user.legalEntity?.representativeLastName ?? ''
+  );
+  const [representativeEmail, setRepresentativeEmail] = React.useState(
+    user.legalEntity?.representativeEmail ?? ''
+  );
+  const [representativePhone, setRepresentativePhone] = React.useState(
+    user.legalEntity?.representativePhone ?? ''
+  );
+  const [representativeTitle, setRepresentativeTitle] = React.useState(
+    user.legalEntity?.representativeTitle ?? ''
+  );
+  const [representativeBirthDate, setRepresentativeBirthDate] = React.useState(
+    user.legalEntity?.representativeBirthDate ?? ''
+  );
+  const [representativeUseProfileAddress, setRepresentativeUseProfileAddress] = React.useState(
+    user.legalEntity?.representativeUseProfileAddress ?? true
+  );
+  const [representativeAddressLine1, setRepresentativeAddressLine1] = React.useState(
+    user.legalEntity?.representativeAddressLine1 ?? ''
+  );
+  const [representativeAddressLine2, setRepresentativeAddressLine2] = React.useState(
+    user.legalEntity?.representativeAddressLine2 ?? ''
+  );
+  const [representativeCity, setRepresentativeCity] = React.useState(
+    user.legalEntity?.representativeCity ?? ''
+  );
+  const [representativePostcode, setRepresentativePostcode] = React.useState(
+    user.legalEntity?.representativePostcode ?? ''
+  );
+  const [representativeCountry, setRepresentativeCountry] = React.useState(
+    user.legalEntity?.representativeCountry ?? 'FR'
   );
   const [deliveryLeadType, setDeliveryLeadType] = React.useState<DeliveryLeadType>(
     user.legalEntity?.deliveryLeadType ?? 'days'
@@ -1448,6 +1672,8 @@ function ProfileEditPanel({
   const producerEligible = canBeProducer && hasLegalInfo;
   const sharerCharterAccepted = sharerCharterItems.every((item) => sharerCharterChecks[item.id]);
   const computedRole: User['role'] = user.role;
+  const isOwnProfile = true;
+  const isProducerProfile = computedRole === 'producer' && canBeProducer;
   const structureTabVisible = accountType !== 'individual';
   const producerSettingsVisible = accountType !== 'individual' && accountType !== 'auto_entrepreneur';
   const producerSettingsDisabled = !producerEligible;
@@ -1498,8 +1724,22 @@ function ProfileEditPanel({
         siret: user.legalEntity?.siret?.trim() ?? '',
         vatNumber: user.legalEntity?.vatNumber?.trim() ?? '',
         vatRegime: user.legalEntity?.vatRegime ?? 'unknown',
+        country: user.legalEntity?.country?.trim() ?? 'FR',
+        legalForm: user.legalEntity?.legalForm?.trim() ?? '',
         iban: user.legalEntity?.iban?.trim() ?? '',
         accountHolderName: user.legalEntity?.accountHolderName?.trim() ?? '',
+        representativeFirstName: user.legalEntity?.representativeFirstName?.trim() ?? '',
+        representativeLastName: user.legalEntity?.representativeLastName?.trim() ?? '',
+        representativeEmail: user.legalEntity?.representativeEmail?.trim() ?? '',
+        representativePhone: user.legalEntity?.representativePhone?.trim() ?? '',
+        representativeTitle: user.legalEntity?.representativeTitle?.trim() ?? '',
+        representativeBirthDate: user.legalEntity?.representativeBirthDate?.trim() ?? '',
+        representativeUseProfileAddress: user.legalEntity?.representativeUseProfileAddress ?? true,
+        representativeAddressLine1: user.legalEntity?.representativeAddressLine1?.trim() ?? '',
+        representativeAddressLine2: user.legalEntity?.representativeAddressLine2?.trim() ?? '',
+        representativeCity: user.legalEntity?.representativeCity?.trim() ?? '',
+        representativePostcode: user.legalEntity?.representativePostcode?.trim() ?? '',
+        representativeCountry: user.legalEntity?.representativeCountry?.trim() ?? 'FR',
       }),
     [user.accountType, user.legalEntity]
   );
@@ -1511,12 +1751,60 @@ function ProfileEditPanel({
         siret: siret.trim(),
         vatNumber: vatNumber.trim(),
         vatRegime: vatRegime ?? 'unknown',
+        country: country.trim() || 'FR',
+        legalForm: legalForm.trim(),
         iban: iban.trim(),
         accountHolderName: accountHolderName.trim(),
+        representativeFirstName: representativeFirstName.trim(),
+        representativeLastName: representativeLastName.trim(),
+        representativeEmail: representativeEmail.trim(),
+        representativePhone: representativePhone.trim(),
+        representativeTitle: representativeTitle.trim(),
+        representativeBirthDate: representativeBirthDate.trim(),
+        representativeUseProfileAddress,
+        representativeAddressLine1: representativeAddressLine1.trim(),
+        representativeAddressLine2: representativeAddressLine2.trim(),
+        representativeCity: representativeCity.trim(),
+        representativePostcode: representativePostcode.trim(),
+        representativeCountry: representativeCountry.trim() || 'FR',
       }),
-    [accountHolderName, accountType, iban, legalName, siret, vatNumber, vatRegime]
+    [
+      accountHolderName,
+      accountType,
+      country,
+      iban,
+      legalForm,
+      legalName,
+      representativeAddressLine1,
+      representativeAddressLine2,
+      representativeBirthDate,
+      representativeCity,
+      representativeCountry,
+      representativeEmail,
+      representativeFirstName,
+      representativeLastName,
+      representativePhone,
+      representativePostcode,
+      representativeTitle,
+      representativeUseProfileAddress,
+      siret,
+      vatNumber,
+      vatRegime,
+    ]
   );
   const stripeLegalInfoNeedsSave = savedStripeLegalFingerprint !== draftStripeLegalFingerprint;
+  const savedStripePrefillMissingFields = React.useMemo(
+    () =>
+      getMissingStripePrefillFields({
+        email: user.email,
+        phone: user.phone,
+        address: user.address,
+        city: user.city,
+        postcode: user.postcode,
+        legalEntity: user.legalEntity,
+      }),
+    [user.address, user.city, user.email, user.legalEntity, user.phone, user.postcode]
+  );
   const stripeReturnUrl = React.useMemo(() => {
     if (typeof window === 'undefined') return null;
     const basePath = user.handle ? `/profil/${user.handle}` : '/profil';
@@ -1525,12 +1813,42 @@ function ProfileEditPanel({
     nextUrl.searchParams.set('profileEditTab', 'structure');
     return nextUrl.toString();
   }, [user.handle]);
+  const stripeRepresentativePrefillReady = React.useMemo(
+    () =>
+      Boolean(
+        representativeFirstName.trim() &&
+          representativeLastName.trim() &&
+          representativeBirthDate.trim()
+      ),
+    [representativeBirthDate, representativeFirstName, representativeLastName]
+  );
   const createStripeAccountToken = React.useCallback(async () => {
     if (!STRIPE_PUBLISHABLE_KEY) {
       throw new Error('Configurez VITE_STRIPE_PUBLISHABLE_KEY pour l onboarding Stripe des structures francaises.');
     }
 
     const trimmedContactEmail = (user.email?.trim() || user.contactEmailPublic?.trim() || '').trim();
+    const trimmedCountry = (country.trim() || 'FR').toUpperCase();
+    const trimmedAddress = address.trim();
+    const trimmedAddressDetails = addressDetails.trim();
+    const trimmedCity = city.trim();
+    const trimmedPostcode = postcode.trim();
+    const businessAddress =
+      trimmedAddress && trimmedCity && trimmedPostcode
+        ? {
+            line1: trimmedAddress,
+            ...(trimmedAddressDetails ? { line2: trimmedAddressDetails } : {}),
+            city: trimmedCity,
+            postal_code: trimmedPostcode,
+            country: trimmedCountry,
+          }
+        : undefined;
+    const entityType =
+      accountType === 'association'
+        ? 'non_profit'
+        : accountType === 'public_institution'
+          ? 'government_entity'
+          : 'company';
 
     // Accounts v2 expects a v2 account token (`accttok_...`), not the legacy Stripe.js v1 account token (`ct_...`).
     const response = await fetch('https://api.stripe.com/v2/core/account_tokens', {
@@ -1544,8 +1862,12 @@ function ProfileEditPanel({
         ...(trimmedContactEmail ? { contact_email: trimmedContactEmail } : {}),
         display_name: legalName.trim(),
         identity: {
+          country: trimmedCountry,
+          entity_type: entityType,
           business_details: {
             registered_name: legalName.trim(),
+            ...(businessAddress ? { address: businessAddress } : {}),
+            ...(phone.trim() ? { phone: phone.trim() } : {}),
           },
         },
       }),
@@ -1573,27 +1895,145 @@ function ProfileEditPanel({
 
     return accountToken;
   }, [
+    accountType,
+    address,
+    addressDetails,
+    city,
+    country,
     legalName,
+    phone,
+    postcode,
     user.contactEmailPublic,
     user.email,
   ]);
+  const createStripePersonToken = React.useCallback(
+    async (accountId: string) => {
+      if (!STRIPE_PUBLISHABLE_KEY) {
+        throw new Error('Configurez VITE_STRIPE_PUBLISHABLE_KEY pour le pré-remplissage Stripe.');
+      }
+      if (!stripeRepresentativePrefillReady) return null;
+
+      const birthDate = new Date(representativeBirthDate);
+      if (Number.isNaN(birthDate.getTime())) {
+        throw new Error('Date de naissance du représentant légal invalide.');
+      }
+
+      const trimmedCountry = (representativeCountry.trim() || country.trim() || 'FR').toUpperCase();
+      const repAddressLine1 = representativeUseProfileAddress ? address.trim() : representativeAddressLine1.trim();
+      const repAddressLine2 = representativeUseProfileAddress ? addressDetails.trim() : representativeAddressLine2.trim();
+      const repCity = representativeUseProfileAddress ? city.trim() : representativeCity.trim();
+      const repPostcode = representativeUseProfileAddress ? postcode.trim() : representativePostcode.trim();
+      const representativeAddress =
+        repAddressLine1 && repCity && repPostcode
+          ? {
+              line1: repAddressLine1,
+              ...(repAddressLine2 ? { line2: repAddressLine2 } : {}),
+              city: repCity,
+              postal_code: repPostcode,
+              country: trimmedCountry,
+            }
+          : undefined;
+
+      const response = await fetch('https://api.stripe.com/v2/core/accounts/create-person-token', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${STRIPE_PUBLISHABLE_KEY}`,
+          'Content-Type': 'application/json',
+          'Stripe-Version': STRIPE_V2_API_VERSION,
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          given_name: representativeFirstName.trim(),
+          surname: representativeLastName.trim(),
+          ...(representativeEmail.trim() ? { email: representativeEmail.trim() } : {}),
+          ...(representativePhone.trim() ? { phone: representativePhone.trim() } : {}),
+          ...(representativeTitle.trim()
+            ? {
+                relationship: {
+                  representative: true,
+                  title: representativeTitle.trim(),
+                },
+              }
+            : {
+                relationship: {
+                  representative: true,
+                },
+              }),
+          dob: {
+            day: birthDate.getDate(),
+            month: birthDate.getMonth() + 1,
+            year: birthDate.getFullYear(),
+          },
+          ...(representativeAddress ? { address: representativeAddress } : {}),
+        }),
+      });
+
+      const result = (await response.json().catch(() => ({}))) as {
+        id?: string;
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        const message =
+          typeof result?.error?.message === 'string' && result.error.message.trim()
+            ? result.error.message.trim()
+            : 'Création du token représentant Stripe impossible.';
+        throw new Error(message);
+      }
+
+      const token = typeof result?.id === 'string' ? result.id.trim() : '';
+      if (!token) {
+        throw new Error("Stripe n'a pas retourné de token représentant.");
+      }
+      return token;
+    },
+    [
+      STRIPE_PUBLISHABLE_KEY,
+      address,
+      addressDetails,
+      city,
+      country,
+      postcode,
+      representativeAddressLine1,
+      representativeAddressLine2,
+      representativeBirthDate,
+      representativeCity,
+      representativeCountry,
+      representativeEmail,
+      representativeFirstName,
+      representativeLastName,
+      representativePhone,
+      representativePostcode,
+      representativeTitle,
+      representativeUseProfileAddress,
+      stripeRepresentativePrefillReady,
+    ]
+  );
 
   const applyStripeConnectionPayload = React.useCallback((payload: {
     status?: string | null;
     stripe_account_id?: string | null;
     stripe_account_country?: string | null;
+    stripe_connection_status?: string | null;
+    stripe_ready_for_orders?: boolean | null;
     stripe_onboarding_complete?: boolean | null;
     stripe_requirements_due_count?: number | null;
     stripe_last_synced_at?: string | null;
     outstanding_requirements?: string[] | null;
+    transfers_status?: string | null;
+    requirements_status?: string | null;
+    requirements_disabled_reason?: string | null;
   }) => {
     const accountId =
       typeof payload.stripe_account_id === 'string' && payload.stripe_account_id.trim()
         ? payload.stripe_account_id.trim()
         : null;
     const onboardingComplete = Boolean(payload.stripe_onboarding_complete);
+    const readyForOrders = Boolean(payload.stripe_ready_for_orders);
     const mappedStatus: StripeConnectionStatus =
-      payload.status === 'connected' || onboardingComplete
+      payload.status === 'connected' ||
+      payload.stripe_connection_status === 'connected' ||
+      onboardingComplete ||
+      readyForOrders
         ? 'connected'
         : accountId
           ? 'action_required'
@@ -1617,6 +2057,19 @@ function ProfileEditPanel({
       outstandingRequirements: Array.isArray(payload.outstanding_requirements)
         ? payload.outstanding_requirements.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
         : [],
+      readyForOrders,
+      transfersStatus:
+        typeof payload.transfers_status === 'string' && payload.transfers_status.trim()
+          ? payload.transfers_status.trim()
+          : null,
+      requirementsStatus:
+        typeof payload.requirements_status === 'string' && payload.requirements_status.trim()
+          ? payload.requirements_status.trim()
+          : null,
+      requirementsDisabledReason:
+        typeof payload.requirements_disabled_reason === 'string' && payload.requirements_disabled_reason.trim()
+          ? payload.requirements_disabled_reason.trim()
+          : null,
     });
   }, []);
 
@@ -1650,6 +2103,10 @@ function ProfileEditPanel({
         stripe_account_id: typeof payload?.stripe_account_id === 'string' ? payload.stripe_account_id : null,
         stripe_account_country:
           typeof payload?.stripe_account_country === 'string' ? payload.stripe_account_country : null,
+        stripe_connection_status:
+          typeof payload?.stripe_connection_status === 'string' ? payload.stripe_connection_status : null,
+        stripe_ready_for_orders:
+          typeof payload?.stripe_ready_for_orders === 'boolean' ? payload.stripe_ready_for_orders : null,
         stripe_onboarding_complete:
           typeof payload?.stripe_onboarding_complete === 'boolean' ? payload.stripe_onboarding_complete : null,
         stripe_requirements_due_count:
@@ -1659,6 +2116,10 @@ function ProfileEditPanel({
         outstanding_requirements: Array.isArray(payload?.outstanding_requirements)
           ? (payload.outstanding_requirements as string[])
           : null,
+        transfers_status: typeof payload?.transfers_status === 'string' ? payload.transfers_status : null,
+        requirements_status: typeof payload?.requirements_status === 'string' ? payload.requirements_status : null,
+        requirements_disabled_reason:
+          typeof payload?.requirements_disabled_reason === 'string' ? payload.requirements_disabled_reason : null,
       });
     },
     [applyStripeConnectionPayload, canBeProducer, supabaseClient]
@@ -1687,11 +2148,14 @@ function ProfileEditPanel({
     }
 
     let accountToken: string | null = null;
-    const shouldCreateFrenchAccountToken =
-      !stripeConnection.accountId &&
-      (stripeConnection.country?.trim().toUpperCase() || user.legalEntity?.stripeAccountCountry?.trim().toUpperCase() || 'FR') === 'FR';
+    let personToken: string | null = null;
+    const isFrenchConnectedAccount =
+      (stripeConnection.country?.trim().toUpperCase() ||
+        user.legalEntity?.stripeAccountCountry?.trim().toUpperCase() ||
+        country.trim().toUpperCase() ||
+        'FR') === 'FR';
 
-    if (shouldCreateFrenchAccountToken) {
+    if (isFrenchConnectedAccount) {
       try {
         accountToken = await createStripeAccountToken();
       } catch (tokenError) {
@@ -1700,22 +2164,58 @@ function ProfileEditPanel({
       }
     }
 
+    if (isFrenchConnectedAccount && stripeRepresentativePrefillReady && stripeConnection.accountId) {
+      try {
+        personToken = await createStripePersonToken(stripeConnection.accountId);
+      } catch (tokenError) {
+        toast.error(await extractEdgeInvokeErrorMessage(tokenError, 'Creation du token representant Stripe impossible.'));
+        return;
+      }
+    }
+
     setStripeOnboardingLoading(true);
-    const { data, error } = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
+    let invokeResult = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
       body: {
         return_url: stripeReturnUrl,
         refresh_url: stripeReturnUrl,
         ...(accountToken ? { account_token: accountToken } : {}),
+        ...(personToken ? { person_token: personToken } : {}),
       },
     });
+
+    let payload = (invokeResult.data as Record<string, unknown> | null) ?? null;
+    if (
+      !invokeResult.error &&
+      payload?.requires_person_token === true &&
+      typeof payload?.stripe_account_id === 'string' &&
+      stripeRepresentativePrefillReady
+    ) {
+      try {
+        const deferredPersonToken = await createStripePersonToken(payload.stripe_account_id);
+        if (deferredPersonToken) {
+          invokeResult = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
+            body: {
+              return_url: stripeReturnUrl,
+              refresh_url: stripeReturnUrl,
+              ...(accountToken ? { account_token: accountToken } : {}),
+              person_token: deferredPersonToken,
+            },
+          });
+          payload = (invokeResult.data as Record<string, unknown> | null) ?? null;
+        }
+      } catch (tokenError) {
+        setStripeOnboardingLoading(false);
+        toast.error(await extractEdgeInvokeErrorMessage(tokenError, 'Creation du token representant Stripe impossible.'));
+        return;
+      }
+    }
     setStripeOnboardingLoading(false);
 
-    if (error) {
-      toast.error(await extractEdgeInvokeErrorMessage(error, 'Creation du lien Stripe impossible.'));
+    if (invokeResult.error) {
+      toast.error(await extractEdgeInvokeErrorMessage(invokeResult.error, 'Creation du lien Stripe impossible.'));
       return;
     }
 
-    const payload = (data as Record<string, unknown> | null) ?? null;
     if (payload && typeof payload.error === 'string') {
       toast.error(payload.error);
       return;
@@ -1724,11 +2224,18 @@ function ProfileEditPanel({
     applyStripeConnectionPayload({
       status: 'action_required',
       stripe_account_id: typeof payload?.stripe_account_id === 'string' ? payload.stripe_account_id : null,
-      stripe_account_country: stripeConnection.country,
+      stripe_account_country:
+        typeof payload?.stripe_account_country === 'string' ? payload.stripe_account_country : stripeConnection.country,
+      stripe_connection_status: 'action_required',
+      stripe_ready_for_orders: false,
       stripe_onboarding_complete: false,
-      stripe_requirements_due_count: stripeConnection.dueCount,
-      stripe_last_synced_at: new Date().toISOString(),
-      outstanding_requirements: stripeConnection.outstandingRequirements,
+      stripe_requirements_due_count:
+        typeof payload?.stripe_requirements_due_count === 'number' ? payload.stripe_requirements_due_count : stripeConnection.dueCount,
+      stripe_last_synced_at:
+        typeof payload?.stripe_last_synced_at === 'string' ? payload.stripe_last_synced_at : new Date().toISOString(),
+      outstanding_requirements: Array.isArray(payload?.outstanding_requirements)
+        ? (payload.outstanding_requirements as string[])
+        : stripeConnection.outstandingRequirements,
     });
 
     const nextUrl = typeof payload?.url === 'string' ? payload.url.trim() : '';
@@ -1745,7 +2252,10 @@ function ProfileEditPanel({
     stripeConnection.country,
     stripeConnection.dueCount,
     stripeConnection.outstandingRequirements,
+    stripeRepresentativePrefillReady,
+    country,
     createStripeAccountToken,
+    createStripePersonToken,
     stripeLegalInfoNeedsSave,
     stripeReturnUrl,
     supabaseClient,
@@ -2085,6 +2595,12 @@ function ProfileEditPanel({
   }, [editTab, editTabs]);
 
   React.useEffect(() => {
+    if (!initialEditTab) return;
+    if (!editTabs.some((tab) => tab.id === initialEditTab)) return;
+    setEditTab(initialEditTab);
+  }, [editTabs, initialEditTab]);
+
+  React.useEffect(() => {
     const params = new URLSearchParams(location.search);
     const requestedTab = params.get('profileEditTab');
     if (!requestedTab) return;
@@ -2096,6 +2612,11 @@ function ProfileEditPanel({
     if (editTab !== 'structure' || !supabaseClient || !canBeProducer) return;
     void refreshStripeConnectionStatus({ silent: true });
   }, [canBeProducer, editTab, refreshStripeConnectionStatus, supabaseClient]);
+
+  React.useEffect(() => {
+    if (!isOwnProfile || !isProducerProfile || !supabaseClient) return;
+    void refreshStripeConnectionStatus({ silent: true });
+  }, [isOwnProfile, isProducerProfile, refreshStripeConnectionStatus, supabaseClient]);
 
   const getDocumentRecord = React.useCallback(
     (docType: LegalDocumentType) => legalDocumentsByType[docType] ?? null,
@@ -2292,8 +2813,15 @@ function ProfileEditPanel({
         legalName.trim() ||
           siret.trim() ||
           vatNumber.trim() ||
+          legalForm.trim() ||
           iban.trim() ||
           accountHolderName.trim() ||
+          representativeFirstName.trim() ||
+          representativeLastName.trim() ||
+          representativeEmail.trim() ||
+          representativePhone.trim() ||
+          representativeTitle.trim() ||
+          representativeBirthDate.trim() ||
           vatRegime !== 'unknown'
       );
     const baseLegalEntity: Partial<LegalEntity> = {
@@ -2302,8 +2830,22 @@ function ProfileEditPanel({
       vatNumber: vatNumber.trim() || undefined,
       vatRegime: vatRegime ?? 'unknown',
       entityType,
+      country: country.trim() || 'FR',
+      legalForm: legalForm.trim() || undefined,
       iban: iban.trim() || undefined,
       accountHolderName: accountHolderName.trim() || undefined,
+      representativeFirstName: representativeFirstName.trim() || undefined,
+      representativeLastName: representativeLastName.trim() || undefined,
+      representativeEmail: representativeEmail.trim() || undefined,
+      representativePhone: representativePhone.trim() || undefined,
+      representativeTitle: representativeTitle.trim() || undefined,
+      representativeBirthDate: representativeBirthDate.trim() || undefined,
+      representativeUseProfileAddress,
+      representativeAddressLine1: representativeUseProfileAddress ? undefined : representativeAddressLine1.trim() || undefined,
+      representativeAddressLine2: representativeUseProfileAddress ? undefined : representativeAddressLine2.trim() || undefined,
+      representativeCity: representativeUseProfileAddress ? undefined : representativeCity.trim() || undefined,
+      representativePostcode: representativeUseProfileAddress ? undefined : representativePostcode.trim() || undefined,
+      representativeCountry: representativeUseProfileAddress ? (country.trim() || 'FR') : representativeCountry.trim() || 'FR',
     };
     const producerSettingsPayload = shouldPersistProducerSettings
       ? {
@@ -2884,6 +3426,26 @@ function ProfileEditPanel({
                   </p>
                 ) : null}
               </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Pays de la structure</label>
+                <select
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] bg-white"
+                >
+                  <option value="FR">France</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-[#6B7280]">Forme juridique officielle</label>
+                <input
+                  type="text"
+                  value={legalForm}
+                  onChange={(e) => setLegalForm(e.target.value)}
+                  placeholder="SAS, SARL, EARL..."
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <label className="block text-sm text-[#6B7280]">Coordonnées bancaires</label>
@@ -2910,6 +3472,143 @@ function ProfileEditPanel({
                 </div>
               </div>
             </div>
+            <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
+              Vérifiez bien l&apos;IBAN avant de lancer Stripe. Avec la configuration Stripe Express actuelle,
+              Stripe peut encore demander au producteur de confirmer ou de ressaisir cet IBAN pendant
+              l&apos;onboarding.
+            </div>
+            <div className="space-y-3 rounded-xl border border-[#D7E3FF] bg-white p-4">
+              <div className="space-y-1">
+                <h4 className="text-sm font-semibold text-[#1F2937]">Représentant légal</h4>
+                <p className="text-xs text-[#6B7280]">
+                  Ces champs servent au pré-remplissage Stripe. S&apos;ils sont vides, Stripe les redemandera.
+                </p>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Prénom</label>
+                  <input
+                    type="text"
+                    value={representativeFirstName}
+                    onChange={(e) => setRepresentativeFirstName(e.target.value)}
+                    placeholder="Marie"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Nom</label>
+                  <input
+                    type="text"
+                    value={representativeLastName}
+                    onChange={(e) => setRepresentativeLastName(e.target.value)}
+                    placeholder="Dupont"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Fonction</label>
+                  <input
+                    type="text"
+                    value={representativeTitle}
+                    onChange={(e) => setRepresentativeTitle(e.target.value)}
+                    placeholder="Gérant, présidente..."
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Date de naissance</label>
+                  <input
+                    type="date"
+                    value={representativeBirthDate}
+                    onChange={(e) => setRepresentativeBirthDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">E-mail</label>
+                  <input
+                    type="email"
+                    value={representativeEmail}
+                    onChange={(e) => setRepresentativeEmail(e.target.value)}
+                    placeholder="gerant@votre-structure.fr"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-[#6B7280]">Téléphone</label>
+                  <input
+                    type="tel"
+                    value={representativePhone}
+                    onChange={(e) => setRepresentativePhone(e.target.value)}
+                    placeholder="06 00 00 00 00"
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                  />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-[#374151]">
+                <input
+                  type="checkbox"
+                  checked={representativeUseProfileAddress}
+                  onChange={(e) => setRepresentativeUseProfileAddress(e.target.checked)}
+                  className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
+                />
+                Utiliser l&apos;adresse du profil pour le représentant légal
+              </label>
+              {!representativeUseProfileAddress && (
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Adresse</label>
+                    <input
+                      type="text"
+                      value={representativeAddressLine1}
+                      onChange={(e) => setRepresentativeAddressLine1(e.target.value)}
+                      placeholder="12 rue des Tilleuls"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Complément</label>
+                    <input
+                      type="text"
+                      value={representativeAddressLine2}
+                      onChange={(e) => setRepresentativeAddressLine2(e.target.value)}
+                      placeholder="Bâtiment, étage..."
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Ville</label>
+                    <input
+                      type="text"
+                      value={representativeCity}
+                      onChange={(e) => setRepresentativeCity(e.target.value)}
+                      placeholder="Lyon"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Code postal</label>
+                    <input
+                      type="text"
+                      value={representativePostcode}
+                      onChange={(e) => setRepresentativePostcode(e.target.value)}
+                      placeholder="69001"
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B7280]">Pays</label>
+                    <select
+                      value={representativeCountry}
+                      onChange={(e) => setRepresentativeCountry(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A] bg-white"
+                    >
+                      <option value="FR">France</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="rounded-2xl border border-[#D9E7F9] bg-[#F8FBFF] p-4 space-y-4 shadow-sm">
@@ -2917,7 +3616,9 @@ function ProfileEditPanel({
               <div className="space-y-1">
                 <h3 className="text-[#1F2937] font-semibold">Compte Stripe producteur</h3>
                 <p className="text-sm text-[#6B7280]">
-                  Reliez votre structure a Stripe pour encaisser les paiements.
+                  Reliez votre structure à Stripe pour encaisser les paiements. Les informations de structure et
+                  de représentant sont pré-remplies autant que possible depuis votre profil. En revanche, l’IBAN
+                  peut encore être demandé par Stripe pour confirmation ou ressaisie.
                 </p>
               </div>
               <span
@@ -2950,7 +3651,7 @@ function ProfileEditPanel({
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
                 <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
                   <div className="text-xs text-[#6B7280]">Pays du compte</div>
                   <div className="mt-1 flex items-center gap-2 text-[#1F2937] font-medium">
@@ -2961,6 +3662,12 @@ function ProfileEditPanel({
                 <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
                   <div className="text-xs text-[#6B7280]">Informations encore attendues</div>
                   <div className="mt-1 text-[#1F2937] font-medium">{stripeConnection.dueCount}</div>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
+                  <div className="text-xs text-[#6B7280]">Prêt pour les commandes</div>
+                  <div className="mt-1 text-[#1F2937] font-medium">
+                    {stripeConnection.readyForOrders ? 'Oui' : 'Non'}
+                  </div>
                 </div>
                 <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
                   <div className="text-xs text-[#6B7280]">Dernière synchro</div>
@@ -2982,6 +3689,34 @@ function ProfileEditPanel({
               {!hasLegalInfo && (
                 <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
                   La raison sociale et le SIRET sont requis avant de lancer l'onboarding Stripe.
+                </div>
+              )}
+
+              {savedStripePrefillMissingFields.length > 0 && (
+                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-3 text-xs text-[#B45309]">
+                  <p className="font-semibold text-[#1F2937]">Informations à compléter avant Stripe</p>
+                  <ul className="mt-2 space-y-1 text-[#6B7280]">
+                    {savedStripePrefillMissingFields.map((field) => (
+                      <li key={field}>• {field}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {stripeConnection.requirementsDisabledReason && (
+                <div className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-xs text-[#B91C1C]">
+                  Stripe a signalé un blocage : {stripeConnection.requirementsDisabledReason}
+                </div>
+              )}
+
+              {stripeConnection.outstandingRequirements.length > 0 && (
+                <div className="rounded-lg border border-[#D9E7F9] bg-[#F8FBFF] px-3 py-3 text-xs text-[#1D4ED8]">
+                  <p className="font-semibold text-[#1F2937]">Champs encore demandés par Stripe</p>
+                  <ul className="mt-2 space-y-1 text-[#6B7280]">
+                    {stripeConnection.outstandingRequirements.map((item) => (
+                      <li key={item}>• {normalizeStripeRequirementLabel(item)}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 

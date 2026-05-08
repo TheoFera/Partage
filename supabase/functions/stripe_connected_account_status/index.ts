@@ -1,5 +1,9 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import {
+  readStripeRequirements,
+  syncStripeConnectedAccountToLegalEntity,
+} from "../_shared/stripe-connect.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,21 +25,6 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function toStringList(value: unknown) {
-  if (!Array.isArray(value)) return [] as string[];
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function buildStripeV2Headers(secretKey: string, version: string) {
-  return {
-    Authorization: `Bearer ${secretKey}`,
-    "Stripe-Version": version,
-  };
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -43,11 +32,7 @@ serve(async (req) => {
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-  const STRIPE_API_BASE_V2 = Deno.env.get("STRIPE_API_BASE_V2") ?? "https://api.stripe.com";
-  const STRIPE_V2_API_VERSION = Deno.env.get("STRIPE_V2_API_VERSION") ?? "2026-03-25.preview";
-
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY || !STRIPE_SECRET_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
     return json({ error: "Function env is missing" }, 500);
   }
 
@@ -80,76 +65,50 @@ serve(async (req) => {
       status: "not_connected",
       stripe_account_id: null,
       stripe_account_country: legalEntity?.stripe_account_country ?? null,
+      stripe_connection_status: "not_connected",
+      stripe_ready_for_orders: false,
       stripe_onboarding_complete: false,
       stripe_requirements_due_count: 0,
       stripe_last_synced_at: null,
       outstanding_requirements: [],
-      card_payments_status: null,
+      stripe_requirements_currently_due: [],
+      stripe_requirements_eventually_due: [],
+      stripe_requirements_past_due: [],
+      transfers_status: null,
       requirements_status: null,
+      requirements_disabled_reason: null,
     });
   }
 
-  const accountUrl = new URL(`${STRIPE_API_BASE_V2}/v2/core/accounts/${encodeURIComponent(stripeAccountId)}`);
-  accountUrl.searchParams.append("include[0]", "identity");
-  accountUrl.searchParams.append("include[1]", "requirements");
-  accountUrl.searchParams.append("include[2]", "configuration.merchant");
-
-  const stripeRes = await fetch(accountUrl.toString(), {
-    headers: buildStripeV2Headers(STRIPE_SECRET_KEY, STRIPE_V2_API_VERSION),
-  });
-
-  const stripeJson = await stripeRes.json().catch(() => ({}));
-  if (!stripeRes.ok) {
-    const stripeMessage =
-      typeof stripeJson?.error?.message === "string"
-        ? stripeJson.error.message
-        : "Stripe connected account fetch failed";
+  try {
+    const { stripeJson, payload } = await syncStripeConnectedAccountToLegalEntity({
+      serviceClient,
+      stripeAccountId,
+      fallbackCountry: legalEntity.stripe_account_country ?? null,
+      legalEntityId: legalEntity.id,
+    });
+    const requirements = readStripeRequirements(stripeJson);
     return json(
       {
-        error: stripeMessage,
-        status: stripeRes.status,
-        details: stripeJson,
+        status: payload.stripe_connection_status,
+        stripe_account_id: stripeAccountId,
+        stripe_account_country: payload.stripe_account_country,
+        stripe_connection_status: payload.stripe_connection_status,
+        stripe_ready_for_orders: payload.stripe_ready_for_orders,
+        stripe_onboarding_complete: payload.stripe_onboarding_complete,
+        stripe_requirements_due_count: payload.stripe_requirements_due_count,
+        stripe_last_synced_at: payload.stripe_last_synced_at,
+        outstanding_requirements: requirements.outstanding,
+        stripe_requirements_currently_due: payload.stripe_requirements_currently_due,
+        stripe_requirements_eventually_due: payload.stripe_requirements_eventually_due,
+        stripe_requirements_past_due: payload.stripe_requirements_past_due,
+        transfers_status: payload.stripe_transfers_status,
+        requirements_status: payload.stripe_requirements_status,
+        requirements_disabled_reason: payload.stripe_requirements_disabled_reason,
       },
-      502,
     );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Stripe connected account fetch failed";
+    return json({ error: message }, 502);
   }
-
-  const requirements = stripeJson?.requirements ?? {};
-  const outstandingRequirements = Array.from(
-    new Set([
-      ...toStringList(requirements?.currently_due),
-      ...toStringList(requirements?.eventually_due),
-      ...toStringList(requirements?.past_due),
-    ]),
-  );
-  const cardPaymentsStatus =
-    typeof stripeJson?.configuration?.merchant?.capabilities?.card_payments?.status === "string"
-      ? stripeJson.configuration.merchant.capabilities.card_payments.status.trim()
-      : null;
-  const requirementsStatus =
-    typeof requirements?.summary?.minimum_deadline?.status === "string"
-      ? requirements.summary.minimum_deadline.status.trim()
-      : null;
-  const readyToProcessPayments = cardPaymentsStatus === "active";
-  const onboardingComplete =
-    readyToProcessPayments &&
-    requirementsStatus !== "currently_due" &&
-    requirementsStatus !== "past_due";
-  const country =
-    typeof stripeJson?.identity?.country === "string" && stripeJson.identity.country.trim()
-      ? stripeJson.identity.country.trim().toUpperCase()
-      : legalEntity.stripe_account_country ?? null;
-  const syncedAt = new Date().toISOString();
-
-  return json({
-    status: onboardingComplete ? "connected" : "action_required",
-    stripe_account_id: stripeAccountId,
-    stripe_account_country: country,
-    stripe_onboarding_complete: onboardingComplete,
-    stripe_requirements_due_count: outstandingRequirements.length,
-    stripe_last_synced_at: syncedAt,
-    outstanding_requirements: outstandingRequirements,
-    card_payments_status: cardPaymentsStatus,
-    requirements_status: requirementsStatus,
-  });
 });

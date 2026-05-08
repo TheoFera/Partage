@@ -829,9 +829,23 @@ type LegalEntityRow = {
   vat_number: string | null;
   vat_regime?: string | null;
   entity_type: string;
+  country?: string | null;
+  legal_form?: string | null;
   producer_category?: string | null;
   iban?: string | null;
   account_holder_name?: string | null;
+  representative_first_name?: string | null;
+  representative_last_name?: string | null;
+  representative_email?: string | null;
+  representative_phone?: string | null;
+  representative_title?: string | null;
+  representative_birth_date?: string | null;
+  representative_use_profile_address?: boolean | null;
+  representative_address_line1?: string | null;
+  representative_address_line2?: string | null;
+  representative_city?: string | null;
+  representative_postcode?: string | null;
+  representative_country?: string | null;
   can_receive_sharer_cash?: boolean | null;
   delivery_lead_type?: string | null;
   delivery_lead_days?: number | null;
@@ -856,8 +870,17 @@ type LegalEntityRow = {
   producer_pickup_max_weight?: number | null;
   stripe_account_id?: string | null;
   stripe_account_country?: string | null;
+  stripe_representative_person_id?: string | null;
+  stripe_connection_status?: string | null;
+  stripe_ready_for_orders?: boolean | null;
   stripe_onboarding_complete?: boolean | null;
   stripe_requirements_due_count?: number | null;
+  stripe_requirements_currently_due?: string[] | null;
+  stripe_requirements_eventually_due?: string[] | null;
+  stripe_requirements_past_due?: string[] | null;
+  stripe_requirements_status?: string | null;
+  stripe_requirements_disabled_reason?: string | null;
+  stripe_transfers_status?: string | null;
   stripe_last_synced_at?: string | null;
 };
 
@@ -916,9 +939,23 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   vatNumber: row.vat_number ?? undefined,
   vatRegime: (row.vat_regime as LegalEntity['vatRegime']) ?? 'unknown',
   entityType: (row.entity_type as LegalEntity['entityType']) ?? 'company',
+  country: row.country ?? 'FR',
+  legalForm: row.legal_form ?? undefined,
   producerCategory: row.producer_category ?? undefined,
   iban: row.iban ?? undefined,
   accountHolderName: row.account_holder_name ?? undefined,
+  representativeFirstName: row.representative_first_name ?? undefined,
+  representativeLastName: row.representative_last_name ?? undefined,
+  representativeEmail: row.representative_email ?? undefined,
+  representativePhone: row.representative_phone ?? undefined,
+  representativeTitle: row.representative_title ?? undefined,
+  representativeBirthDate: row.representative_birth_date ?? undefined,
+  representativeUseProfileAddress: row.representative_use_profile_address ?? true,
+  representativeAddressLine1: row.representative_address_line1 ?? undefined,
+  representativeAddressLine2: row.representative_address_line2 ?? undefined,
+  representativeCity: row.representative_city ?? undefined,
+  representativePostcode: row.representative_postcode ?? undefined,
+  representativeCountry: row.representative_country ?? 'FR',
   canReceiveSharerCash: row.can_receive_sharer_cash ?? undefined,
   deliveryLeadType: (row.delivery_lead_type as LegalEntity['deliveryLeadType']) ?? undefined,
   deliveryLeadDays: toNumberOrUndefined(row.delivery_lead_days),
@@ -943,8 +980,18 @@ const mapLegalRowToEntity = (row: LegalEntityRow): LegalEntity => ({
   producerPickupMaxWeight: toNumberOrUndefined(row.producer_pickup_max_weight),
   stripeAccountId: row.stripe_account_id ?? undefined,
   stripeAccountCountry: row.stripe_account_country ?? undefined,
+  stripeRepresentativePersonId: row.stripe_representative_person_id ?? undefined,
+  stripeConnectionStatus:
+    (row.stripe_connection_status as LegalEntity['stripeConnectionStatus']) ?? undefined,
+  stripeReadyForOrders: row.stripe_ready_for_orders ?? undefined,
   stripeOnboardingComplete: row.stripe_onboarding_complete ?? undefined,
   stripeRequirementsDueCount: toNumberOrUndefined(row.stripe_requirements_due_count),
+  stripeRequirementsCurrentlyDue: row.stripe_requirements_currently_due ?? undefined,
+  stripeRequirementsEventuallyDue: row.stripe_requirements_eventually_due ?? undefined,
+  stripeRequirementsPastDue: row.stripe_requirements_past_due ?? undefined,
+  stripeRequirementsStatus: row.stripe_requirements_status ?? undefined,
+  stripeRequirementsDisabledReason: row.stripe_requirements_disabled_reason ?? undefined,
+  stripeTransfersStatus: row.stripe_transfers_status ?? undefined,
   stripeLastSyncedAt: row.stripe_last_synced_at ?? undefined,
 });
 
@@ -3965,10 +4012,36 @@ export default function App() {
       if (mergedLegalEntity.vatNumber !== undefined) legalPayload.vat_number = mergedLegalEntity.vatNumber ?? null;
       if (mergedLegalEntity.vatRegime !== undefined) legalPayload.vat_regime = mergedLegalEntity.vatRegime ?? 'unknown';
       if (mergedLegalEntity.entityType !== undefined) legalPayload.entity_type = mergedLegalEntity.entityType;
+      if (mergedLegalEntity.country !== undefined) legalPayload.country = mergedLegalEntity.country ?? 'FR';
+      if (mergedLegalEntity.legalForm !== undefined) legalPayload.legal_form = mergedLegalEntity.legalForm ?? null;
       if (mergedLegalEntity.producerCategory !== undefined) legalPayload.producer_category = mergedLegalEntity.producerCategory ?? null;
       if (mergedLegalEntity.iban !== undefined) legalPayload.iban = mergedLegalEntity.iban ?? null;
       if (mergedLegalEntity.accountHolderName !== undefined)
         legalPayload.account_holder_name = mergedLegalEntity.accountHolderName ?? null;
+      if (mergedLegalEntity.representativeFirstName !== undefined)
+        legalPayload.representative_first_name = mergedLegalEntity.representativeFirstName ?? null;
+      if (mergedLegalEntity.representativeLastName !== undefined)
+        legalPayload.representative_last_name = mergedLegalEntity.representativeLastName ?? null;
+      if (mergedLegalEntity.representativeEmail !== undefined)
+        legalPayload.representative_email = mergedLegalEntity.representativeEmail ?? null;
+      if (mergedLegalEntity.representativePhone !== undefined)
+        legalPayload.representative_phone = mergedLegalEntity.representativePhone ?? null;
+      if (mergedLegalEntity.representativeTitle !== undefined)
+        legalPayload.representative_title = mergedLegalEntity.representativeTitle ?? null;
+      if (mergedLegalEntity.representativeBirthDate !== undefined)
+        legalPayload.representative_birth_date = mergedLegalEntity.representativeBirthDate ?? null;
+      if (mergedLegalEntity.representativeUseProfileAddress !== undefined)
+        legalPayload.representative_use_profile_address = mergedLegalEntity.representativeUseProfileAddress ?? true;
+      if (mergedLegalEntity.representativeAddressLine1 !== undefined)
+        legalPayload.representative_address_line1 = mergedLegalEntity.representativeAddressLine1 ?? null;
+      if (mergedLegalEntity.representativeAddressLine2 !== undefined)
+        legalPayload.representative_address_line2 = mergedLegalEntity.representativeAddressLine2 ?? null;
+      if (mergedLegalEntity.representativeCity !== undefined)
+        legalPayload.representative_city = mergedLegalEntity.representativeCity ?? null;
+      if (mergedLegalEntity.representativePostcode !== undefined)
+        legalPayload.representative_postcode = mergedLegalEntity.representativePostcode ?? null;
+      if (mergedLegalEntity.representativeCountry !== undefined)
+        legalPayload.representative_country = mergedLegalEntity.representativeCountry ?? 'FR';
       if (mergedLegalEntity.canReceiveSharerCash !== undefined)
         legalPayload.can_receive_sharer_cash = mergedLegalEntity.canReceiveSharerCash ?? false;
       if (mergedLegalEntity.deliveryLeadType !== undefined) legalPayload.delivery_lead_type = mergedLegalEntity.deliveryLeadType ?? null;

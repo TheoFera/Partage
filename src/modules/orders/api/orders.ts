@@ -746,6 +746,17 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
   );
 
   const producerProfileId = (productRows[0]?.producer_profile_id as string | null) ?? payload.userId;
+  const { data: producerStripeRow, error: producerStripeError } = await client
+    .from('legal_entities_public')
+    .select('stripe_ready_for_orders')
+    .eq('profile_id', producerProfileId)
+    .maybeSingle();
+  if (producerStripeError) throw producerStripeError;
+  if (!producerStripeRow?.stripe_ready_for_orders) {
+    throw new Error(
+      "Le producteur n'a pas encore terminé sa configuration Stripe Connect. Impossible de créer une commande avec cette structure."
+    );
+  }
   const obfuscatedCoords = buildObfuscatedOrderCoordinates({
     deliveryLat: payload.deliveryLat,
     deliveryLng: payload.deliveryLng,

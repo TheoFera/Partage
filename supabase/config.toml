@@ -56,3 +56,8 @@ entrypoint = "./functions/stripe_create_connected_account_link/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/stripe_connected_account_status/index.ts"
+
+[functions.stripe_connected_account_webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/stripe_connected_account_webhook/index.ts"

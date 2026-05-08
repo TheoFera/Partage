@@ -57,9 +57,23 @@ export interface LegalEntity {
   vatNumber?: string;
   vatRegime?: VatRegime;
   entityType: 'company' | 'association' | 'public_institution';
+  country?: string;
+  legalForm?: string;
   producerCategory?: string;
   iban?: string;
   accountHolderName?: string;
+  representativeFirstName?: string;
+  representativeLastName?: string;
+  representativeEmail?: string;
+  representativePhone?: string;
+  representativeTitle?: string;
+  representativeBirthDate?: string;
+  representativeUseProfileAddress?: boolean;
+  representativeAddressLine1?: string;
+  representativeAddressLine2?: string;
+  representativeCity?: string;
+  representativePostcode?: string;
+  representativeCountry?: string;
   canReceiveSharerCash?: boolean;
   deliveryLeadType?: DeliveryLeadType;
   deliveryLeadDays?: number;
@@ -84,8 +98,17 @@ export interface LegalEntity {
   producerPickupMaxWeight?: number;
   stripeAccountId?: string;
   stripeAccountCountry?: string;
+  stripeRepresentativePersonId?: string;
+  stripeConnectionStatus?: 'not_connected' | 'action_required' | 'connected';
+  stripeReadyForOrders?: boolean;
   stripeOnboardingComplete?: boolean;
   stripeRequirementsDueCount?: number;
+  stripeRequirementsCurrentlyDue?: string[];
+  stripeRequirementsEventuallyDue?: string[];
+  stripeRequirementsPastDue?: string[];
+  stripeRequirementsStatus?: string;
+  stripeRequirementsDisabledReason?: string;
+  stripeTransfersStatus?: string;
   stripeLastSyncedAt?: string;
 }
 

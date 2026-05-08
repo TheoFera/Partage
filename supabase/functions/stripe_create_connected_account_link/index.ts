@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { buildStripeV2Headers } from "../_shared/stripe-connect.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,6 +14,12 @@ type ProfileRecord = {
   name: string | null;
   account_type: string | null;
   contact_email_public: string | null;
+  address: string | null;
+  address_details: string | null;
+  city: string | null;
+  postcode: string | null;
+  phone: string | null;
+  website: string | null;
 };
 
 type LegalEntityRecord = {
@@ -20,8 +27,27 @@ type LegalEntityRecord = {
   profile_id: string;
   legal_name: string | null;
   siret: string | null;
+  vat_number: string | null;
+  entity_type: string | null;
+  country: string | null;
+  legal_form: string | null;
+  account_holder_name: string | null;
+  iban: string | null;
+  representative_first_name: string | null;
+  representative_last_name: string | null;
+  representative_email: string | null;
+  representative_phone: string | null;
+  representative_title: string | null;
+  representative_birth_date: string | null;
+  representative_use_profile_address: boolean | null;
+  representative_address_line1: string | null;
+  representative_address_line2: string | null;
+  representative_city: string | null;
+  representative_postcode: string | null;
+  representative_country: string | null;
   stripe_account_id: string | null;
   stripe_account_country: string | null;
+  stripe_representative_person_id: string | null;
 };
 
 function json(body: unknown, status = 200) {
@@ -42,12 +68,81 @@ function toSafeAppUrl(value: unknown) {
   }
 }
 
-function buildStripeV2Headers(secretKey: string, version: string) {
+function buildStripeFormHeaders(secretKey: string) {
   return {
     Authorization: `Bearer ${secretKey}`,
-    "Content-Type": "application/json",
-    "Stripe-Version": version,
+    "Content-Type": "application/x-www-form-urlencoded",
   };
+}
+
+function normalizeCountry(value: string | null | undefined, fallback = "FR") {
+  const normalized = (value ?? "").trim().toUpperCase();
+  return normalized || fallback;
+}
+
+function hasRepresentativePrefillData(legalEntity: LegalEntityRecord | null) {
+  if (!legalEntity) return false;
+  const firstName = (legalEntity.representative_first_name ?? "").trim();
+  const lastName = (legalEntity.representative_last_name ?? "").trim();
+  const birthDate = (legalEntity.representative_birth_date ?? "").trim();
+  return Boolean(firstName && lastName && birthDate);
+}
+
+async function updateConnectedAccountFromToken(params: {
+  stripeAccountId: string;
+  accountToken: string;
+  stripeSecretKey: string;
+  stripeApiBaseV2: string;
+  stripeApiVersion: string;
+}) {
+  const response = await fetch(
+    `${params.stripeApiBaseV2}/v2/core/accounts/${encodeURIComponent(params.stripeAccountId)}`,
+    {
+      method: "POST",
+      headers: buildStripeV2Headers(params.stripeSecretKey, params.stripeApiVersion),
+      body: JSON.stringify({
+        account_token: params.accountToken,
+        include: [
+          "configuration.recipient",
+          "identity",
+          "defaults",
+        ],
+      }),
+    },
+  );
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const stripeMessage =
+      typeof json?.error?.message === "string" ? json.error.message : "Stripe connected account update failed";
+    throw new Error(stripeMessage);
+  }
+}
+
+async function upsertRepresentativePerson(params: {
+  stripeAccountId: string;
+  personToken: string;
+  existingPersonId: string | null;
+  stripeSecretKey: string;
+  stripeApiBase: string;
+}) {
+  const personUrl = params.existingPersonId
+    ? `${params.stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
+    : `${params.stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
+  const body = new URLSearchParams();
+  body.append("person_token", params.personToken);
+
+  const response = await fetch(personUrl, {
+    method: "POST",
+    headers: buildStripeFormHeaders(params.stripeSecretKey),
+    body: body.toString(),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const stripeMessage =
+      typeof json?.error?.message === "string" ? json.error.message : "Stripe representative sync failed";
+    throw new Error(stripeMessage);
+  }
+  return typeof json?.id === "string" ? json.id.trim() : params.existingPersonId;
 }
 
 serve(async (req) => {
@@ -58,6 +153,7 @@ serve(async (req) => {
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+  const STRIPE_API_BASE = Deno.env.get("STRIPE_API_BASE") ?? "https://api.stripe.com";
   const STRIPE_API_BASE_V2 = Deno.env.get("STRIPE_API_BASE_V2") ?? "https://api.stripe.com";
   const STRIPE_V2_API_VERSION = Deno.env.get("STRIPE_V2_API_VERSION") ?? "2026-03-25.preview";
   const STRIPE_CONNECTED_ACCOUNT_COUNTRY =
@@ -83,6 +179,8 @@ serve(async (req) => {
   const refreshUrl = toSafeAppUrl(body?.refresh_url) ?? returnUrl;
   const accountToken =
     typeof body?.account_token === "string" && body.account_token.trim() ? body.account_token.trim() : null;
+  const personToken =
+    typeof body?.person_token === "string" && body.person_token.trim() ? body.person_token.trim() : null;
 
   if (!returnUrl || !refreshUrl) {
     return json({ error: "Missing valid return_url / refresh_url" }, 400);
@@ -94,12 +192,38 @@ serve(async (req) => {
   ] = await Promise.all([
     serviceClient
       .from("profiles")
-      .select("id, handle, name, account_type, contact_email_public")
+      .select("id, handle, name, account_type, contact_email_public, address, address_details, city, postcode, phone, website")
       .eq("id", userData.user.id)
       .maybeSingle(),
     serviceClient
       .from("legal_entities")
-      .select("id, profile_id, legal_name, siret, stripe_account_id, stripe_account_country")
+      .select(`
+        id,
+        profile_id,
+        legal_name,
+        siret,
+        vat_number,
+        entity_type,
+        country,
+        legal_form,
+        account_holder_name,
+        iban,
+        representative_first_name,
+        representative_last_name,
+        representative_email,
+        representative_phone,
+        representative_title,
+        representative_birth_date,
+        representative_use_profile_address,
+        representative_address_line1,
+        representative_address_line2,
+        representative_city,
+        representative_postcode,
+        representative_country,
+        stripe_account_id,
+        stripe_account_country,
+        stripe_representative_person_id
+      `)
       .eq("profile_id", userData.user.id)
       .maybeSingle(),
   ]);
@@ -148,9 +272,11 @@ serve(async (req) => {
   }
 
   let stripeAccountId = (legalEntity.stripe_account_id ?? "").trim();
+  const normalizedCountry = normalizeCountry(legalEntity.country, STRIPE_CONNECTED_ACCOUNT_COUNTRY);
+  const needsPersonToken = normalizedCountry === "FR" && hasRepresentativePrefillData(legalEntity);
 
   if (!stripeAccountId) {
-    if (STRIPE_CONNECTED_ACCOUNT_COUNTRY === "FR" && !accountToken) {
+    if (normalizedCountry === "FR" && !accountToken) {
       return json(
         {
           error:
@@ -166,9 +292,9 @@ serve(async (req) => {
       body: JSON.stringify({
         ...(accountToken
           ? {
-              account_token: accountToken,
-              identity: {
-                country: STRIPE_CONNECTED_ACCOUNT_COUNTRY,
+            account_token: accountToken,
+            identity: {
+                country: normalizedCountry,
               },
             }
           : {
@@ -176,18 +302,26 @@ serve(async (req) => {
                 legalName || profile.name?.trim() || profile.handle?.trim() || "Compte producteur",
               contact_email: contactEmail,
               identity: {
-                country: STRIPE_CONNECTED_ACCOUNT_COUNTRY,
+                country: normalizedCountry,
               },
             }),
-        dashboard: "full",
+        dashboard: "express",
         defaults: {
           responsibilities: {
-            losses_collector: "stripe",
-            fees_collector: "stripe",
+            losses_collector: "application",
+            fees_collector: "application",
           },
         },
         configuration: {
-          customer: {},
+          recipient: {
+            capabilities: {
+              stripe_balance: {
+                stripe_transfers: {
+                  requested: true,
+                },
+              },
+            },
+          },
           merchant: {
             capabilities: {
               card_payments: {
@@ -197,8 +331,7 @@ serve(async (req) => {
           },
         },
         include: [
-          "configuration.merchant",
-          "configuration.customer",
+          "configuration.recipient",
           "identity",
           "defaults",
         ],
@@ -236,13 +369,69 @@ serve(async (req) => {
       .from("legal_entities")
       .update({
         stripe_account_id: stripeAccountId,
-        stripe_account_country: STRIPE_CONNECTED_ACCOUNT_COUNTRY,
+        stripe_account_country: normalizedCountry,
+        stripe_connection_status: "action_required",
+        stripe_ready_for_orders: false,
       })
       .eq("id", legalEntity.id)
       .eq("profile_id", userData.user.id);
 
     if (updateError) {
       return json({ error: "Unable to persist Stripe account id", details: updateError.message }, 500);
+    }
+
+    if (needsPersonToken && !personToken) {
+      return json({
+        stripe_account_id: stripeAccountId,
+        requires_person_token: true,
+        representative_prefill_requested: true,
+      });
+    }
+  } else if (accountToken) {
+    try {
+      await updateConnectedAccountFromToken({
+        stripeAccountId,
+        accountToken,
+        stripeSecretKey: STRIPE_SECRET_KEY,
+        stripeApiBaseV2: STRIPE_API_BASE_V2,
+        stripeApiVersion: STRIPE_V2_API_VERSION,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Stripe connected account update failed";
+      return json({ error: message }, 502);
+    }
+  }
+
+  if (needsPersonToken && !personToken) {
+    return json({
+      stripe_account_id: stripeAccountId,
+      requires_person_token: true,
+      representative_prefill_requested: true,
+    });
+  }
+
+  if (personToken) {
+    try {
+      const representativePersonId = await upsertRepresentativePerson({
+        stripeAccountId,
+        personToken,
+        existingPersonId: (legalEntity.stripe_representative_person_id ?? "").trim() || null,
+        stripeSecretKey: STRIPE_SECRET_KEY,
+        stripeApiBase: STRIPE_API_BASE,
+      });
+      if (representativePersonId && representativePersonId !== legalEntity.stripe_representative_person_id) {
+        const { error: personUpdateError } = await serviceClient
+          .from("legal_entities")
+          .update({ stripe_representative_person_id: representativePersonId })
+          .eq("id", legalEntity.id)
+          .eq("profile_id", userData.user.id);
+        if (personUpdateError) {
+          return json({ error: "Unable to persist Stripe representative id", details: personUpdateError.message }, 500);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Stripe representative sync failed";
+      return json({ error: message }, 502);
     }
   }
 
@@ -254,7 +443,7 @@ serve(async (req) => {
       use_case: {
         type: "account_onboarding",
         account_onboarding: {
-          configurations: ["merchant", "customer"],
+          configurations: ["recipient"],
           refresh_url: refreshUrl,
           return_url: returnUrl,
         },

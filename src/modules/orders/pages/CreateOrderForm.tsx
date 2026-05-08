@@ -358,6 +358,15 @@ export function CreateOrderForm({
   const [producerProfileMetaById, setProducerProfileMetaById] = React.useState<
     Record<string, { name?: string | null }>
   >({});
+  const [producerStripeState, setProducerStripeState] = React.useState<{
+    readyForOrders: boolean;
+    dueCount: number;
+    status: 'not_connected' | 'action_required' | 'connected';
+  }>({
+    readyForOrders: Boolean(producer?.legalEntity?.stripeReadyForOrders),
+    dueCount: producer?.legalEntity?.stripeRequirementsDueCount ?? 0,
+    status: producer?.legalEntity?.stripeConnectionStatus ?? 'not_connected',
+  });
   const [deliveryGeoStatus, setDeliveryGeoStatus] = React.useState<'idle' | 'loading' | 'resolved' | 'error'>('idle');
   const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -389,10 +398,56 @@ export function CreateOrderForm({
     }),
     [producerLegal]
   );
+  React.useEffect(() => {
+    setProducerStripeState({
+      readyForOrders: Boolean(producer?.legalEntity?.stripeReadyForOrders),
+      dueCount: producer?.legalEntity?.stripeRequirementsDueCount ?? 0,
+      status: producer?.legalEntity?.stripeConnectionStatus ?? 'not_connected',
+    });
+  }, [
+    producer?.legalEntity?.stripeConnectionStatus,
+    producer?.legalEntity?.stripeReadyForOrders,
+    producer?.legalEntity?.stripeRequirementsDueCount,
+  ]);
+
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !producer?.id) return () => void 0;
+
+    (async () => {
+      const { data, error } = await supabaseClient
+        .from('legal_entities_public')
+        .select('stripe_ready_for_orders, stripe_connection_status, stripe_requirements_due_count')
+        .eq('profile_id', producer.id)
+        .maybeSingle();
+
+      if (!active || error || !data) return;
+      setProducerStripeState({
+        readyForOrders: Boolean(data.stripe_ready_for_orders),
+        dueCount:
+          typeof data.stripe_requirements_due_count === 'number' ? data.stripe_requirements_due_count : 0,
+        status:
+          data.stripe_connection_status === 'connected' ||
+          data.stripe_connection_status === 'action_required' ||
+          data.stripe_connection_status === 'not_connected'
+            ? data.stripe_connection_status
+            : 'not_connected',
+      });
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [producer?.id, supabaseClient]);
 
   const isDeliveryAddressComplete = Boolean(
     deliveryStreet.trim() && deliveryPostcode.trim() && deliveryCity.trim()
   );
+  const producerStripeBlockingReason = !producerStripeState.readyForOrders
+    ? `${
+        producer?.name ? `${producer.name} n` : 'Le producteur n'
+      }'a pas encore terminé Stripe Connect. La commande ne peut pas être créée tant que son compte n'est pas prêt.`
+    : null;
   const deliveryAddressQuery = React.useMemo(() => {
     const parts = [deliveryStreet, deliveryInfo, deliveryPostcode, deliveryCity]
       .map((value) => value.trim())
@@ -1461,6 +1516,11 @@ export function CreateOrderForm({
       return;
     }
 
+    if (producerStripeBlockingReason) {
+      toast.error(producerStripeBlockingReason);
+      return;
+    }
+
     if (shareMode === 'cash' && !canReceiveCashShare) {
       toast.error('Option indisponible: structure non validée pour recevoir la part en argent.');
       return;
@@ -1581,7 +1641,10 @@ export function CreateOrderForm({
       })
       .catch((error) => {
         console.error('Order creation error:', error);
-        toast.error('Impossible de créer la commande.');
+        const message = error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Impossible de créer la commande.';
+        toast.error(message);
       })
       .finally(() => setIsSubmitting(false));
   };
@@ -1625,6 +1688,17 @@ export function CreateOrderForm({
     <form onSubmit={handleSubmit} className="pb-6">
       <div className="create-order-layout gap-6">
         <div className="space-y-6">
+          {producerStripeBlockingReason && (
+            <div className="rounded-2xl border border-[#FFE0D1] bg-[#FFF6F0] px-4 py-3 text-sm text-[#B45309]">
+              <p className="font-semibold text-[#1F2937]">Commande bloquée tant que Stripe Connect n’est pas prêt</p>
+              <p className="mt-1">
+                {producerStripeBlockingReason}
+                {producerStripeState.dueCount > 0
+                  ? ` Stripe attend encore ${producerStripeState.dueCount} information(s).`
+                  : ''}
+              </p>
+            </div>
+          )}
           <div className="bg-white rounded-xl p-6 shadow-sm">
             <div className="flex items-center justify-between gap-4 mb-4">
               <h3 className="text-[#1F2937] flex-1 min-w-0">
@@ -2629,7 +2703,12 @@ export function CreateOrderForm({
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button
           type="submit"
-          disabled={selectedProducts.length === 0 || !isDeliveryOptionValid || isSubmitting}
+          disabled={
+            selectedProducts.length === 0 ||
+            !isDeliveryOptionValid ||
+            isSubmitting ||
+            Boolean(producerStripeBlockingReason)
+          }
           className="w-full sm:flex-1 py-3 bg-[#FF6B4A] text-white rounded-xl hover:bg-[#FF5A39] disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors shadow-lg"
         >
           Créer la commande
