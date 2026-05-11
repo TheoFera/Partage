@@ -68,19 +68,6 @@ function toSafeAppUrl(value: unknown) {
   }
 }
 
-function buildStripeFormHeaders(secretKey: string) {
-  return {
-    Authorization: `Bearer ${secretKey}`,
-    "Content-Type": "application/x-www-form-urlencoded",
-  };
-}
-
-function normalizeStripeV1BaseUrl(value: string) {
-  const trimmed = value.trim().replace(/\/+$/, "");
-  if (!trimmed) return "https://api.stripe.com";
-  return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
-}
-
 function normalizeCountry(value: string | null | undefined, fallback = "FR") {
   const normalized = (value ?? "").trim().toUpperCase();
   return normalized || fallback;
@@ -130,19 +117,19 @@ async function upsertRepresentativePerson(params: {
   personToken: string;
   existingPersonId: string | null;
   stripeSecretKey: string;
-  stripeApiBase: string;
+  stripeApiBaseV2: string;
+  stripeApiVersion: string;
 }) {
-  const stripeApiBase = normalizeStripeV1BaseUrl(params.stripeApiBase);
   const personUrl = params.existingPersonId
-    ? `${stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
-    : `${stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
-  const body = new URLSearchParams();
-  body.append("person_token", params.personToken);
+    ? `${params.stripeApiBaseV2}/v2/core/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
+    : `${params.stripeApiBaseV2}/v2/core/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
 
   const response = await fetch(personUrl, {
     method: "POST",
-    headers: buildStripeFormHeaders(params.stripeSecretKey),
-    body: body.toString(),
+    headers: buildStripeV2Headers(params.stripeSecretKey, params.stripeApiVersion),
+    body: JSON.stringify({
+      person_token: params.personToken,
+    }),
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -161,7 +148,6 @@ serve(async (req) => {
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-  const STRIPE_API_BASE = normalizeStripeV1BaseUrl(Deno.env.get("STRIPE_API_BASE") ?? "https://api.stripe.com");
   const STRIPE_API_BASE_V2 = Deno.env.get("STRIPE_API_BASE_V2") ?? "https://api.stripe.com";
   const STRIPE_V2_API_VERSION = Deno.env.get("STRIPE_V2_API_VERSION") ?? "2026-03-25.preview";
   const STRIPE_CONNECTED_ACCOUNT_COUNTRY =
@@ -427,7 +413,8 @@ serve(async (req) => {
         personToken,
         existingPersonId: (legalEntity.stripe_representative_person_id ?? "").trim() || null,
         stripeSecretKey: STRIPE_SECRET_KEY,
-        stripeApiBase: STRIPE_API_BASE,
+        stripeApiBaseV2: STRIPE_API_BASE_V2,
+        stripeApiVersion: STRIPE_V2_API_VERSION,
       });
       if (representativePersonId && representativePersonId !== legalEntity.stripe_representative_person_id) {
         const { error: personUpdateError } = await serviceClient

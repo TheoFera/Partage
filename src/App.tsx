@@ -49,6 +49,7 @@ import {
 } from './shared/lib/authRedirect';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from './shared/lib/storageObjectPath';
+import { canProducerCreateOrders, fetchProducerStripeState } from './shared/lib/producerStripe';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
 import {
   getOrderFullByCode,
@@ -3217,7 +3218,23 @@ export default function App() {
     toast.success('Produit retire de votre selection');
   };
 
-  const handleStartOrderFromProduct = (product: Product) => {
+  const handleStartOrderFromProduct = async (product: Product) => {
+    if (!supabaseClient || !product.producerId) {
+      toast.error("Impossible de vérifier le compte Stripe du producteur.");
+      return;
+    }
+    try {
+      const producerStripeState = await fetchProducerStripeState(supabaseClient, product.producerId);
+      if (!canProducerCreateOrders(producerStripeState)) {
+        toast.error("Ce producteur n'a pas encore un compte Stripe Connect fonctionnel.");
+        return;
+      }
+    } catch (error) {
+      console.warn('Producer Stripe state check error:', error);
+      toast.error("Impossible de vérifier le compte Stripe du producteur.");
+      return;
+    }
+
     orderBuilderSourceRef.current = location.pathname;
     const relatedProducts = products
       .filter((item) => item.producerId === product.producerId)

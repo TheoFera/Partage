@@ -57,6 +57,12 @@ import {
   RepartitionPoste,
   TimelineStep,
 } from '../../../shared/types';
+import {
+  canProducerCreateOrders,
+  fetchProducerStripeState,
+  getDefaultProducerStripeState,
+  type ProducerStripeState,
+} from '../../../shared/lib/producerStripe';
 
 interface ProductDetailViewProps {
   product: Product;
@@ -659,6 +665,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [producerAvatarUpdatedAt, setProducerAvatarUpdatedAt] = React.useState<string | null>(null);
   const [producerProfileName, setProducerProfileName] = React.useState<string | null>(null);
   const [producerProfileCity, setProducerProfileCity] = React.useState<string | null>(null);
+  const [producerStripeState, setProducerStripeState] = React.useState<ProducerStripeState>(
+    getDefaultProducerStripeState
+  );
   const [isCreateSubmitting, setIsCreateSubmitting] = React.useState(false);
   const onToggleSaveRef = React.useRef<typeof onToggleSave>(onToggleSave);
   const createSubmitLockRef = React.useRef(false);
@@ -719,6 +728,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       setProducerAvatarUpdatedAt(null);
       setProducerProfileName(null);
       setProducerProfileCity(null);
+      setProducerStripeState(getDefaultProducerStripeState());
       return () => {
         active = false;
       };
@@ -743,6 +753,30 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         setProducerProfileCity((data?.city as string | null) ?? null);
         setProducerAvatarPath((data?.avatar_path as string | null) ?? null);
         setProducerAvatarUpdatedAt((data?.avatar_updated_at as string | null) ?? null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [producerProfileId, supabaseClient]);
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !producerProfileId) {
+      setProducerStripeState(getDefaultProducerStripeState());
+      return () => {
+        active = false;
+      };
+    }
+
+    fetchProducerStripeState(supabaseClient, producerProfileId)
+      .then((state) => {
+        if (!active) return;
+        setProducerStripeState(state);
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn('Producer Stripe state load error:', error);
+        setProducerStripeState(getDefaultProducerStripeState());
       });
 
     return () => {
@@ -1129,6 +1163,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const summaryOrdersLabel = hasOrders
     ? `${ordersWithProduct.length} commande${ordersWithProduct.length > 1 ? 's' : ''} disponible`
     : 'Aucune commande active';
+  const canCreateOrderFromProducer = canProducerCreateOrders(producerStripeState);
 
   const baseTimeline =
     detail.tracabilite?.timeline?.length ? detail.tracabilite.timeline : fallbackTimeline;
@@ -4905,9 +4940,10 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 <button
                   type="button"
                   onClick={onCreateOrder}
-                  disabled={actionButtonsDisabled}
+                  hidden={!canCreateOrderFromProducer}
+                  disabled={actionButtonsDisabled || !canCreateOrderFromProducer}
                   className={`pd-btn pd-btn--pill ${
-                    actionButtonsDisabled ? 'pd-btn--disabled' : 'pd-btn--primary'
+                    actionButtonsDisabled || !canCreateOrderFromProducer ? 'pd-btn--disabled' : 'pd-btn--primary'
                   }`}
                 >
                   Créer une commande avec ce produit

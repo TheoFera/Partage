@@ -12,6 +12,11 @@ import {
 import '../styles/ProductsLanding.css';
 import { CARD_WIDTH } from '../../../shared/constants/cards';
 import { Sparkles, ChevronDown } from 'lucide-react';
+import {
+  canProducerCreateOrders,
+  fetchProducerStripeStates,
+  type ProducerStripeState,
+} from '../../../shared/lib/producerStripe';
 
 type SearchScope = 'products' | 'producers' | 'combined';
 
@@ -218,6 +223,7 @@ export function ProductsLanding({
   onPostcodeRadiusKmChange,
   producerDistanceMetersById,
 }: ProductsLandingProps) {
+  const [producerStripeStateById, setProducerStripeStateById] = React.useState<Record<string, ProducerStripeState>>({});
   const [scope, setScope] = React.useState<SearchScope>('combined');
   const [categories, setCategories] = React.useState<string[]>([]);
   const [producerFilters, setProducerFilters] = React.useState<string[]>([]);
@@ -363,6 +369,10 @@ export function ProductsLanding({
       return a.name.localeCompare(b.name);
     });
   }, [producerDistanceMetersById, producerResults]);
+  const producerProfileIds = React.useMemo(
+    () => Array.from(new Set(producerProductRows.map((producer) => producer.id).filter((value) => isUuid(value)))),
+    [producerProductRows]
+  );
   const [profileMetaById, setProfileMetaById] = React.useState<
     Record<
       string,
@@ -436,8 +446,42 @@ export function ProductsLanding({
     };
   }, [profileIds, supabaseClient]);
 
+  React.useEffect(() => {
+    let active = true;
+    if (!supabaseClient || !producerProfileIds.length) {
+      setProducerStripeStateById({});
+      return () => {
+        active = false;
+      };
+    }
+
+    fetchProducerStripeStates(supabaseClient, producerProfileIds)
+      .then((mapped) => {
+        if (!active) return;
+        setProducerStripeStateById(mapped);
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn('Producer Stripe state load error:', error);
+        setProducerStripeStateById({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [producerProfileIds, supabaseClient]);
+
+  const stripeReadyProducerRows = React.useMemo(
+    () =>
+      producerProductRows.filter((producer) => {
+        const state = producerStripeStateById[producer.id];
+        return canProducerCreateOrders(state);
+      }),
+    [producerProductRows, producerStripeStateById]
+  );
+
   const producerGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
-    return producerProductRows.map((producer) => {
+    return stripeReadyProducerRows.map((producer) => {
       const resolvedProducerName = producer.profileName?.trim() || producer.name;
       const resolvedPostcode = producer.profilePostcode?.trim() || producer.postcode;
       const resolvedLocation = formatCityLabel(producer.profileCity ?? undefined, resolvedPostcode, producer.location);
@@ -457,7 +501,7 @@ export function ProductsLanding({
         avatarUpdatedAt: producer.avatarUpdatedAt ?? null,
       };
     });
-  }, [producerProductRows]);
+  }, [stripeReadyProducerRows]);
 
   const orderGroups = React.useMemo<ProductGroupDescriptor[]>(() => {
     return ordersResults.map((order) => {
@@ -511,7 +555,7 @@ export function ProductsLanding({
   const showProducts = scope === 'products';
   const showCombined = scope === 'combined';
   const hasProducts = productResults.length > 0;
-  const hasProducers = producerResults.length > 0;
+  const hasProducers = producerGroups.length > 0;
   const orderSectionRef = React.useRef<HTMLDivElement | null>(null);
   const producerSectionRef = React.useRef<HTMLDivElement | null>(null);
   const resultsSectionRef = React.useRef<HTMLDivElement | null>(null);
@@ -575,7 +619,12 @@ export function ProductsLanding({
               onSave={onAddToDeck}
               onRemoveFromDeck={onRemoveFromDeck}
               onToggleSelection={toggleSelection}
-              onCreateOrder={onStartOrderFromProduct}
+              onCreateOrder={
+                group.variant === 'producer' &&
+                !producerStripeStateById[group.id]?.readyForOrders
+                  ? undefined
+                  : onStartOrderFromProduct
+              }
               onOpenProduct={onOpenProduct}
               onOpenOrder={onOpenOrder}
               onOpenProducer={onOpenProducer}
@@ -860,7 +909,11 @@ export function ProductsLanding({
                     onRemove={onRemoveFromDeck}
                     onToggleSelection={toggleSelection}
                     onOpenProducer={onOpenProducer}
-                    onCreateOrder={onStartOrderFromProduct}
+                    onCreateOrder={
+                      canProducerCreateOrders(producerStripeStateById[product.producerId])
+                        ? onStartOrderFromProduct
+                        : undefined
+                    }
                     onOpen={onOpenProduct}
                     showSelectionControl={showSelectionControls}
                     compact
@@ -904,7 +957,11 @@ export function ProductsLanding({
                     onSave={onAddToDeck}
                     onRemoveFromDeck={onRemoveFromDeck}
                     onToggleSelection={toggleSelection}
-                    onCreateOrder={onStartOrderFromProduct}
+                    onCreateOrder={
+                      canProducerCreateOrders(producerStripeStateById[group.id])
+                        ? onStartOrderFromProduct
+                        : undefined
+                    }
                     onOpenProduct={onOpenProduct}
                     onOpenProducer={onOpenProducer}
                     onOpenSharer={onOpenSharer}
