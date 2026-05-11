@@ -159,7 +159,6 @@ export async function fetchStripeConnectedAccountSnapshot(stripeAccountId: strin
   accountUrl.searchParams.append("include[0]", "identity");
   accountUrl.searchParams.append("include[1]", "requirements");
   accountUrl.searchParams.append("include[2]", "configuration.recipient");
-  accountUrl.searchParams.append("include[3]", "configuration.merchant");
 
   const stripeRes = await fetch(accountUrl.toString(), {
     headers: buildStripeV2Headers(),

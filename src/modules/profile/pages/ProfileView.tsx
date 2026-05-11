@@ -2083,6 +2083,24 @@ function ProfileEditPanel({
   const refreshStripeConnectionStatus = React.useCallback(
     async (options?: { silent?: boolean }) => {
       if (!supabaseClient || !canBeProducer) return;
+      const knownStripeAccountId = stripeConnection.accountId?.trim() || user.legalEntity?.stripeAccountId?.trim() || '';
+      if (!knownStripeAccountId) {
+        applyStripeConnectionPayload({
+          status: 'not_connected',
+          stripe_account_id: null,
+          stripe_account_country: country.trim() || 'FR',
+          stripe_connection_status: 'not_connected',
+          stripe_ready_for_orders: false,
+          stripe_onboarding_complete: false,
+          stripe_requirements_due_count: 0,
+          stripe_last_synced_at: null,
+          outstanding_requirements: [],
+          transfers_status: null,
+          requirements_status: null,
+          requirements_disabled_reason: null,
+        });
+        return;
+      }
 
       setStripeStatusLoading(true);
       const { data, error } = await supabaseClient.functions.invoke('stripe_connected_account_status', {
@@ -2129,7 +2147,7 @@ function ProfileEditPanel({
           typeof payload?.requirements_disabled_reason === 'string' ? payload.requirements_disabled_reason : null,
       });
     },
-    [applyStripeConnectionPayload, canBeProducer, supabaseClient]
+    [applyStripeConnectionPayload, canBeProducer, country, stripeConnection.accountId, supabaseClient, user.legalEntity?.stripeAccountId]
   );
 
   const handleStartStripeOnboarding = React.useCallback(async () => {

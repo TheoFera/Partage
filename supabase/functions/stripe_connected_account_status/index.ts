@@ -16,6 +16,17 @@ type LegalEntityRecord = {
   profile_id: string;
   stripe_account_id: string | null;
   stripe_account_country: string | null;
+  stripe_connection_status: string | null;
+  stripe_ready_for_orders: boolean | null;
+  stripe_onboarding_complete: boolean | null;
+  stripe_requirements_due_count: number | null;
+  stripe_last_synced_at: string | null;
+  stripe_requirements_currently_due: string[] | null;
+  stripe_requirements_eventually_due: string[] | null;
+  stripe_requirements_past_due: string[] | null;
+  stripe_transfers_status: string | null;
+  stripe_requirements_status: string | null;
+  stripe_requirements_disabled_reason: string | null;
 };
 
 function json(body: unknown, status = 200) {
@@ -49,7 +60,23 @@ serve(async (req) => {
 
   const { data: legalEntityData, error: legalEntityError } = await serviceClient
     .from("legal_entities")
-    .select("id, profile_id, stripe_account_id, stripe_account_country")
+    .select(`
+      id,
+      profile_id,
+      stripe_account_id,
+      stripe_account_country,
+      stripe_connection_status,
+      stripe_ready_for_orders,
+      stripe_onboarding_complete,
+      stripe_requirements_due_count,
+      stripe_last_synced_at,
+      stripe_requirements_currently_due,
+      stripe_requirements_eventually_due,
+      stripe_requirements_past_due,
+      stripe_transfers_status,
+      stripe_requirements_status,
+      stripe_requirements_disabled_reason
+    `)
     .eq("profile_id", userData.user.id)
     .maybeSingle();
 
@@ -109,6 +136,40 @@ serve(async (req) => {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Stripe connected account fetch failed";
-    return json({ error: message }, 502);
+    const currentlyDue = Array.isArray(legalEntity?.stripe_requirements_currently_due)
+      ? legalEntity.stripe_requirements_currently_due
+      : [];
+    const eventuallyDue = Array.isArray(legalEntity?.stripe_requirements_eventually_due)
+      ? legalEntity.stripe_requirements_eventually_due
+      : [];
+    const pastDue = Array.isArray(legalEntity?.stripe_requirements_past_due)
+      ? legalEntity.stripe_requirements_past_due
+      : [];
+    const outstandingRequirements = Array.from(
+      new Set([...currentlyDue, ...eventuallyDue, ...pastDue].filter((value) => typeof value === "string" && value.trim())),
+    );
+    const localStatus =
+      typeof legalEntity?.stripe_connection_status === "string" && legalEntity.stripe_connection_status.trim()
+        ? legalEntity.stripe_connection_status.trim()
+        : "action_required";
+    return json({
+      status: localStatus,
+      stripe_account_id: stripeAccountId,
+      stripe_account_country: legalEntity?.stripe_account_country ?? null,
+      stripe_connection_status: localStatus,
+      stripe_ready_for_orders: Boolean(legalEntity?.stripe_ready_for_orders),
+      stripe_onboarding_complete: Boolean(legalEntity?.stripe_onboarding_complete),
+      stripe_requirements_due_count:
+        typeof legalEntity?.stripe_requirements_due_count === "number" ? legalEntity.stripe_requirements_due_count : 0,
+      stripe_last_synced_at: legalEntity?.stripe_last_synced_at ?? null,
+      outstanding_requirements: outstandingRequirements,
+      stripe_requirements_currently_due: currentlyDue,
+      stripe_requirements_eventually_due: eventuallyDue,
+      stripe_requirements_past_due: pastDue,
+      transfers_status: legalEntity?.stripe_transfers_status ?? null,
+      requirements_status: legalEntity?.stripe_requirements_status ?? null,
+      requirements_disabled_reason: legalEntity?.stripe_requirements_disabled_reason ?? null,
+      stripe_sync_warning: message,
+    });
   }
 });
