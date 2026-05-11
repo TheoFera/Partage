@@ -1312,12 +1312,6 @@ function StripeConnectPromptOverlay({
               <div className="text-xs font-medium uppercase tracking-[0.08em] text-[#6B7280]">Statut Stripe</div>
               <div className="mt-2 text-sm font-semibold text-[#1F2937]">{statusLabel}</div>
             </div>
-            <div className="rounded-2xl border border-[#D9E7F9] bg-[#F8FBFF] px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-[0.08em] text-[#6B7280]">
-                Informations encore attendues
-              </div>
-              <div className="mt-2 text-sm font-semibold text-[#1F2937]">{dueCount}</div>
-            </div>
           </div>
 
           {missingFields.length > 0 && (
@@ -3485,11 +3479,6 @@ function ProfileEditPanel({
                 </div>
               </div>
             </div>
-            <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-2 text-xs text-[#B45309]">
-              Vérifiez bien l&apos;IBAN avant de lancer Stripe. Avec la configuration Stripe Express actuelle,
-              Stripe peut encore demander au producteur de confirmer ou de ressaisir cet IBAN pendant
-              l&apos;onboarding.
-            </div>
             <div className="space-y-3 rounded-xl border border-[#D7E3FF] bg-white p-4">
               <div className="space-y-1">
                 <h4 className="text-sm font-semibold text-[#1F2937]">Représentant légal</h4>
@@ -3641,15 +3630,8 @@ function ProfileEditPanel({
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-sm font-semibold text-[#1F2937]">
                     <Link2 className="h-4 w-4 text-[#2563EB]" />
-                    {stripeConnection.accountId ? 'Compte Connect déjà crée' : 'Compte Connect à créer'}
+                    {stripeConnection.accountId ? 'Compte Stripe Connect déjà crée' : 'Compte Stripe Connect à créer'}
                   </div>
-                  <p className="text-sm text-[#6B7280]">
-                    {stripeConnection.status === 'connected'
-                      ? 'Le compte Stripe du producteur est prêt pour les encaissements directs.'
-                      : stripeConnection.accountId
-                        ? 'Le compte Stripe existe déjà. Reprenez l onboarding si Stripe demande encore des informations.'
-                        : 'Stripe créera le compte connecté du producteur puis ouvrira le parcours d onboarding hébergé.'}
-                  </p>
                 </div>
                 {stripeConnection.accountId && (
                   <div className="text-xs text-[#6B7280]">
@@ -3659,26 +3641,26 @@ function ProfileEditPanel({
                 )}
               </div>
 
+              {savedStripePrefillMissingFields.length > 0 && (
+                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-3 text-xs text-[#B45309]">
+                  <p className="font-semibold text-[#1F2937]">Informations à compléter avant de commencer à connecter Stripe</p>
+                  <ul className="mt-2 space-y-1 text-[#6B7280]">
+                    {savedStripePrefillMissingFields.map((field) => (
+                      <li key={field}>• {field}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
                 <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
-                  <div className="text-xs text-[#6B7280]">Pays du compte</div>
-                  <div className="mt-1 flex items-center gap-2 text-[#1F2937] font-medium">
-                    <Globe className="h-4 w-4 text-[#2563EB]" />
-                    {stripeConnection.country || 'FR par defaut'}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
-                  <div className="text-xs text-[#6B7280]">Informations encore attendues</div>
-                  <div className="mt-1 text-[#1F2937] font-medium">{stripeConnection.dueCount}</div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
-                  <div className="text-xs text-[#6B7280]">Prêt pour les commandes</div>
+                  <div className="text-xs text-[#6B7280]">Votre compte est-il prêt à réaliser et encaisser des commandes ?</div>
                   <div className="mt-1 text-[#1F2937] font-medium">
                     {stripeConnection.readyForOrders ? 'Oui' : 'Non'}
                   </div>
                 </div>
                 <div className="rounded-lg border border-gray-200 bg-[#FCFCFD] px-3 py-2">
-                  <div className="text-xs text-[#6B7280]">Dernière synchro</div>
+                  <div className="text-xs text-[#6B7280]">Dernière synchronisation</div>
                   <div className="mt-1 text-[#1F2937] font-medium">
                     {stripeConnection.lastSyncedAt
                       ? new Date(stripeConnection.lastSyncedAt).toLocaleString('fr-FR')
@@ -3700,16 +3682,7 @@ function ProfileEditPanel({
                 </div>
               )}
 
-              {savedStripePrefillMissingFields.length > 0 && (
-                <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-3 text-xs text-[#B45309]">
-                  <p className="font-semibold text-[#1F2937]">Informations à compléter avant de commencer à connecter Stripe</p>
-                  <ul className="mt-2 space-y-1 text-[#6B7280]">
-                    {savedStripePrefillMissingFields.map((field) => (
-                      <li key={field}>• {field}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              
 
               {stripeConnection.requirementsDisabledReason && (
                 <div className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-xs text-[#B91C1C]">
@@ -3748,7 +3721,7 @@ function ProfileEditPanel({
                     : stripeConnection.status === 'connected'
                       ? 'Mettre à jour les informations Stripe'
                       : stripeConnection.accountId
-                        ? 'Continuer l onboarding Stripe'
+                        ? 'Continuer la connection à Stripe'
                         : 'Connecter la structure à Stripe'}
                 </button>
                 <button
