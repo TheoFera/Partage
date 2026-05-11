@@ -75,6 +75,12 @@ function buildStripeFormHeaders(secretKey: string) {
   };
 }
 
+function normalizeStripeV1BaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) return "https://api.stripe.com";
+  return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
+}
+
 function normalizeCountry(value: string | null | undefined, fallback = "FR") {
   const normalized = (value ?? "").trim().toUpperCase();
   return normalized || fallback;
@@ -126,9 +132,10 @@ async function upsertRepresentativePerson(params: {
   stripeSecretKey: string;
   stripeApiBase: string;
 }) {
+  const stripeApiBase = normalizeStripeV1BaseUrl(params.stripeApiBase);
   const personUrl = params.existingPersonId
-    ? `${params.stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
-    : `${params.stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
+    ? `${stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
+    : `${stripeApiBase}/v1/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
   const body = new URLSearchParams();
   body.append("person_token", params.personToken);
 
@@ -154,7 +161,7 @@ serve(async (req) => {
   const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-  const STRIPE_API_BASE = Deno.env.get("STRIPE_API_BASE") ?? "https://api.stripe.com";
+  const STRIPE_API_BASE = normalizeStripeV1BaseUrl(Deno.env.get("STRIPE_API_BASE") ?? "https://api.stripe.com");
   const STRIPE_API_BASE_V2 = Deno.env.get("STRIPE_API_BASE_V2") ?? "https://api.stripe.com";
   const STRIPE_V2_API_VERSION = Deno.env.get("STRIPE_V2_API_VERSION") ?? "2026-03-25.preview";
   const STRIPE_CONNECTED_ACCOUNT_COUNTRY =
