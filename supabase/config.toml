@@ -61,3 +61,13 @@ entrypoint = "./functions/stripe_connected_account_status/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/stripe_connected_account_webhook/index.ts"
+
+[functions.stripe_process_order_topups]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_process_order_topups/index.ts"
+
+[functions.stripe_refund_payment]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/stripe_refund_payment/index.ts"

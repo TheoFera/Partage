@@ -48,6 +48,7 @@ import {
   fetchParticipantInvoices,
   fetchProducerStatementSources,
   fetchProducerInvoices,
+  processProducerTopups,
   getInvoiceDownloadUrl,
   getOrderFullByCode,
   issueParticipantInvoiceWithCoop,
@@ -1615,6 +1616,14 @@ const sharerAvatarUpdatedAt =
           updatedStatus,
         });
         updateOrderLocal({ status: updatedStatus });
+        if (nextStatus === 'confirmed') {
+          try {
+            await processProducerTopups(order.id);
+          } catch (error) {
+            console.error('Producer topups process error:', error);
+            toast.error("La commande est confirmée, mais l'envoi des compléments producteur doit être relancé.");
+          }
+        }
         if (nextStatus === 'distributed') {
           try {
             const invoiceResult = await createPlatformInvoiceAndSendForOrder(order.id);

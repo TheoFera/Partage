@@ -282,8 +282,25 @@ const mapPaymentRow = (row: DbPayment): Payment => ({
   provider: row.provider,
   providerPaymentId: row.provider_payment_id,
   idempotencyKey: row.idempotency_key,
+  stripeAccountId: row.stripe_account_id ?? null,
+  stripeCheckoutSessionId: row.stripe_checkout_session_id ?? null,
+  stripePaymentIntentId: row.stripe_payment_intent_id ?? null,
+  stripeChargeId: row.stripe_charge_id ?? null,
+  legalEntityId: row.legal_entity_id ?? null,
   status: row.status,
   amountCents: row.amount_cents,
+  totalEconomicCents: Number(row.total_economic_cents ?? row.amount_cents ?? 0),
+  coopCreditUsedCents: Number(row.coop_credit_used_cents ?? 0),
+  cardAmountCents: Number(row.card_amount_cents ?? row.amount_cents ?? 0),
+  platformRetainedTargetCents: Number(row.platform_retained_target_cents ?? 0),
+  platformServiceFeeCents: Number(row.platform_service_fee_cents ?? 0),
+  sharerValueCents: Number(row.sharer_value_cents ?? 0),
+  platformDeliveryRetainedCents: Number(row.platform_delivery_retained_cents ?? 0),
+  producerDeliveryCents: Number(row.producer_delivery_cents ?? 0),
+  stripeApplicationFeeAmountCents: Number(row.stripe_application_fee_amount_cents ?? 0),
+  producerNetTargetCents: Number(row.producer_net_target_cents ?? 0),
+  producerCardNetCents: Number(row.producer_card_net_cents ?? 0),
+  producerTopupDueCents: Number(row.producer_topup_due_cents ?? 0),
   feeCents: row.fee_cents,
   feeVatCents: row.fee_vat_cents ?? 0,
   refundedAmountCents: row.refunded_amount_cents,
@@ -1788,6 +1805,15 @@ export const finalizeClosePayment = async (paymentId: string) => {
   const client = getClient();
   const { data, error } = await client.rpc('finalize_close_payment', {
     p_payment_id: paymentId,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const processProducerTopups = async (orderId: string) => {
+  const client = getClient();
+  const { data, error } = await client.functions.invoke('stripe_process_order_topups', {
+    body: { order_id: orderId },
   });
   if (error) throw error;
   return data;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowLeft, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
-import type { GroupOrder, OrderPurchaseDraft } from '../../../shared/types';
+import type { GroupOrder, OrderPurchaseDraft, PaymentBreakdown } from '../../../shared/types';
 import './OrderPaymentView.css';
 import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
@@ -32,6 +32,10 @@ type StripeCreateCheckoutSessionResponse = {
   checkout_payment_session_id: string;
   provider_payment_id: string;
   client_secret: string;
+  payment_mode?: 'stripe_checkout' | 'direct_charge' | 'local_zero';
+  payment_breakdown?: Record<string, unknown> | null;
+  stripe_account_id?: string | null;
+  status?: 'processing' | 'succeeded' | 'failed' | 'retryable';
 };
 
 type CreateCheckoutPaymentSessionResponse = {
@@ -62,7 +66,31 @@ type StripeCheckoutSessionStatusResponse = {
   customer_email: string | null;
   customer_phone: string | null;
   payment_intent_id: string | null;
+  payment_mode?: 'stripe_checkout' | 'direct_charge' | 'local_zero';
+  payment_breakdown?: Record<string, unknown> | null;
+  stripe_account_id?: string | null;
 };
+
+const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined): PaymentBreakdown => ({
+  totalEconomicCents: Math.max(0, Math.round(Number(value?.total_economic_cents ?? 0) || 0)),
+  coopCreditUsedCents: Math.max(0, Math.round(Number(value?.coop_credit_used_cents ?? 0) || 0)),
+  cardAmountCents: Math.max(0, Math.round(Number(value?.card_amount_cents ?? 0) || 0)),
+  producerNetTargetCents: Math.max(0, Math.round(Number(value?.producer_net_target_cents ?? 0) || 0)),
+  platformRetainedTargetCents: Math.max(0, Math.round(Number(value?.platform_retained_target_cents ?? 0) || 0)),
+  platformServiceFeeCents: Math.max(0, Math.round(Number(value?.platform_service_fee_cents ?? 0) || 0)),
+  sharerValueCents: Math.max(0, Math.round(Number(value?.sharer_value_cents ?? 0) || 0)),
+  platformDeliveryRetainedCents: Math.max(
+    0,
+    Math.round(Number(value?.platform_delivery_retained_cents ?? 0) || 0)
+  ),
+  producerDeliveryCents: Math.max(0, Math.round(Number(value?.producer_delivery_cents ?? 0) || 0)),
+  stripeApplicationFeeAmountCents: Math.max(
+    0,
+    Math.round(Number(value?.stripe_application_fee_amount_cents ?? 0) || 0)
+  ),
+  producerCardNetCents: Math.max(0, Math.round(Number(value?.producer_card_net_cents ?? 0) || 0)),
+  producerTopupDueCents: Math.max(0, Math.round(Number(value?.producer_topup_due_cents ?? 0) || 0)),
+});
 
 type EmbeddedCheckoutInstance = {
   mount: (selector: string) => void;
@@ -172,6 +200,9 @@ export function OrderPaymentView({
   );
   const [paymentError, setPaymentError] = React.useState<string | null>(() => initialSnapshot?.paymentError ?? null);
   const [checkoutReady, setCheckoutReady] = React.useState(false);
+  const [paymentBreakdown, setPaymentBreakdown] = React.useState<PaymentBreakdown>(() =>
+    mapPaymentBreakdown((initialSnapshot?.paymentBreakdown as Record<string, unknown> | null | undefined) ?? null)
+  );
   const hasConfirmedRef = React.useRef(false);
   const checkoutRef = React.useRef<EmbeddedCheckoutInstance | null>(null);
   const checkoutContainerId = React.useMemo(() => `stripe-checkout-${order.id}`, [order.id]);
@@ -247,6 +278,7 @@ export function OrderPaymentView({
         if (data.provider_payment_id) {
           setProviderPaymentId(data.provider_payment_id);
         }
+        setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
 
         if (data.status === 'succeeded') {
           setPaymentState('succeeded');
@@ -368,6 +400,28 @@ export function OrderPaymentView({
         );
         if (error) throw error;
         if (!data?.client_secret || !data?.provider_payment_id || !data?.checkout_payment_session_id) {
+          if (data?.payment_mode === 'local_zero' && data?.checkout_payment_session_id) {
+            disposeCheckout();
+            setCheckoutPaymentSessionId(data.checkout_payment_session_id);
+            setProviderPaymentId(data.provider_payment_id || data.checkout_payment_session_id);
+            setCheckoutClientSecret(null);
+            setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
+            setPaymentState(data.status === 'succeeded' ? 'succeeded' : 'processing');
+            setPaymentStatusMessage(
+              data.status === 'succeeded'
+                ? 'Aucun paiement carte n’est nécessaire. Finalisation de votre commande effectuée.'
+                : 'Aucun paiement carte n’est nécessaire. Finalisation en cours.'
+            );
+            await onConfirmPayment({
+              provider: 'stripe',
+              providerPaymentId: data.provider_payment_id || data.checkout_payment_session_id,
+              raw: {
+                payment_mode: 'local_zero',
+              },
+            });
+            hasConfirmedRef.current = true;
+            return;
+          }
           throw new Error('Reponse de paiement incomplete.');
         }
 
@@ -375,6 +429,7 @@ export function OrderPaymentView({
         setCheckoutPaymentSessionId(data.checkout_payment_session_id);
         setProviderPaymentId(data.provider_payment_id);
         setCheckoutClientSecret(data.client_secret);
+        setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
       } catch (error) {
         console.error('Stripe checkout session error:', error);
         let detailedMessage: string | null = null;
@@ -441,6 +496,7 @@ export function OrderPaymentView({
         );
         if (error) throw error;
         if (!data?.status) throw new Error('Statut de paiement indisponible.');
+        setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
 
         if (data.status === 'succeeded') {
           await onConfirmPayment({
@@ -619,6 +675,7 @@ export function OrderPaymentView({
       checkoutPaymentSessionId,
       checkoutClientSecret,
       providerPaymentId,
+      paymentBreakdown: paymentBreakdown as unknown as Record<string, unknown>,
       paymentState,
       paymentStatusMessage,
       paymentError,
@@ -628,6 +685,7 @@ export function OrderPaymentView({
     checkoutPaymentSessionId,
     draft,
     order,
+    paymentBreakdown,
     paymentError,
     paymentState,
     paymentStatusMessage,
@@ -733,6 +791,18 @@ export function OrderPaymentView({
               </div>
             ) : null}
             <div className="order-payment-view__summary-row">
+              <span>Total économique</span>
+              <span className="order-payment-view__summary-value">
+                {formatEurosFromCents(paymentBreakdown.totalEconomicCents || selectedItemsSubtotalCents)}
+              </span>
+            </div>
+            <div className="order-payment-view__summary-row">
+              <span>Reste à payer par carte</span>
+              <span className="order-payment-view__summary-value">
+                {formatEurosFromCents(paymentBreakdown.cardAmountCents || totalDueCents)}
+              </span>
+            </div>
+            <div className="order-payment-view__summary-row">
               <span>{isClosePayment ? 'Reste à payer' : 'Total'}</span>
               <span className="order-payment-view__summary-value">{formatPrice(draft.total)}</span>
             </div>
@@ -743,6 +813,12 @@ export function OrderPaymentView({
               </div>
             ) : null}
           </div>
+          {!isClosePayment ? (
+            <p className="order-payment-view__confirm-feedback" role="note">
+              Votre gain de coopération est appliqué comme avoir. Le producteur reste payé sur la base du montant total
+              de la commande.
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={() => createServerBackedCheckoutSession(false)}
@@ -754,7 +830,9 @@ export function OrderPaymentView({
               ? 'Paiement en cours...'
               : hasCheckoutSession
                 ? 'Reprendre le paiement'
-                : isClosePayment
+                : paymentBreakdown.cardAmountCents === 0 && !isClosePayment
+                  ? 'Valider sans paiement carte'
+                  : isClosePayment
                   ? 'Payer et clôturer'
                   : 'Payer avec votre carte bancaire'}
           </button>

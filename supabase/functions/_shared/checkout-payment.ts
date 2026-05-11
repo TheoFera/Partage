@@ -26,13 +26,35 @@ type CheckoutPaymentSessionStatus =
 
 type CheckoutFlowKind = "participant" | "close";
 
+type CheckoutPaymentMode = "stripe_checkout" | "direct_charge" | "local_zero";
+
+type PaymentBreakdown = {
+  total_economic_cents: number;
+  coop_credit_used_cents: number;
+  card_amount_cents: number;
+  producer_net_target_cents: number;
+  platform_retained_target_cents: number;
+  platform_service_fee_cents: number;
+  sharer_value_cents: number;
+  platform_delivery_retained_cents: number;
+  producer_delivery_cents: number;
+  stripe_application_fee_amount_cents: number;
+  producer_card_net_cents: number;
+  producer_topup_due_cents: number;
+};
+
 type CheckoutPaymentSessionRow = {
   id: string;
   checkout_session_id: string | null;
   order_id: string;
   profile_id: string;
+  participant_id?: string | null;
   flow_kind: CheckoutFlowKind;
   status: CheckoutPaymentSessionStatus;
+  payment_mode?: CheckoutPaymentMode;
+  payment_breakdown?: JsonRecord | null;
+  stripe_account_id?: string | null;
+  stripe_payment_intent_id?: string | null;
   draft_payload: JsonRecord | null;
   amount_cents: number;
   currency: string | null;
@@ -54,6 +76,7 @@ type StripeCheckoutSession = {
   customer_email?: string | null;
   customer_details?: { email?: string | null; phone?: string | null } | null;
   metadata?: Record<string, unknown> | null;
+  payment_intent_data?: { application_fee_amount?: number | null } | null;
   payment_intent?: string | { id?: string | null } | null;
 };
 
@@ -62,6 +85,14 @@ type DbPaymentRow = {
   participant_id: string;
   provider_payment_id: string | null;
   status: string;
+};
+
+type ProducerLegalEntityRow = {
+  id: string;
+  profile_id: string;
+  stripe_account_id: string | null;
+  stripe_ready_for_orders: boolean | null;
+  stripe_connection_status: string | null;
 };
 
 type DbParticipantRow = {
@@ -78,9 +109,12 @@ type DbOrderRow = {
   order_code: string | null;
   auto_approve_participation_requests: boolean;
   sharer_profile_id: string;
+  producer_profile_id: string;
   status: string;
   effective_weight_kg: number;
   delivery_fee_cents: number;
+  pickup_delivery_fee_cents?: number | null;
+  delivery_option: "chronofresh" | "producer_delivery" | "producer_pickup";
   sharer_percentage: number;
 };
 
@@ -159,6 +193,50 @@ const isRecord = (value: unknown): value is JsonRecord =>
 
 const normalizeText = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
+const PAYMENT_BREAKDOWN_KEYS = [
+  "total_economic_cents",
+  "coop_credit_used_cents",
+  "card_amount_cents",
+  "producer_net_target_cents",
+  "platform_retained_target_cents",
+  "platform_service_fee_cents",
+  "sharer_value_cents",
+  "platform_delivery_retained_cents",
+  "producer_delivery_cents",
+  "stripe_application_fee_amount_cents",
+  "producer_card_net_cents",
+  "producer_topup_due_cents",
+] as const;
+
+const emptyPaymentBreakdown = (): PaymentBreakdown => ({
+  total_economic_cents: 0,
+  coop_credit_used_cents: 0,
+  card_amount_cents: 0,
+  producer_net_target_cents: 0,
+  platform_retained_target_cents: 0,
+  platform_service_fee_cents: 0,
+  sharer_value_cents: 0,
+  platform_delivery_retained_cents: 0,
+  producer_delivery_cents: 0,
+  stripe_application_fee_amount_cents: 0,
+  producer_card_net_cents: 0,
+  producer_topup_due_cents: 0,
+});
+
+const toNonNegativeInteger = (value: unknown) => Math.max(0, Math.round(Number(value ?? 0) || 0));
+
+export const parsePaymentBreakdown = (value: unknown): PaymentBreakdown => {
+  const source = isRecord(value) ? value : {};
+  return PAYMENT_BREAKDOWN_KEYS.reduce((acc, key) => {
+    acc[key] = toNonNegativeInteger(source[key]);
+    return acc;
+  }, emptyPaymentBreakdown());
+};
+
+const serializePaymentBreakdown = (value: PaymentBreakdown): JsonRecord => ({ ...value });
+
+const getStripeApiBase = () => STRIPE_API_BASE.replace(/\/+$/, "");
+
 const generateIdempotencyKey = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -196,8 +274,12 @@ const parseStripeSignatureHeader = (signatureHeader: string) => {
   };
 };
 
-export async function verifyStripeWebhookSignature(rawBody: string, signatureHeader: string) {
-  if (!STRIPE_WEBHOOK_SECRET) {
+export async function verifyStripeWebhookSignature(
+  rawBody: string,
+  signatureHeader: string,
+  secretKey = STRIPE_WEBHOOK_SECRET,
+) {
+  if (!secretKey) {
     throw new Error("Missing STRIPE_WEBHOOK_SECRET");
   }
   const { timestamp, signatures } = parseStripeSignatureHeader(signatureHeader);
@@ -211,7 +293,7 @@ export async function verifyStripeWebhookSignature(rawBody: string, signatureHea
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(STRIPE_WEBHOOK_SECRET),
+    encoder.encode(secretKey),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -564,12 +646,17 @@ async function listCheckoutSessionReservations(
     .filter(Boolean) as Array<DbLotReservationRow & { product_id: string }>;
 }
 
-async function retrieveStripeCheckoutSession(checkoutSessionId: string) {
+async function retrieveStripeCheckoutSession(checkoutSessionId: string, stripeAccountId?: string | null) {
   assertServerEnv();
+  const headers: Record<string, string> = { Authorization: `Bearer ${STRIPE_SECRET_KEY}` };
+  const normalizedStripeAccountId = normalizeText(stripeAccountId);
+  if (normalizedStripeAccountId) {
+    headers["Stripe-Account"] = normalizedStripeAccountId;
+  }
   const response = await fetch(
-    `${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(checkoutSessionId)}?expand[]=payment_intent`,
+    `${getStripeApiBase()}/checkout/sessions/${encodeURIComponent(checkoutSessionId)}?expand[]=payment_intent`,
     {
-      headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` },
+      headers,
     },
   );
   const payload = await response.json().catch(() => ({}));
@@ -612,11 +699,18 @@ async function createPaymentStub(
     participantId: string;
     amountCents: number;
     provider: string;
-    providerPaymentId: string;
+    providerPaymentId: string | null;
     idempotencyKey: string | null;
+    stripeAccountId?: string | null;
+    stripeCheckoutSessionId?: string | null;
+    stripePaymentIntentId?: string | null;
+    stripeChargeId?: string | null;
+    legalEntityId?: string | null;
+    paymentBreakdown?: PaymentBreakdown;
     raw: JsonRecord;
   },
 ) {
+  const breakdown = params.paymentBreakdown ?? emptyPaymentBreakdown();
   const { data, error } = await serviceClient
     .from("payments")
     .insert({
@@ -627,6 +721,23 @@ async function createPaymentStub(
       provider: params.provider,
       provider_payment_id: params.providerPaymentId,
       idempotency_key: params.idempotencyKey,
+      stripe_account_id: params.stripeAccountId ?? null,
+      stripe_checkout_session_id: params.stripeCheckoutSessionId ?? null,
+      stripe_payment_intent_id: params.stripePaymentIntentId ?? null,
+      stripe_charge_id: params.stripeChargeId ?? null,
+      legal_entity_id: params.legalEntityId ?? null,
+      total_economic_cents: breakdown.total_economic_cents,
+      coop_credit_used_cents: breakdown.coop_credit_used_cents,
+      card_amount_cents: breakdown.card_amount_cents,
+      platform_retained_target_cents: breakdown.platform_retained_target_cents,
+      platform_service_fee_cents: breakdown.platform_service_fee_cents,
+      sharer_value_cents: breakdown.sharer_value_cents,
+      platform_delivery_retained_cents: breakdown.platform_delivery_retained_cents,
+      producer_delivery_cents: breakdown.producer_delivery_cents,
+      stripe_application_fee_amount_cents: breakdown.stripe_application_fee_amount_cents,
+      producer_net_target_cents: breakdown.producer_net_target_cents,
+      producer_card_net_cents: breakdown.producer_card_net_cents,
+      producer_topup_due_cents: breakdown.producer_topup_due_cents,
       raw: params.raw,
     })
     .select("id, participant_id, provider_payment_id, status")
@@ -653,6 +764,301 @@ async function finalizeClosePayment(serviceClient: ReturnType<typeof createServi
     p_payment_id: paymentId,
   });
   if (error) throw error;
+}
+
+async function upsertProducerTopup(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    orderId: string;
+    participantId: string;
+    paymentId: string;
+    legalEntityId: string;
+    producerStripeAccountId: string;
+    amountCents: number;
+  },
+) {
+  const amountCents = toNonNegativeInteger(params.amountCents);
+  if (amountCents <= 0) {
+    return null;
+  }
+  const payload = {
+    order_id: params.orderId,
+    participant_id: params.participantId,
+    payment_id: params.paymentId,
+    legal_entity_id: params.legalEntityId,
+    producer_stripe_account_id: params.producerStripeAccountId,
+    amount_cents: amountCents,
+    status: "pending",
+    error_message: null,
+  };
+  const { data, error } = await serviceClient
+    .from("producer_topups")
+    .upsert(payload, { onConflict: "payment_id" })
+    .select("*")
+    .single();
+  if (error || !data) throw error ?? new Error("Impossible d'enregistrer le complément producteur.");
+  return data as Record<string, unknown>;
+}
+
+const parseStripeError = (stripeJson: any) => {
+  const message = typeof stripeJson?.error?.message === "string"
+    ? stripeJson.error.message
+    : "Erreur Stripe.";
+  const code = normalizeText(stripeJson?.error?.code) || null;
+  return { message, code };
+};
+
+export async function processProducerTopupsForOrder(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  orderId: string,
+) {
+  assertServerEnv();
+  const { data: orderRow, error: orderError } = await serviceClient
+    .from("orders")
+    .select("id, status")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (orderError) throw orderError;
+  if (!orderRow) throw new Error("Commande introuvable pour le traitement des compléments.");
+  const orderStatus = normalizeText((orderRow as Record<string, unknown>).status);
+  if (!["confirmed", "preparing", "prepared", "delivered", "distributed", "finished"].includes(orderStatus)) {
+    return { processed: 0, sent: 0, skipped: 0, failed: 0, needsFunding: 0 };
+  }
+
+  const { data, error } = await serviceClient
+    .from("producer_topups")
+    .select("*")
+    .eq("order_id", orderId)
+    .in("status", ["pending", "failed", "needs_funding"])
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+
+  let processed = 0;
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+  let needsFunding = 0;
+
+  for (const topup of (data as Array<Record<string, unknown>> | null) ?? []) {
+    processed += 1;
+    const transferId = normalizeText(topup.stripe_transfer_id);
+    if (transferId) {
+      skipped += 1;
+      continue;
+    }
+    const amountCents = toNonNegativeInteger(topup.amount_cents);
+    if (amountCents <= 0) {
+      await serviceClient
+        .from("producer_topups")
+        .update({ status: "cancelled", error_message: null })
+        .eq("id", topup.id);
+      skipped += 1;
+      continue;
+    }
+
+    const form = new URLSearchParams();
+    form.append("amount", String(amountCents));
+    form.append("currency", "eur");
+    form.append("destination", normalizeText(topup.producer_stripe_account_id));
+    form.append("metadata[order_id]", normalizeText(topup.order_id));
+    form.append("metadata[participant_id]", normalizeText(topup.participant_id));
+    form.append("metadata[payment_id]", normalizeText(topup.payment_id));
+    form.append("metadata[reason]", "coop_credit_topup");
+
+    const stripeRes = await fetch(`${getStripeApiBase()}/transfers`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Idempotency-Key": `topup_payment_${normalizeText(topup.payment_id)}`,
+      },
+      body: form.toString(),
+    });
+    const stripeJson = await stripeRes.json().catch(() => ({}));
+
+    if (!stripeRes.ok) {
+      const parsedError = parseStripeError(stripeJson);
+      const nextStatus =
+        parsedError.code === "balance_insufficient" || parsedError.message.toLowerCase().includes("insufficient")
+          ? "needs_funding"
+          : "failed";
+      await serviceClient
+        .from("producer_topups")
+        .update({
+          status: nextStatus,
+          error_message: parsedError.message,
+        })
+        .eq("id", topup.id);
+      if (nextStatus === "needs_funding") {
+        needsFunding += 1;
+      } else {
+        failed += 1;
+      }
+      continue;
+    }
+
+    await serviceClient
+      .from("producer_topups")
+      .update({
+        status: "sent",
+        stripe_transfer_id: normalizeText(stripeJson?.id),
+        sent_at: new Date().toISOString(),
+        error_message: null,
+      })
+      .eq("id", topup.id);
+    sent += 1;
+  }
+
+  return { processed, sent, skipped, failed, needsFunding };
+}
+
+async function creditCoopBalance(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: { profileId: string; orderId: string; amountCents: number; paymentId: string },
+) {
+  const amountCents = toNonNegativeInteger(params.amountCents);
+  if (amountCents <= 0) return;
+  const { data: balanceRow, error: balanceError } = await serviceClient
+    .from("coop_balances")
+    .select("balance_cents")
+    .eq("profile_id", params.profileId)
+    .maybeSingle();
+  if (balanceError) throw balanceError;
+  const nextBalance = toNonNegativeInteger(balanceRow?.balance_cents) + amountCents;
+  const { error: upsertError } = await serviceClient
+    .from("coop_balances")
+    .upsert({
+      profile_id: params.profileId,
+      balance_cents: nextBalance,
+      updated_at: new Date().toISOString(),
+    });
+  if (upsertError) throw upsertError;
+  const { error: ledgerError } = await serviceClient
+    .from("coop_ledger")
+    .insert({
+      profile_id: params.profileId,
+      order_id: params.orderId,
+      delta_cents: amountCents,
+      reason: "refund_credit_restore",
+      metadata: {
+        payment_id: params.paymentId,
+      },
+    });
+  if (ledgerError) throw ledgerError;
+}
+
+export async function refundFullParticipantPayment(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  paymentId: string,
+) {
+  assertServerEnv();
+  const { data: paymentRow, error: paymentError } = await serviceClient
+    .from("payments")
+    .select("*")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (paymentError) throw paymentError;
+  if (!paymentRow) throw new Error("Paiement introuvable.");
+  const payment = paymentRow as Record<string, unknown>;
+  if (normalizeText(payment.status) === "refunded") {
+    return {
+      ok: true,
+      payment_id: paymentId,
+      already_refunded: true,
+      had_topup_sent: false,
+    };
+  }
+  const { data: participantRow, error: participantError } = await serviceClient
+    .from("order_participants")
+    .select("profile_id")
+    .eq("id", payment.participant_id)
+    .maybeSingle();
+  if (participantError) throw participantError;
+
+  const paymentIntentId = normalizeText(payment.stripe_payment_intent_id);
+  const chargeId = normalizeText(payment.stripe_charge_id);
+  const stripeAccountId = normalizeText(payment.stripe_account_id);
+  if (toNonNegativeInteger(payment.amount_cents) > 0 && (!paymentIntentId && !chargeId)) {
+    throw new Error("Aucun identifiant Stripe remboursable n'est enregistré pour ce paiement.");
+  }
+
+  if (toNonNegativeInteger(payment.amount_cents) > 0) {
+    const form = new URLSearchParams();
+    if (paymentIntentId) {
+      form.append("payment_intent", paymentIntentId);
+    } else {
+      form.append("charge", chargeId);
+    }
+    form.append("refund_application_fee", "true");
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Idempotency-Key": `refund_payment_${paymentId}`,
+    };
+    if (stripeAccountId) {
+      headers["Stripe-Account"] = stripeAccountId;
+    }
+    const stripeRes = await fetch(`${getStripeApiBase()}/refunds`, {
+      method: "POST",
+      headers,
+      body: form.toString(),
+    });
+    const stripeJson = await stripeRes.json().catch(() => ({}));
+    if (!stripeRes.ok) {
+      const parsedError = parseStripeError(stripeJson);
+      throw new Error(parsedError.message);
+    }
+  }
+
+  const { data: topups, error: topupsError } = await serviceClient
+    .from("producer_topups")
+    .select("*")
+    .eq("payment_id", paymentId);
+  if (topupsError) throw topupsError;
+  for (const topup of (topups as Array<Record<string, unknown>> | null) ?? []) {
+    const currentStatus = normalizeText(topup.status);
+    if (currentStatus === "pending" || currentStatus === "failed" || currentStatus === "needs_funding") {
+      await serviceClient
+        .from("producer_topups")
+        .update({ status: "cancelled", error_message: null })
+        .eq("id", topup.id);
+    }
+  }
+
+  const coopCreditUsedCents = toNonNegativeInteger(payment.coop_credit_used_cents);
+  const participantProfileId = normalizeText(participantRow?.profile_id);
+  if (coopCreditUsedCents > 0 && participantProfileId) {
+    await creditCoopBalance(serviceClient, {
+      profileId: participantProfileId,
+      orderId: normalizeText(payment.order_id),
+      amountCents: coopCreditUsedCents,
+      paymentId,
+    });
+  }
+
+  const { error: updateError } = await serviceClient
+    .from("payments")
+    .update({
+      status: "refunded",
+      refunded_amount_cents: toNonNegativeInteger(payment.amount_cents),
+      failure_code: null,
+      failure_message: null,
+      updated_at: new Date().toISOString(),
+      raw: {
+        ...(isRecord(payment.raw) ? payment.raw : {}),
+        refund_handled_at: new Date().toISOString(),
+      },
+    })
+    .eq("id", paymentId);
+  if (updateError) throw updateError;
+
+  return {
+    ok: true,
+    payment_id: paymentId,
+    had_topup_sent: ((topups as Array<Record<string, unknown>> | null) ?? []).some(
+      (topup) => normalizeText(topup.status) === "sent",
+    ),
+  };
 }
 
 async function createLockClosePackage(
@@ -696,10 +1102,40 @@ async function fetchCoopBalance(serviceClient: ReturnType<typeof createServiceCl
   return Math.max(0, Number((data as Record<string, unknown> | null)?.balance_cents ?? 0));
 }
 
+async function getProducerLegalEntityForPayments(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  producerProfileId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("legal_entities")
+    .select("id, profile_id, stripe_account_id, stripe_ready_for_orders, stripe_connection_status")
+    .eq("profile_id", producerProfileId)
+    .maybeSingle();
+  if (error) throw error;
+  const legalEntity = (data as ProducerLegalEntityRow | null) ?? null;
+  if (!legalEntity) {
+    throw new Error("Structure producteur introuvable pour ce paiement.");
+  }
+  const stripeAccountId = normalizeText(legalEntity.stripe_account_id);
+  if (!stripeAccountId) {
+    throw new Error("Le producteur n'a pas encore de compte Stripe Connect.");
+  }
+  if (!legalEntity.stripe_ready_for_orders) {
+    throw new Error("Le compte Stripe du producteur n'est pas encore prêt à recevoir des paiements.");
+  }
+  return {
+    legalEntityId: legalEntity.id,
+    stripeAccountId,
+    stripeConnectionStatus: normalizeText(legalEntity.stripe_connection_status) || null,
+  };
+}
+
 async function getOrderById(serviceClient: ReturnType<typeof createServiceClient>, orderId: string) {
   const { data, error } = await serviceClient
     .from("orders")
-    .select("id, order_code, auto_approve_participation_requests, sharer_profile_id, status, effective_weight_kg, delivery_fee_cents, sharer_percentage")
+    .select(
+      "id, order_code, auto_approve_participation_requests, sharer_profile_id, producer_profile_id, status, effective_weight_kg, delivery_fee_cents, pickup_delivery_fee_cents, delivery_option, sharer_percentage",
+    )
     .eq("id", orderId)
     .single();
   if (error || !data) throw error ?? new Error("Order not found");
@@ -719,6 +1155,21 @@ async function getParticipantByProfile(
     .maybeSingle();
   if (error) throw error;
   return (data as DbParticipantRow | null) ?? null;
+}
+
+async function listParticipantOrderItems(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  orderId: string,
+  participantId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("order_items")
+    .select("id, product_id, lot_id, participant_id, quantity_units, unit_label, unit_weight_kg, unit_base_price_cents, unit_delivery_cents, unit_sharer_fee_cents, unit_final_price_cents, line_total_cents, line_weight_kg, created_at, updated_at")
+    .eq("order_id", orderId)
+    .eq("participant_id", participantId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as DbOrderItemRow[] | null) ?? [];
 }
 
 async function createParticipant(
@@ -1068,6 +1519,7 @@ async function buildCheckoutReservationPlans(
   serviceClient: ReturnType<typeof createServiceClient>,
   checkoutPaymentSession: CheckoutPaymentSessionRow,
 ) {
+  const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
   const quantities =
     checkoutPaymentSession.flow_kind === "close"
       ? parseCloseDraft(checkoutPaymentSession.draft_payload).extraQuantities
@@ -1082,9 +1534,16 @@ async function buildCheckoutReservationPlans(
     productId: string;
     lotId: string;
     quantityUnits: number;
+    storedQuantityUnits: number;
     saleUnit: string | null;
     reservedUnits: number | null;
     reservedKg: number | null;
+    lineWeightKg: number;
+    unitBasePriceCents: number;
+    unitDeliveryCents: number;
+    unitSharerFeeCents: number;
+    unitFinalPriceCents: number;
+    lineTotalCents: number;
   }> = [];
   for (const [productId, quantityUnits] of Object.entries(quantities)) {
     if (quantityUnits <= 0) continue;
@@ -1108,17 +1567,177 @@ async function buildCheckoutReservationPlans(
       quantityUnits,
     );
     const storedQuantityUnits = normalizeQuantityUnitsForStorage(productListing.sale_unit, quantityUnits);
+    const fallbackBasePriceCents = Math.max(
+      0,
+      Number(productListing.active_lot_price_cents ?? fallbackLot?.price_cents ?? productListing.default_price_cents ?? 0),
+    );
+    const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+      productListing.sale_unit,
+      orderProduct.unit_base_price_cents ?? fallbackBasePriceCents,
+      quantityUnits,
+    );
+    const pricing = calculateOrderItemPricing({
+      order,
+      basePriceCents: unitBasePriceCents,
+      unitWeightKg,
+      quantityUnits: storedQuantityUnits,
+    });
     plans.push({
       productId,
       lotId: resolvedLotId,
       quantityUnits,
+      storedQuantityUnits,
       saleUnit: productListing.sale_unit,
       reservedUnits: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
       reservedKg: isKgSaleUnit(productListing.sale_unit) ? unitWeightKg * storedQuantityUnits : null,
+      lineWeightKg: pricing.lineWeightKg ?? 0,
+      unitBasePriceCents,
+      unitDeliveryCents: pricing.unitDeliveryCents,
+      unitSharerFeeCents: pricing.unitSharerFeeCents,
+      unitFinalPriceCents: pricing.unitFinalPriceCents,
+      lineTotalCents: pricing.lineTotalCents,
     });
   }
 
   return plans;
+}
+
+async function computePlatformServiceFeeFromPlans(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  plans: Array<{ lotId: string; saleUnit: string | null; storedQuantityUnits: number; reservedKg: number | null }>,
+) {
+  const lotIds = Array.from(new Set(plans.map((plan) => plan.lotId).filter(Boolean)));
+  if (!lotIds.length) return 0;
+  const { data, error } = await serviceClient
+    .from("lot_price_breakdown")
+    .select("lot_id, value_type, value_cents")
+    .in("lot_id", lotIds)
+    .eq("source", "platform");
+  if (error) throw error;
+
+  const valuePerUnitByLot = new Map<string, number>();
+  for (const row of (data as Array<Record<string, unknown>> | null) ?? []) {
+    const lotId = normalizeText(row.lot_id);
+    if (!lotId) continue;
+    const valueType = normalizeText(row.value_type).toLowerCase();
+    if (valueType && valueType !== "cents") {
+      throw new Error(`Commission plateforme invalide sur le lot ${lotId}.`);
+    }
+    valuePerUnitByLot.set(lotId, (valuePerUnitByLot.get(lotId) ?? 0) + toNonNegativeInteger(row.value_cents));
+  }
+
+  return plans.reduce((sum, plan) => {
+    const valuePerUnit = valuePerUnitByLot.get(plan.lotId) ?? 0;
+    const unitsForShare = isKgSaleUnit(plan.saleUnit) ? Number(plan.reservedKg ?? 0) : plan.storedQuantityUnits;
+    return sum + valuePerUnit * Math.max(0, Number(unitsForShare) || 0);
+  }, 0);
+}
+
+async function computeParticipantPaymentBreakdownFromPlans(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    order: DbOrderRow;
+    profileId: string;
+    plans: Array<{
+      lotId: string;
+      saleUnit: string | null;
+      storedQuantityUnits: number;
+      reservedKg: number | null;
+      unitDeliveryCents: number;
+      unitSharerFeeCents: number;
+      lineTotalCents: number;
+    }>;
+    coopBalanceCents: number;
+    useCoopBalance: boolean;
+  },
+): Promise<PaymentBreakdown> {
+  const totalEconomicCents = params.plans.reduce((sum, plan) => sum + toNonNegativeInteger(plan.lineTotalCents), 0);
+  const coopCreditUsedCents = params.useCoopBalance ? Math.min(params.coopBalanceCents, totalEconomicCents) : 0;
+  const cardAmountCents = Math.max(0, totalEconomicCents - coopCreditUsedCents);
+  const platformServiceFeeCents = await computePlatformServiceFeeFromPlans(serviceClient, params.plans);
+  const sharerValueCents = params.plans.reduce(
+    (sum, plan) => sum + toNonNegativeInteger(plan.unitSharerFeeCents) * toNonNegativeInteger(plan.storedQuantityUnits),
+    0,
+  );
+  const deliveryAllocatedCents = params.plans.reduce(
+    (sum, plan) => sum + toNonNegativeInteger(plan.unitDeliveryCents) * toNonNegativeInteger(plan.storedQuantityUnits),
+    0,
+  );
+  const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
+  const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
+  const platformRetainedTargetCents =
+    platformServiceFeeCents + sharerValueCents + platformDeliveryRetainedCents;
+  const producerNetTargetCents = Math.max(0, totalEconomicCents - platformRetainedTargetCents);
+  const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
+  const producerCardNetCents = Math.max(0, cardAmountCents - stripeApplicationFeeAmountCents);
+  const producerTopupDueCents = Math.max(0, producerNetTargetCents - producerCardNetCents);
+
+  return {
+    total_economic_cents: totalEconomicCents,
+    coop_credit_used_cents: coopCreditUsedCents,
+    card_amount_cents: cardAmountCents,
+    producer_net_target_cents: producerNetTargetCents,
+    platform_retained_target_cents: platformRetainedTargetCents,
+    platform_service_fee_cents: platformServiceFeeCents,
+    sharer_value_cents: sharerValueCents,
+    platform_delivery_retained_cents: platformDeliveryRetainedCents,
+    producer_delivery_cents: producerDeliveryCents,
+    stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
+    producer_card_net_cents: producerCardNetCents,
+    producer_topup_due_cents: producerTopupDueCents,
+  };
+}
+
+async function computeParticipantPaymentBreakdownFromItems(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    order: DbOrderRow;
+    items: DbOrderItemRow[];
+    coopCreditUsedCents: number;
+    totalEconomicCents: number;
+  },
+): Promise<PaymentBreakdown> {
+  const plans = params.items.map((item) => ({
+    lotId: normalizeText(item.lot_id),
+    saleUnit: item.unit_label,
+    storedQuantityUnits: Math.max(0, Number(item.quantity_units ?? 0)),
+    reservedKg: Number(item.line_weight_kg ?? 0),
+    unitDeliveryCents: toNonNegativeInteger(item.unit_delivery_cents),
+    unitSharerFeeCents: toNonNegativeInteger(item.unit_sharer_fee_cents),
+    lineTotalCents: toNonNegativeInteger(item.line_total_cents),
+  }));
+  const platformServiceFeeCents = await computePlatformServiceFeeFromPlans(serviceClient, plans);
+  const sharerValueCents = params.items.reduce(
+    (sum, item) => sum + toNonNegativeInteger(item.unit_sharer_fee_cents) * toNonNegativeInteger(item.quantity_units),
+    0,
+  );
+  const deliveryAllocatedCents = params.items.reduce(
+    (sum, item) => sum + toNonNegativeInteger(item.unit_delivery_cents) * toNonNegativeInteger(item.quantity_units),
+    0,
+  );
+  const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
+  const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
+  const platformRetainedTargetCents =
+    platformServiceFeeCents + sharerValueCents + platformDeliveryRetainedCents;
+  const cardAmountCents = Math.max(0, params.totalEconomicCents - params.coopCreditUsedCents);
+  const producerNetTargetCents = Math.max(0, params.totalEconomicCents - platformRetainedTargetCents);
+  const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
+  const producerCardNetCents = Math.max(0, cardAmountCents - stripeApplicationFeeAmountCents);
+  const producerTopupDueCents = Math.max(0, producerNetTargetCents - producerCardNetCents);
+  return {
+    total_economic_cents: params.totalEconomicCents,
+    coop_credit_used_cents: params.coopCreditUsedCents,
+    card_amount_cents: cardAmountCents,
+    producer_net_target_cents: producerNetTargetCents,
+    platform_retained_target_cents: platformRetainedTargetCents,
+    platform_service_fee_cents: platformServiceFeeCents,
+    sharer_value_cents: sharerValueCents,
+    platform_delivery_retained_cents: platformDeliveryRetainedCents,
+    producer_delivery_cents: producerDeliveryCents,
+    stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
+    producer_card_net_cents: producerCardNetCents,
+    producer_topup_due_cents: producerTopupDueCents,
+  };
 }
 
 export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSessionId: string) {
@@ -1140,6 +1759,7 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
       : "participant_checkout";
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const plans = await buildCheckoutReservationPlans(serviceClient, checkoutPaymentSession);
+    const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
     for (const plan of plans) {
       await reserveLotStock(serviceClient, {
         lotId: plan.lotId,
@@ -1152,8 +1772,41 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
         expiresAt,
       });
     }
+    if (checkoutPaymentSession.flow_kind === "participant") {
+      let participant = checkoutPaymentSession.participant_id
+        ? await getParticipantByProfile(serviceClient, order.id, checkoutPaymentSession.profile_id)
+        : await getParticipantByProfile(serviceClient, order.id, checkoutPaymentSession.profile_id);
+      if (!participant) {
+        participant = await createParticipant(serviceClient, order, checkoutPaymentSession.profile_id);
+      }
+      const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
+      const draft = parseParticipantDraft(checkoutPaymentSession.draft_payload);
+      const coopBalanceCents = draft.useCoopBalance
+        ? await fetchCoopBalance(serviceClient, checkoutPaymentSession.profile_id)
+        : 0;
+      const paymentBreakdown = await computeParticipantPaymentBreakdownFromPlans(serviceClient, {
+        order,
+        profileId: checkoutPaymentSession.profile_id,
+        plans,
+        coopBalanceCents,
+        useCoopBalance: draft.useCoopBalance,
+      });
+      return await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
+        status: "draft",
+        participant_id: participant.id,
+        payment_mode: paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero",
+        payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
+        stripe_account_id: producerStripe.stripeAccountId,
+        amount_cents: paymentBreakdown.card_amount_cents,
+        error_code: null,
+        error_message: null,
+      });
+    }
     return await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
       status: "draft",
+      payment_mode: "stripe_checkout",
+      payment_breakdown: null,
+      stripe_account_id: null,
       error_code: null,
       error_message: null,
     });
@@ -1168,13 +1821,16 @@ async function finalizeParticipantCheckoutSession(
   checkoutPaymentSession: CheckoutPaymentSessionRow,
   stripeSession: StripeCheckoutSession,
 ) {
-  if (!checkoutPaymentSession.provider_payment_id) {
+  const providerPaymentId = normalizeText(checkoutPaymentSession.provider_payment_id) || normalizeText(stripeSession.id);
+  if (!providerPaymentId && checkoutPaymentSession.payment_mode !== "local_zero") {
     throw new Error("Missing provider_payment_id on checkout payment session");
   }
-  const existingPayment = await findExistingPaymentByProviderPaymentId(
-    serviceClient,
-    checkoutPaymentSession.provider_payment_id,
-  );
+  const existingPayment = providerPaymentId
+    ? await findExistingPaymentByProviderPaymentId(
+      serviceClient,
+      providerPaymentId,
+    )
+    : null;
   if (existingPayment) {
     if (existingPayment.status === "pending") {
       await finalizePaymentSimulation(serviceClient, existingPayment.id);
@@ -1185,6 +1841,7 @@ async function finalizeParticipantCheckoutSession(
   }
 
   const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
+  const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
   let participant = await getParticipantByProfile(
     serviceClient,
     checkoutPaymentSession.order_id,
@@ -1231,6 +1888,7 @@ async function finalizeParticipantCheckoutSession(
     if (!refreshedParticipant) {
       throw new Error("Participant not found after repricing");
     }
+    const participantItems = await listParticipantOrderItems(serviceClient, order.id, refreshedParticipant.id);
 
     const { data: participantPayments, error: participantPaymentsError } = await serviceClient
       .from("payments")
@@ -1252,31 +1910,40 @@ async function finalizeParticipantCheckoutSession(
       : 0;
     const coopToConsumeCents = draft.useCoopBalance ? Math.min(coopBalanceCents, amountDueCents) : 0;
     const paidAmountCents = Math.max(0, amountDueCents - coopToConsumeCents);
+    const paymentBreakdown = await computeParticipantPaymentBreakdownFromItems(serviceClient, {
+      order,
+      items: participantItems,
+      coopCreditUsedCents: coopToConsumeCents,
+      totalEconomicCents: amountDueCents,
+    });
 
     if (paidAmountCents <= 0) {
       if (coopToConsumeCents <= 0) {
         throw new Error("No payable amount remains after repricing");
       }
-      await issueParticipantInvoiceWithCoop(serviceClient, {
-        orderId: order.id,
-        profileId: checkoutPaymentSession.profile_id,
-        coopAppliedCents: coopToConsumeCents,
-      });
-      await triggerOutgoingEmails(serviceClient);
-      return;
     }
 
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
       participantId: refreshedParticipant.id,
-      amountCents: paidAmountCents,
-      provider: checkoutPaymentSession.provider ?? "stripe",
-      providerPaymentId: checkoutPaymentSession.provider_payment_id,
+      amountCents: paymentBreakdown.card_amount_cents,
+      provider: paymentBreakdown.card_amount_cents > 0 ? (checkoutPaymentSession.provider ?? "stripe_direct_connect") : "coop_topup_internal",
+      providerPaymentId: providerPaymentId || `local_zero_${checkoutPaymentSession.id}`,
       idempotencyKey: checkoutPaymentSession.idempotency_key,
+      stripeAccountId: producerStripe.stripeAccountId,
+      stripeCheckoutSessionId: normalizeText(stripeSession.id) || null,
+      stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null,
+      legalEntityId: producerStripe.legalEntityId,
+      paymentBreakdown,
       raw: {
         flow_kind: "participant",
         checkout_payment_session_id: checkoutPaymentSession.id,
         use_coop_balance: draft.useCoopBalance,
+        payment_mode: checkoutPaymentSession.payment_mode ?? (paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero"),
+        stripe_account_id: producerStripe.stripeAccountId,
+        payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
         stripe_status: stripeSession.status ?? null,
         payment_status: stripeSession.payment_status ?? null,
         payment_intent_id: typeof stripeSession.payment_intent === "string"
@@ -1286,6 +1953,17 @@ async function finalizeParticipantCheckoutSession(
     });
     createdPaymentId = payment.id;
     await finalizePaymentSimulation(serviceClient, payment.id);
+    const topup = await upsertProducerTopup(serviceClient, {
+      orderId: order.id,
+      participantId: refreshedParticipant.id,
+      paymentId: payment.id,
+      legalEntityId: producerStripe.legalEntityId,
+      producerStripeAccountId: producerStripe.stripeAccountId,
+      amountCents: paymentBreakdown.producer_topup_due_cents,
+    });
+    if (topup && order.status === "confirmed") {
+      await processProducerTopupsForOrder(serviceClient, order.id);
+    }
   } catch (error) {
     if (!createdPaymentId && participantCreatedInFlow) {
       try {
@@ -1482,6 +2160,8 @@ export async function finalizeCheckoutPaymentSession(params: {
   checkoutPaymentSessionId?: string | null;
   providerPaymentId?: string | null;
   checkoutSessionId?: string | null;
+  stripeAccountId?: string | null;
+  stripeSessionOverride?: StripeCheckoutSession | null;
 }) {
   assertServerEnv();
   const serviceClient = createServiceClient();
@@ -1496,11 +2176,33 @@ export async function finalizeCheckoutPaymentSession(params: {
 
   const stripeSessionId = normalizeText(checkoutPaymentSession.checkout_session_id) ||
     normalizeText(checkoutPaymentSession.provider_payment_id);
-  if (!stripeSessionId) {
+  const normalizedStripeAccountId = normalizeText(params.stripeAccountId) ||
+    normalizeText(checkoutPaymentSession.stripe_account_id);
+  let stripeSession = params.stripeSessionOverride ?? null;
+  if (!stripeSession && stripeSessionId) {
+    stripeSession = await retrieveStripeCheckoutSession(stripeSessionId, normalizedStripeAccountId || null);
+  }
+  if (!stripeSession && checkoutPaymentSession.payment_mode === "local_zero") {
+    stripeSession = {
+      id: `local_zero_${checkoutPaymentSession.id}`,
+      status: "complete",
+      payment_status: "no_payment_required",
+      metadata: {
+        checkout_payment_session_id: checkoutPaymentSession.id,
+      },
+      payment_intent: null,
+    };
+  }
+  if (!stripeSession) {
     return buildPublicStatus(checkoutPaymentSession, null, "Checkout session not initialized");
   }
-
-  const stripeSession = await retrieveStripeCheckoutSession(stripeSessionId);
+  if (
+    normalizedStripeAccountId &&
+    normalizeText(checkoutPaymentSession.stripe_account_id) &&
+    normalizeText(checkoutPaymentSession.stripe_account_id) !== normalizedStripeAccountId
+  ) {
+    throw new Error("Le compte Stripe Connect du webhook ne correspond pas à la session locale.");
+  }
   const paymentStatus = mapStripeStatusToInternal(stripeSession.status ?? null, stripeSession.payment_status ?? null);
   if (paymentStatus === "failed") {
     await releaseCheckoutSessionLotReservations(
@@ -1524,6 +2226,9 @@ export async function finalizeCheckoutPaymentSession(params: {
         status: "checkout_created",
         error_code: null,
         error_message: null,
+        stripe_payment_intent_id: typeof stripeSession.payment_intent === "string"
+          ? stripeSession.payment_intent
+          : stripeSession.payment_intent?.id ?? null,
       });
       return buildPublicStatus(updated, stripeSession);
     }
@@ -1542,6 +2247,9 @@ export async function finalizeCheckoutPaymentSession(params: {
       error_message: null,
       checkout_session_id: stripeSession.id,
       provider_payment_id: stripeSession.id,
+      stripe_payment_intent_id: typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null,
     })
     .eq("id", checkoutPaymentSession.id)
     .in("status", ["draft", "checkout_created", "checkout_completed", "failed"])
@@ -1564,6 +2272,9 @@ export async function finalizeCheckoutPaymentSession(params: {
       status: "fulfilled",
       checkout_session_id: stripeSession.id,
       provider_payment_id: stripeSession.id,
+      stripe_payment_intent_id: typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null,
       error_code: null,
       error_message: null,
       fulfilled_at: new Date().toISOString(),
@@ -1575,11 +2286,29 @@ export async function finalizeCheckoutPaymentSession(params: {
       status: "failed",
       checkout_session_id: stripeSession.id,
       provider_payment_id: stripeSession.id,
+      stripe_payment_intent_id: typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null,
       error_code: "finalization_error",
       error_message: message,
     });
     return buildPublicStatus(updated, stripeSession, message);
   }
+}
+
+export async function finalizeLocalZeroCheckoutPaymentSession(checkoutPaymentSessionId: string) {
+  return finalizeCheckoutPaymentSession({
+    checkoutPaymentSessionId,
+    stripeSessionOverride: {
+      id: `local_zero_${checkoutPaymentSessionId}`,
+      status: "complete",
+      payment_status: "no_payment_required",
+      metadata: {
+        checkout_payment_session_id: checkoutPaymentSessionId,
+      },
+      payment_intent: null,
+    },
+  });
 }
 
 export async function buildCheckoutPaymentSessionStatusResponse(
@@ -1605,6 +2334,9 @@ export async function buildCheckoutPaymentSessionStatusResponse(
     payment_intent_id: typeof stripeSession?.payment_intent === "string"
       ? stripeSession.payment_intent
       : stripeSession?.payment_intent?.id ?? null,
+    payment_mode: checkoutPaymentSession.payment_mode ?? "stripe_checkout",
+    payment_breakdown: parsePaymentBreakdown(checkoutPaymentSession.payment_breakdown),
+    stripe_account_id: checkoutPaymentSession.stripe_account_id ?? null,
   };
 }
 
@@ -1624,8 +2356,13 @@ export async function createCheckoutPaymentSessionDraft(params: {
   const payload = {
     order_id: params.orderId,
     profile_id: params.authUserId,
+    participant_id: null,
     flow_kind: params.flowKind,
     status: "draft",
+    payment_mode: "stripe_checkout",
+    payment_breakdown: null,
+    stripe_account_id: null,
+    stripe_payment_intent_id: null,
     draft_payload: params.draftPayload,
     amount_cents: Math.max(0, Math.round(params.amountCents)),
     currency: "EUR",

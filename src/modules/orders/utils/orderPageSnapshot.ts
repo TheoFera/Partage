@@ -55,6 +55,7 @@ export type OrderPaymentPageSnapshot = {
   checkoutPaymentSessionId: string | null;
   checkoutClientSecret: string | null;
   providerPaymentId: string | null;
+  paymentBreakdown?: Record<string, unknown> | null;
   paymentState: 'idle' | 'processing' | 'succeeded' | 'failed' | 'retryable';
   paymentStatusMessage: string | null;
   paymentError: string | null;

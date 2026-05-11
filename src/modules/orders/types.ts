@@ -159,6 +159,11 @@ export type DbPayment = {
   provider: string;
   provider_payment_id: string | null;
   idempotency_key: string | null;
+  stripe_account_id?: string | null;
+  stripe_checkout_session_id?: string | null;
+  stripe_payment_intent_id?: string | null;
+  stripe_charge_id?: string | null;
+  legal_entity_id?: string | null;
   status:
     | 'pending'
     | 'authorized'
@@ -168,6 +173,18 @@ export type DbPayment = {
     | 'refunded'
     | 'partially_refunded';
   amount_cents: number;
+  total_economic_cents?: number;
+  coop_credit_used_cents?: number;
+  card_amount_cents?: number;
+  platform_retained_target_cents?: number;
+  platform_service_fee_cents?: number;
+  sharer_value_cents?: number;
+  platform_delivery_retained_cents?: number;
+  producer_delivery_cents?: number;
+  stripe_application_fee_amount_cents?: number;
+  producer_net_target_cents?: number;
+  producer_card_net_cents?: number;
+  producer_topup_due_cents?: number;
   fee_cents: number;
   fee_vat_cents?: number | null;
   refunded_amount_cents: number;
@@ -401,8 +418,25 @@ export type Payment = {
   provider: string;
   providerPaymentId: string | null;
   idempotencyKey: string | null;
+  stripeAccountId: string | null;
+  stripeCheckoutSessionId: string | null;
+  stripePaymentIntentId: string | null;
+  stripeChargeId: string | null;
+  legalEntityId: string | null;
   status: DbPayment['status'];
   amountCents: number;
+  totalEconomicCents: number;
+  coopCreditUsedCents: number;
+  cardAmountCents: number;
+  platformRetainedTargetCents: number;
+  platformServiceFeeCents: number;
+  sharerValueCents: number;
+  platformDeliveryRetainedCents: number;
+  producerDeliveryCents: number;
+  stripeApplicationFeeAmountCents: number;
+  producerNetTargetCents: number;
+  producerCardNetCents: number;
+  producerTopupDueCents: number;
   feeCents: number;
   feeVatCents: number;
   refundedAmountCents: number;

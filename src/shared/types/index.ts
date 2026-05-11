@@ -112,6 +112,21 @@ export interface LegalEntity {
   stripeLastSyncedAt?: string;
 }
 
+export interface PaymentBreakdown {
+  totalEconomicCents: number;
+  coopCreditUsedCents: number;
+  cardAmountCents: number;
+  producerNetTargetCents: number;
+  platformRetainedTargetCents: number;
+  platformServiceFeeCents: number;
+  sharerValueCents: number;
+  platformDeliveryRetainedCents: number;
+  producerDeliveryCents: number;
+  stripeApplicationFeeAmountCents: number;
+  producerCardNetCents: number;
+  producerTopupDueCents: number;
+}
+
 export interface Product {
   id: string;
   productCode?: string;

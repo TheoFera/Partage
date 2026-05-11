@@ -1,7 +1,9 @@
 import {
   corsHeaders,
   createServiceClient,
+  finalizeLocalZeroCheckoutPaymentSession,
   jsonResponse,
+  parsePaymentBreakdown,
   prepareCheckoutPaymentSessionForStripe,
   requireAuthenticatedUser,
   STRIPE_API_BASE,
@@ -35,6 +37,21 @@ Deno.serve(async (req) => {
       checkoutPaymentSessionId,
     });
     const preparedCheckoutPaymentSession = await prepareCheckoutPaymentSessionForStripe(checkoutPaymentSession.id);
+    const paymentBreakdown = parsePaymentBreakdown(preparedCheckoutPaymentSession.payment_breakdown);
+
+    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "local_zero") {
+      const finalized = await finalizeLocalZeroCheckoutPaymentSession(preparedCheckoutPaymentSession.id);
+      return jsonResponse({
+        checkout_payment_session_id: finalized.checkoutPaymentSession.id,
+        provider_payment_id:
+          finalized.checkoutPaymentSession.provider_payment_id ?? `local_zero_${preparedCheckoutPaymentSession.id}`,
+        client_secret: "",
+        payment_mode: "local_zero",
+        payment_breakdown: paymentBreakdown,
+        stripe_account_id: preparedCheckoutPaymentSession.stripe_account_id ?? null,
+        status: finalized.status,
+      });
+    }
 
     const customerEmail = (user.email ?? "").trim();
     const expiresAt = Math.floor(Date.now() / 1000) + 30 * 60;
@@ -57,22 +74,77 @@ Deno.serve(async (req) => {
     form.append("metadata[order_id]", preparedCheckoutPaymentSession.order_id);
     form.append("metadata[profile_id]", preparedCheckoutPaymentSession.profile_id);
     form.append("metadata[flow_kind]", preparedCheckoutPaymentSession.flow_kind);
+    if (preparedCheckoutPaymentSession.participant_id) {
+      form.append("metadata[participant_id]", preparedCheckoutPaymentSession.participant_id);
+    }
+    if (preparedCheckoutPaymentSession.stripe_account_id) {
+      form.append("metadata[producer_stripe_account_id]", preparedCheckoutPaymentSession.stripe_account_id);
+    }
+    form.append("metadata[total_economic_cents]", String(paymentBreakdown.total_economic_cents));
+    form.append("metadata[coop_credit_used_cents]", String(paymentBreakdown.coop_credit_used_cents));
+    form.append("metadata[card_amount_cents]", String(paymentBreakdown.card_amount_cents));
+    form.append("metadata[platform_retained_target_cents]", String(paymentBreakdown.platform_retained_target_cents));
+    form.append(
+      "metadata[stripe_application_fee_amount_cents]",
+      String(paymentBreakdown.stripe_application_fee_amount_cents),
+    );
+    form.append("metadata[producer_net_target_cents]", String(paymentBreakdown.producer_net_target_cents));
+    form.append("metadata[producer_card_net_cents]", String(paymentBreakdown.producer_card_net_cents));
+    form.append("metadata[producer_topup_due_cents]", String(paymentBreakdown.producer_topup_due_cents));
     form.append("payment_intent_data[metadata][checkout_payment_session_id]", preparedCheckoutPaymentSession.id);
     form.append("payment_intent_data[metadata][order_id]", preparedCheckoutPaymentSession.order_id);
     form.append("payment_intent_data[metadata][profile_id]", preparedCheckoutPaymentSession.profile_id);
     form.append("payment_intent_data[metadata][flow_kind]", preparedCheckoutPaymentSession.flow_kind);
+    if (preparedCheckoutPaymentSession.participant_id) {
+      form.append("payment_intent_data[metadata][participant_id]", preparedCheckoutPaymentSession.participant_id);
+    }
+    if (preparedCheckoutPaymentSession.stripe_account_id) {
+      form.append("payment_intent_data[metadata][producer_stripe_account_id]", preparedCheckoutPaymentSession.stripe_account_id);
+    }
+    form.append("payment_intent_data[metadata][total_economic_cents]", String(paymentBreakdown.total_economic_cents));
+    form.append("payment_intent_data[metadata][coop_credit_used_cents]", String(paymentBreakdown.coop_credit_used_cents));
+    form.append("payment_intent_data[metadata][card_amount_cents]", String(paymentBreakdown.card_amount_cents));
+    form.append(
+      "payment_intent_data[metadata][platform_retained_target_cents]",
+      String(paymentBreakdown.platform_retained_target_cents),
+    );
+    form.append(
+      "payment_intent_data[metadata][stripe_application_fee_amount_cents]",
+      String(paymentBreakdown.stripe_application_fee_amount_cents),
+    );
+    form.append(
+      "payment_intent_data[metadata][producer_net_target_cents]",
+      String(paymentBreakdown.producer_net_target_cents),
+    );
+    form.append("payment_intent_data[metadata][producer_card_net_cents]", String(paymentBreakdown.producer_card_net_cents));
+    form.append("payment_intent_data[metadata][producer_topup_due_cents]", String(paymentBreakdown.producer_topup_due_cents));
+    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
+      form.append(
+        "payment_intent_data[application_fee_amount]",
+        String(paymentBreakdown.stripe_application_fee_amount_cents),
+      );
+    }
     form.append("phone_number_collection[enabled]", "false");
     if (customerEmail) {
       form.append("customer_email", customerEmail);
     }
 
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Idempotency-Key": checkoutPaymentSession.idempotency_key ?? checkoutPaymentSession.id,
+    };
+    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
+      const stripeAccountId = preparedCheckoutPaymentSession.stripe_account_id?.trim() ?? "";
+      if (!stripeAccountId) {
+        return jsonResponse({ error: "Compte Stripe Connect producteur introuvable." }, 400);
+      }
+      headers["Stripe-Account"] = stripeAccountId;
+    }
+
     const stripeRes = await fetch(`${STRIPE_API_BASE}/checkout/sessions`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Idempotency-Key": checkoutPaymentSession.idempotency_key ?? checkoutPaymentSession.id,
-      },
+      headers,
       body: form.toString(),
     });
 
@@ -136,6 +208,7 @@ Deno.serve(async (req) => {
         status: "checkout_created",
         checkout_session_id: providerPaymentId,
         provider_payment_id: providerPaymentId,
+        stripe_payment_intent_id: typeof stripeJson?.payment_intent === "string" ? stripeJson.payment_intent : null,
         provider: "stripe",
         error_code: null,
         error_message: null,
@@ -149,6 +222,9 @@ Deno.serve(async (req) => {
       checkout_payment_session_id: preparedCheckoutPaymentSession.id,
       provider_payment_id: providerPaymentId,
       client_secret: clientSecret,
+      payment_mode: preparedCheckoutPaymentSession.payment_mode ?? "stripe_checkout",
+      payment_breakdown: paymentBreakdown,
+      stripe_account_id: preparedCheckoutPaymentSession.stripe_account_id ?? null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
