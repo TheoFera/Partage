@@ -3630,7 +3630,7 @@ function ProfileEditPanel({
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-sm font-semibold text-[#1F2937]">
                     <Link2 className="h-4 w-4 text-[#2563EB]" />
-                    {stripeConnection.accountId ? 'Compte Stripe Connect déjà crée' : 'Compte Stripe Connect à créer'}
+                    {stripeConnection.accountId ? 'Compte Stripe Connect déjà créé' : 'Compte Stripe Connect à créer'}
                   </div>
                 </div>
                 {stripeConnection.accountId && (
