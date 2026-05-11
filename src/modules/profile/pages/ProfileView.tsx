@@ -1939,7 +1939,9 @@ function ProfileEditPanel({
             }
           : undefined;
 
-      const response = await fetch('https://api.stripe.com/v2/core/accounts/create-person-token', {
+      const response = await fetch(
+        `https://api.stripe.com/v2/core/accounts/${encodeURIComponent(accountId)}/person_tokens`,
+        {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${STRIPE_PUBLISHABLE_KEY}`,
@@ -1947,7 +1949,6 @@ function ProfileEditPanel({
           'Stripe-Version': STRIPE_V2_API_VERSION,
         },
         body: JSON.stringify({
-          account_id: accountId,
           given_name: representativeFirstName.trim(),
           surname: representativeLastName.trim(),
           ...(representativeEmail.trim() ? { email: representativeEmail.trim() } : {}),
@@ -1964,14 +1965,15 @@ function ProfileEditPanel({
                   representative: true,
                 },
               }),
-          dob: {
+          date_of_birth: {
             day: birthDate.getDate(),
             month: birthDate.getMonth() + 1,
             year: birthDate.getFullYear(),
           },
           ...(representativeAddress ? { address: representativeAddress } : {}),
         }),
-      });
+      }
+      );
 
       const result = (await response.json().catch(() => ({}))) as {
         id?: string;
