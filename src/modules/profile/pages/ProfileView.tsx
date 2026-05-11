@@ -100,8 +100,8 @@ const isLegalDocumentType = (value: string): value is LegalDocumentType =>
 const getLegalDocumentStatusLabel = (status?: LegalDocumentStatus) => {
   if (!status || status === 'draft') return 'A faire';
   if (status === 'uploaded' || status === 'pending_review') return 'En attente';
-  if (status === 'approved') return 'Valide';
-  return 'Refuse';
+  if (status === 'approved') return 'Validé';
+  return 'Refusé';
 };
 
 const getLegalDocumentStatusClassName = (status?: LegalDocumentStatus) => {
@@ -114,7 +114,7 @@ const getLegalDocumentStatusClassName = (status?: LegalDocumentStatus) => {
 const getStripeConnectionStatusLabel = (status: StripeConnectionStatus) => {
   if (status === 'connected') return 'Connecté';
   if (status === 'action_required') return 'Action requise';
-  return 'Non connecte';
+  return 'Non connecté';
 };
 
 const getStripeConnectionStatusClassName = (status: StripeConnectionStatus) => {
@@ -185,6 +185,17 @@ const normalizeStripeRequirementLabel = (value: string) =>
     .map((segment) => segment.replace(/_/g, " ").trim())
     .filter(Boolean)
     .join(" > ");
+
+const isStripeCompatibleReturnUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'https:') return true;
+    if (parsed.protocol !== 'http:') return false;
+    return parsed.hostname === 'localhost';
+  } catch {
+    return false;
+  }
+};
 
 const getMissingStripePrefillFields = (params: {
   email?: string;
@@ -1811,7 +1822,8 @@ function ProfileEditPanel({
     const nextUrl = new URL(basePath, window.location.origin);
     nextUrl.searchParams.set('profileEdit', '1');
     nextUrl.searchParams.set('profileEditTab', 'structure');
-    return nextUrl.toString();
+    const resolvedUrl = nextUrl.toString();
+    return isStripeCompatibleReturnUrl(resolvedUrl) ? resolvedUrl : null;
   }, [user.handle]);
   const stripeRepresentativePrefillReady = React.useMemo(
     () =>
@@ -1860,14 +1872,13 @@ function ProfileEditPanel({
       },
       body: JSON.stringify({
         ...(trimmedContactEmail ? { contact_email: trimmedContactEmail } : {}),
+        ...(phone.trim() ? { contact_phone: phone.trim() } : {}),
         display_name: legalName.trim(),
         identity: {
-          country: trimmedCountry,
           entity_type: entityType,
           business_details: {
             registered_name: legalName.trim(),
             ...(businessAddress ? { address: businessAddress } : {}),
-            ...(phone.trim() ? { phone: phone.trim() } : {}),
           },
         },
       }),
@@ -2143,7 +2154,9 @@ function ProfileEditPanel({
       return;
     }
     if (!stripeReturnUrl) {
-      toast.error('URL de retour Stripe indisponible.');
+      toast.error(
+        "Stripe exige une URL de retour en https://, ou en http://localhost uniquement pendant les tests. Ouvrez ce site en https ou via localhost."
+      );
       return;
     }
 
@@ -3480,9 +3493,6 @@ function ProfileEditPanel({
             <div className="space-y-3 rounded-xl border border-[#D7E3FF] bg-white p-4">
               <div className="space-y-1">
                 <h4 className="text-sm font-semibold text-[#1F2937]">Représentant légal</h4>
-                <p className="text-xs text-[#6B7280]">
-                  Ces champs servent au pré-remplissage Stripe. S&apos;ils sont vides, Stripe les redemandera.
-                </p>
               </div>
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
@@ -3616,9 +3626,7 @@ function ProfileEditPanel({
               <div className="space-y-1">
                 <h3 className="text-[#1F2937] font-semibold">Compte Stripe producteur</h3>
                 <p className="text-sm text-[#6B7280]">
-                  Reliez votre structure à Stripe pour encaisser les paiements. Les informations de structure et
-                  de représentant sont pré-remplies autant que possible depuis votre profil. En revanche, l’IBAN
-                  peut encore être demandé par Stripe pour confirmation ou ressaisie.
+                  Reliez votre structure à Stripe pour encaisser les paiements.
                 </p>
               </div>
               <span
@@ -3694,7 +3702,7 @@ function ProfileEditPanel({
 
               {savedStripePrefillMissingFields.length > 0 && (
                 <div className="rounded-lg border border-[#FFE0D1] bg-[#FFF6F0] px-3 py-3 text-xs text-[#B45309]">
-                  <p className="font-semibold text-[#1F2937]">Informations à compléter avant Stripe</p>
+                  <p className="font-semibold text-[#1F2937]">Informations à compléter avant de commencer à connecter Stripe</p>
                   <ul className="mt-2 space-y-1 text-[#6B7280]">
                     {savedStripePrefillMissingFields.map((field) => (
                       <li key={field}>• {field}</li>

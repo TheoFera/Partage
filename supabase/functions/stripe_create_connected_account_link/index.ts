@@ -104,6 +104,7 @@ async function updateConnectedAccountFromToken(params: {
         account_token: params.accountToken,
         include: [
           "configuration.recipient",
+          "configuration.merchant",
           "identity",
           "defaults",
         ],
@@ -271,7 +272,8 @@ serve(async (req) => {
     return json({ error: "No contact email available for Stripe onboarding." }, 400);
   }
 
-  let stripeAccountId = (legalEntity.stripe_account_id ?? "").trim();
+  const existingStripeAccountId = (legalEntity.stripe_account_id ?? "").trim();
+  let stripeAccountId = existingStripeAccountId;
   const normalizedCountry = normalizeCountry(legalEntity.country, STRIPE_CONNECTED_ACCOUNT_COUNTRY);
   const needsPersonToken = normalizedCountry === "FR" && hasRepresentativePrefillData(legalEntity);
 
@@ -305,11 +307,11 @@ serve(async (req) => {
                 country: normalizedCountry,
               },
             }),
-        dashboard: "express",
+        dashboard: "full",
         defaults: {
           responsibilities: {
-            losses_collector: "application",
-            fees_collector: "application",
+            losses_collector: "stripe",
+            fees_collector: "stripe",
           },
         },
         configuration: {
@@ -332,6 +334,7 @@ serve(async (req) => {
         },
         include: [
           "configuration.recipient",
+          "configuration.merchant",
           "identity",
           "defaults",
         ],
@@ -443,7 +446,11 @@ serve(async (req) => {
       use_case: {
         type: "account_onboarding",
         account_onboarding: {
-          configurations: ["recipient"],
+          configurations: ["recipient", "merchant"],
+          collection_options: {
+            fields: "currently_due",
+            future_requirements: "omit",
+          },
           refresh_url: refreshUrl,
           return_url: returnUrl,
         },
@@ -457,11 +464,19 @@ serve(async (req) => {
       typeof createAccountLinkJson?.error?.message === "string"
         ? createAccountLinkJson.error.message
         : "Stripe account link creation failed";
+    const normalizedMessage = stripeMessage.toLowerCase();
+    const requiresRecreation =
+      existingStripeAccountId &&
+      normalizedMessage.includes("applied configurations");
     return json(
       {
-        error: stripeMessage,
+        error: requiresRecreation
+          ? "Le compte Stripe déjà enregistré pour cette structure a été créé avec une ancienne configuration incompatible. Pour passer au nouveau mode, il faut repartir d'un nouveau compte Connect."
+          : stripeMessage,
         status: createAccountLinkRes.status,
         details: createAccountLinkJson,
+        requires_account_recreation: Boolean(requiresRecreation),
+        stripe_account_id: stripeAccountId,
       },
       502,
     );
