@@ -2164,7 +2164,7 @@ function ProfileEditPanel({
       return;
     }
     if (stripeLegalInfoNeedsSave) {
-      toast.info('Enregistrez vos informations legales avant de lancer Stripe.');
+      toast.info('Enregistrez vos informations légales avant de lancer Stripe.');
       return;
     }
     if (!stripeReturnUrl) {
@@ -2224,7 +2224,6 @@ function ProfileEditPanel({
             body: {
               return_url: stripeReturnUrl,
               refresh_url: stripeReturnUrl,
-              ...(accountToken ? { account_token: accountToken } : {}),
               person_token: deferredPersonToken,
             },
           });
@@ -3400,7 +3399,7 @@ function ProfileEditPanel({
         <div className="space-y-6">
           <section className="rounded-2xl border border-[#D7E3FF] bg-[#F6F8FF] p-4 space-y-4 shadow-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h3 className="text-[#1F2937] font-semibold">Informations legales</h3>
+              <h3 className="text-[#1F2937] font-semibold">Informations légales</h3>
               <span className="text-xs text-[#6B7280]">
                 Ces informations peuvent être complétées progressivement.
               </span>
