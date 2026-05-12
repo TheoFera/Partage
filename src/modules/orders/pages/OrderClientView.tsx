@@ -1414,7 +1414,7 @@ const sharerAvatarUpdatedAt =
   const paymentFeeTotals = React.useMemo(() => {
     return paidPayments.reduce(
       (acc, payment) => {
-        const fallbackFeeHt = Math.round(payment.amountCents * 0.007 + 15);
+        const fallbackFeeHt = Math.round(payment.amountCents * 0.015 + 25);
         const feeHt = Number.isFinite(payment.feeCents ?? NaN) ? payment.feeCents : fallbackFeeHt;
         const feeVat = Number.isFinite(payment.feeVatCents ?? NaN) ? payment.feeVatCents : Math.round(feeHt * 0.2);
         const feeTtc = feeHt + feeVat;

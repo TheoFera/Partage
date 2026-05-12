@@ -1,9 +1,16 @@
 import {
   corsHeaders,
+  createServiceClient,
   finalizeCheckoutPaymentSession,
   jsonResponse,
+  syncStripeFeesForIdentifiers,
   verifyStripeWebhookSignature,
 } from "../_shared/checkout-payment.ts";
+
+const CHECKOUT_WEBHOOK_SECRET =
+  Deno.env.get("STRIPE_CHECKOUT_WEBHOOK_SECRET") ??
+  Deno.env.get("STRIPE_WEBHOOK_SECRET") ??
+  "";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -16,7 +23,12 @@ Deno.serve(async (req) => {
   try {
     const rawBody = await req.text();
     const signature = req.headers.get("stripe-signature") ?? "";
-    await verifyStripeWebhookSignature(rawBody, signature);
+    await verifyStripeWebhookSignature(
+      rawBody,
+      signature,
+      CHECKOUT_WEBHOOK_SECRET,
+      CHECKOUT_WEBHOOK_SECRET ? "STRIPE_CHECKOUT_WEBHOOK_SECRET" : "STRIPE_WEBHOOK_SECRET",
+    );
     const event = JSON.parse(rawBody) as {
       type?: string;
       account?: string | null;
@@ -35,6 +47,16 @@ Deno.serve(async (req) => {
         ? metadataObject.checkout_payment_session_id
         : "";
     const stripeAccountId = typeof event.account === "string" ? event.account : "";
+    const paymentIntentId =
+      typeof sessionObject?.payment_intent === "string"
+        ? sessionObject.payment_intent
+        : typeof sessionObject?.id === "string" && event.type?.startsWith("payment_intent.")
+          ? sessionObject.id
+          : "";
+    const chargeId =
+      typeof sessionObject?.id === "string" && event.type?.startsWith("charge.")
+        ? sessionObject.id
+        : "";
 
     switch (event.type) {
       case "checkout.session.completed":
@@ -48,6 +70,15 @@ Deno.serve(async (req) => {
           checkoutSessionId,
           stripeAccountId,
           stripeSessionOverride: sessionObject as any,
+        });
+        const serviceClient = createServiceClient();
+        await syncStripeFeesForIdentifiers(serviceClient, {
+          checkoutPaymentSessionId,
+          stripeCheckoutSessionId: checkoutSessionId,
+          stripePaymentIntentId: paymentIntentId || null,
+          stripeChargeId: chargeId || null,
+          stripeAccountId,
+          stripeSession: sessionObject as any,
         });
         return jsonResponse({
           received: true,
@@ -63,6 +94,13 @@ Deno.serve(async (req) => {
         }
         const result = await finalizeCheckoutPaymentSession({
           checkoutPaymentSessionId,
+          stripeAccountId,
+        });
+        const serviceClient = createServiceClient();
+        await syncStripeFeesForIdentifiers(serviceClient, {
+          checkoutPaymentSessionId,
+          stripePaymentIntentId: paymentIntentId || null,
+          stripeChargeId: chargeId || null,
           stripeAccountId,
         });
         return jsonResponse({

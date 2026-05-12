@@ -77,7 +77,27 @@ type StripeCheckoutSession = {
   customer_details?: { email?: string | null; phone?: string | null } | null;
   metadata?: Record<string, unknown> | null;
   payment_intent_data?: { application_fee_amount?: number | null } | null;
-  payment_intent?: string | { id?: string | null } | null;
+  payment_intent?: string | StripePaymentIntent | null;
+};
+
+type StripeBalanceTransaction = {
+  id?: string | null;
+  fee?: number | null;
+  fee_details?: Array<{
+    amount?: number | null;
+    type?: string | null;
+    description?: string | null;
+  }> | null;
+};
+
+type StripeCharge = {
+  id?: string | null;
+  balance_transaction?: string | StripeBalanceTransaction | null;
+};
+
+type StripePaymentIntent = {
+  id?: string | null;
+  latest_charge?: string | StripeCharge | null;
 };
 
 type DbPaymentRow = {
@@ -278,9 +298,10 @@ export async function verifyStripeWebhookSignature(
   rawBody: string,
   signatureHeader: string,
   secretKey = STRIPE_WEBHOOK_SECRET,
+  secretEnvName = "STRIPE_WEBHOOK_SECRET",
 ) {
   if (!secretKey) {
-    throw new Error("Missing STRIPE_WEBHOOK_SECRET");
+    throw new Error(`Missing ${secretEnvName}`);
   }
   const { timestamp, signatures } = parseStripeSignatureHeader(signatureHeader);
   if (!Number.isFinite(timestamp) || signatures.length === 0) {
@@ -336,6 +357,115 @@ const assertServerEnv = () => {
     throw new Error("Function env is missing");
   }
 };
+
+const buildStripeHeaders = (stripeAccountId?: string | null) => {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+  };
+  const normalizedStripeAccountId = normalizeText(stripeAccountId);
+  if (normalizedStripeAccountId) {
+    headers["Stripe-Account"] = normalizedStripeAccountId;
+  }
+  return headers;
+};
+
+const readStripeId = (value: unknown) => {
+  if (typeof value === "string") return normalizeText(value);
+  if (isRecord(value) && typeof value.id === "string") return normalizeText(value.id);
+  return "";
+};
+
+const fetchStripeJson = async <T>(path: string, stripeAccountId?: string | null) => {
+  assertServerEnv();
+  const response = await fetch(`${getStripeApiBase()}${path}`, {
+    headers: buildStripeHeaders(stripeAccountId),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof payload?.error?.message === "string"
+        ? payload.error.message
+        : `Stripe request failed (${response.status})`;
+    throw new Error(message);
+  }
+  return payload as T;
+};
+
+type StripeFeeDetails = {
+  stripeChargeId: string | null;
+  feeCents: number;
+  feeVatCents: number;
+};
+
+const extractStripeFeeDetailsFromBalanceTransaction = (
+  balanceTransaction: StripeBalanceTransaction | null | undefined,
+  stripeChargeId: string | null,
+): StripeFeeDetails | null => {
+  if (!balanceTransaction) return null;
+  const feeCents = toNonNegativeInteger(balanceTransaction.fee);
+  return {
+    stripeChargeId,
+    feeCents,
+    feeVatCents: 0,
+  };
+};
+
+async function resolveStripeFeeDetails(params: {
+  stripeSession?: StripeCheckoutSession | null;
+  paymentIntentId?: string | null;
+  chargeId?: string | null;
+  stripeAccountId?: string | null;
+}): Promise<StripeFeeDetails | null> {
+  const expandedPaymentIntent = isRecord(params.stripeSession?.payment_intent)
+    ? (params.stripeSession?.payment_intent as StripePaymentIntent)
+    : null;
+  let chargeObject = isRecord(expandedPaymentIntent?.latest_charge)
+    ? (expandedPaymentIntent?.latest_charge as StripeCharge)
+    : null;
+  let stripeChargeId = readStripeId(expandedPaymentIntent?.latest_charge) || normalizeText(params.chargeId);
+
+  if (!chargeObject) {
+    const paymentIntentId =
+      normalizeText(params.paymentIntentId) || readStripeId(params.stripeSession?.payment_intent);
+    if (paymentIntentId) {
+      const paymentIntent = await fetchStripeJson<StripePaymentIntent>(
+        `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`,
+        params.stripeAccountId,
+      );
+      chargeObject = isRecord(paymentIntent.latest_charge) ? (paymentIntent.latest_charge as StripeCharge) : null;
+      stripeChargeId = readStripeId(paymentIntent.latest_charge) || stripeChargeId;
+    }
+  }
+
+  if (!chargeObject && stripeChargeId) {
+    chargeObject = await fetchStripeJson<StripeCharge>(
+      `/charges/${encodeURIComponent(stripeChargeId)}?expand[]=balance_transaction`,
+      params.stripeAccountId,
+    );
+  }
+
+  if (!chargeObject) {
+    return null;
+  }
+
+  stripeChargeId = readStripeId(chargeObject) || stripeChargeId;
+  const expandedBalanceTransaction = isRecord(chargeObject.balance_transaction)
+    ? (chargeObject.balance_transaction as StripeBalanceTransaction)
+    : null;
+  if (expandedBalanceTransaction) {
+    return extractStripeFeeDetailsFromBalanceTransaction(expandedBalanceTransaction, stripeChargeId || null);
+  }
+
+  const balanceTransactionId = readStripeId(chargeObject.balance_transaction);
+  if (!balanceTransactionId) {
+    return null;
+  }
+  const balanceTransaction = await fetchStripeJson<StripeBalanceTransaction>(
+    `/balance_transactions/${encodeURIComponent(balanceTransactionId)}`,
+    params.stripeAccountId,
+  );
+  return extractStripeFeeDetailsFromBalanceTransaction(balanceTransaction, stripeChargeId || null);
+}
 
 const mapStripeStatusToInternal = (
   sessionStatus: string | null | undefined,
@@ -648,15 +778,10 @@ async function listCheckoutSessionReservations(
 
 async function retrieveStripeCheckoutSession(checkoutSessionId: string, stripeAccountId?: string | null) {
   assertServerEnv();
-  const headers: Record<string, string> = { Authorization: `Bearer ${STRIPE_SECRET_KEY}` };
-  const normalizedStripeAccountId = normalizeText(stripeAccountId);
-  if (normalizedStripeAccountId) {
-    headers["Stripe-Account"] = normalizedStripeAccountId;
-  }
   const response = await fetch(
-    `${getStripeApiBase()}/checkout/sessions/${encodeURIComponent(checkoutSessionId)}?expand[]=payment_intent`,
+    `${getStripeApiBase()}/checkout/sessions/${encodeURIComponent(checkoutSessionId)}?expand[]=payment_intent.latest_charge.balance_transaction`,
     {
-      headers,
+      headers: buildStripeHeaders(stripeAccountId),
     },
   );
   const payload = await response.json().catch(() => ({}));
@@ -707,6 +832,8 @@ async function createPaymentStub(
     stripeChargeId?: string | null;
     legalEntityId?: string | null;
     paymentBreakdown?: PaymentBreakdown;
+    feeCents?: number;
+    feeVatCents?: number;
     raw: JsonRecord;
   },
 ) {
@@ -738,12 +865,91 @@ async function createPaymentStub(
       producer_net_target_cents: breakdown.producer_net_target_cents,
       producer_card_net_cents: breakdown.producer_card_net_cents,
       producer_topup_due_cents: breakdown.producer_topup_due_cents,
+      fee_cents: toNonNegativeInteger(params.feeCents),
+      fee_vat_cents: toNonNegativeInteger(params.feeVatCents),
       raw: params.raw,
     })
     .select("id, participant_id, provider_payment_id, status")
     .single();
   if (error || !data) throw error ?? new Error("Unable to create payment");
   return data as DbPaymentRow;
+}
+
+export async function syncStripeFeesOnPayment(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    paymentId: string;
+    stripeAccountId?: string | null;
+    stripeSession?: StripeCheckoutSession | null;
+    paymentIntentId?: string | null;
+    chargeId?: string | null;
+  },
+) {
+  const feeDetails = await resolveStripeFeeDetails({
+    stripeSession: params.stripeSession,
+    paymentIntentId: params.paymentIntentId,
+    chargeId: params.chargeId,
+    stripeAccountId: params.stripeAccountId,
+  });
+  if (!feeDetails) return null;
+
+  const { error } = await serviceClient
+    .from("payments")
+    .update({
+      fee_cents: feeDetails.feeCents,
+      fee_vat_cents: feeDetails.feeVatCents,
+      stripe_charge_id: feeDetails.stripeChargeId,
+    })
+    .eq("id", params.paymentId);
+  if (error) throw error;
+  return feeDetails;
+}
+
+export async function syncStripeFeesForIdentifiers(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    checkoutPaymentSessionId?: string | null;
+    stripeCheckoutSessionId?: string | null;
+    stripePaymentIntentId?: string | null;
+    stripeChargeId?: string | null;
+    stripeAccountId?: string | null;
+    stripeSession?: StripeCheckoutSession | null;
+  },
+) {
+  let paymentQuery = serviceClient
+    .from("payments")
+    .select("id")
+    .limit(1);
+
+  const paymentIntentId = normalizeText(params.stripePaymentIntentId);
+  const checkoutSessionId = normalizeText(params.stripeCheckoutSessionId);
+  const chargeId = normalizeText(params.stripeChargeId);
+
+  if (paymentIntentId) {
+    paymentQuery = paymentQuery.eq("stripe_payment_intent_id", paymentIntentId);
+  } else if (checkoutSessionId) {
+    paymentQuery = paymentQuery.eq("stripe_checkout_session_id", checkoutSessionId);
+  } else if (params.checkoutPaymentSessionId) {
+    paymentQuery = paymentQuery.contains("raw", {
+      checkout_payment_session_id: params.checkoutPaymentSessionId,
+    });
+  } else if (chargeId) {
+    paymentQuery = paymentQuery.eq("stripe_charge_id", chargeId);
+  } else {
+    return null;
+  }
+
+  const { data: paymentRow, error: paymentError } = await paymentQuery.maybeSingle();
+  if (paymentError) throw paymentError;
+  if (!paymentRow?.id) return null;
+
+  return syncStripeFeesOnPayment(serviceClient, {
+    paymentId: paymentRow.id as string,
+    stripeAccountId: params.stripeAccountId,
+    stripeSession: params.stripeSession,
+    paymentIntentId: paymentIntentId || null,
+    chargeId: chargeId || null,
+  });
 }
 
 async function triggerOutgoingEmails(serviceClient: ReturnType<typeof createServiceClient>) {
@@ -1923,6 +2129,18 @@ async function finalizeParticipantCheckoutSession(
       }
     }
 
+    const stripeFeeDetails =
+      paymentBreakdown.card_amount_cents > 0
+        ? await resolveStripeFeeDetails({
+          stripeSession,
+          paymentIntentId:
+            typeof stripeSession.payment_intent === "string"
+              ? stripeSession.payment_intent
+              : stripeSession.payment_intent?.id ?? null,
+          stripeAccountId: producerStripe.stripeAccountId,
+        })
+        : null;
+
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
       participantId: refreshedParticipant.id,
@@ -1935,8 +2153,11 @@ async function finalizeParticipantCheckoutSession(
       stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
         ? stripeSession.payment_intent
         : stripeSession.payment_intent?.id ?? null,
+      stripeChargeId: stripeFeeDetails?.stripeChargeId ?? null,
       legalEntityId: producerStripe.legalEntityId,
       paymentBreakdown,
+      feeCents: stripeFeeDetails?.feeCents ?? 0,
+      feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
       raw: {
         flow_kind: "participant",
         checkout_payment_session_id: checkoutPaymentSession.id,
@@ -1952,6 +2173,17 @@ async function finalizeParticipantCheckoutSession(
       },
     });
     createdPaymentId = payment.id;
+    if (paymentBreakdown.card_amount_cents > 0 && !stripeFeeDetails) {
+      await syncStripeFeesOnPayment(serviceClient, {
+        paymentId: payment.id,
+        stripeAccountId: producerStripe.stripeAccountId,
+        stripeSession,
+        paymentIntentId:
+          typeof stripeSession.payment_intent === "string"
+            ? stripeSession.payment_intent
+            : stripeSession.payment_intent?.id ?? null,
+      });
+    }
     await finalizePaymentSimulation(serviceClient, payment.id);
     const topup = await upsertProducerTopup(serviceClient, {
       orderId: order.id,
@@ -2105,6 +2337,14 @@ async function finalizeCloseCheckoutSession(
     }
     await recomputeCaches(serviceClient, order.id, sharerParticipant.id);
 
+    const stripeFeeDetails = await resolveStripeFeeDetails({
+      stripeSession,
+      paymentIntentId:
+        typeof stripeSession.payment_intent === "string"
+          ? stripeSession.payment_intent
+          : stripeSession.payment_intent?.id ?? null,
+    });
+
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
       participantId: sharerParticipant.id,
@@ -2112,6 +2352,13 @@ async function finalizeCloseCheckoutSession(
       provider: checkoutPaymentSession.provider ?? "stripe",
       providerPaymentId: checkoutPaymentSession.provider_payment_id,
       idempotencyKey: checkoutPaymentSession.idempotency_key,
+      stripeCheckoutSessionId: normalizeText(stripeSession.id) || null,
+      stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null,
+      stripeChargeId: stripeFeeDetails?.stripeChargeId ?? null,
+      feeCents: stripeFeeDetails?.feeCents ?? 0,
+      feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
       raw: {
         flow_kind: "close",
         checkout_payment_session_id: checkoutPaymentSession.id,
@@ -2124,6 +2371,16 @@ async function finalizeCloseCheckoutSession(
       },
     });
     paymentId = payment.id;
+    if (!stripeFeeDetails) {
+      await syncStripeFeesOnPayment(serviceClient, {
+        paymentId: payment.id,
+        stripeSession,
+        paymentIntentId:
+          typeof stripeSession.payment_intent === "string"
+            ? stripeSession.payment_intent
+            : stripeSession.payment_intent?.id ?? null,
+      });
+    }
     await finalizeClosePayment(serviceClient, payment.id);
     await createLockClosePackage(serviceClient, order.id, draft.useCoopBalance);
     await ensureSharerInvoiceExists(serviceClient, order.id, checkoutPaymentSession.profile_id);
