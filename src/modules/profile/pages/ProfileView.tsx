@@ -2098,6 +2098,13 @@ function ProfileEditPanel({
       return;
     }
 
+    if (payload?.requires_person_token === true) {
+      toast.error(
+        "La fonction Stripe Connect côté serveur n'est pas à jour. Redéployez `stripe_create_connected_account_link`, puis réessayez."
+      );
+      return;
+    }
+
     applyStripeConnectionPayload({
       status: 'action_required',
       stripe_account_id: typeof payload?.stripe_account_id === 'string' ? payload.stripe_account_id : null,
@@ -2117,7 +2124,8 @@ function ProfileEditPanel({
 
     const nextUrl = typeof payload?.url === 'string' ? payload.url.trim() : '';
     if (!nextUrl) {
-      toast.error("Lien d'onboarding Stripe indisponible.");
+      console.error('[Stripe Connect] Réponse sans URL d onboarding', payload);
+      toast.error("Stripe n'a pas retourné de lien d'onboarding. Vérifiez le déploiement de la fonction serveur.");
       return;
     }
 
