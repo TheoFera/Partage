@@ -131,6 +131,9 @@ type DbOrderRow = {
   sharer_profile_id: string;
   producer_profile_id: string;
   status: string;
+  min_weight_kg: number;
+  max_weight_kg: number | null;
+  sharer_share_cents: number;
   effective_weight_kg: number;
   delivery_fee_cents: number;
   pickup_delivery_fee_cents?: number | null;
@@ -1340,7 +1343,7 @@ async function getOrderById(serviceClient: ReturnType<typeof createServiceClient
   const { data, error } = await serviceClient
     .from("orders")
     .select(
-      "id, order_code, auto_approve_participation_requests, sharer_profile_id, producer_profile_id, status, effective_weight_kg, delivery_fee_cents, pickup_delivery_fee_cents, delivery_option, sharer_percentage",
+      "id, order_code, auto_approve_participation_requests, sharer_profile_id, producer_profile_id, status, min_weight_kg, max_weight_kg, sharer_share_cents, effective_weight_kg, delivery_fee_cents, pickup_delivery_fee_cents, delivery_option, sharer_percentage",
     )
     .eq("id", orderId)
     .single();
@@ -1374,6 +1377,18 @@ async function listParticipantOrderItems(
     .eq("order_id", orderId)
     .eq("participant_id", participantId)
     .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data as DbOrderItemRow[] | null) ?? [];
+}
+
+async function listOrderItemsForOrder(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  orderId: string,
+) {
+  const { data, error } = await serviceClient
+    .from("order_items")
+    .select("id, product_id, lot_id, participant_id, quantity_units, unit_label, unit_weight_kg, unit_base_price_cents, unit_delivery_cents, unit_sharer_fee_cents, unit_final_price_cents, line_total_cents, line_weight_kg")
+    .eq("order_id", orderId);
   if (error) throw error;
   return (data as DbOrderItemRow[] | null) ?? [];
 }
@@ -1742,6 +1757,7 @@ async function buildCheckoutReservationPlans(
     quantityUnits: number;
     storedQuantityUnits: number;
     saleUnit: string | null;
+    unitWeightKg: number;
     reservedUnits: number | null;
     reservedKg: number | null;
     lineWeightKg: number;
@@ -1794,6 +1810,7 @@ async function buildCheckoutReservationPlans(
       quantityUnits,
       storedQuantityUnits,
       saleUnit: productListing.sale_unit,
+      unitWeightKg,
       reservedUnits: isKgSaleUnit(productListing.sale_unit) ? null : storedQuantityUnits,
       reservedKg: isKgSaleUnit(productListing.sale_unit) ? unitWeightKg * storedQuantityUnits : null,
       lineWeightKg: pricing.lineWeightKg ?? 0,
@@ -1837,6 +1854,193 @@ async function computePlatformServiceFeeFromPlans(
     const unitsForShare = isKgSaleUnit(plan.saleUnit) ? Number(plan.reservedKg ?? 0) : plan.storedQuantityUnits;
     return sum + valuePerUnit * Math.max(0, Number(unitsForShare) || 0);
   }, 0);
+}
+
+const resolveOrderItemWeightKg = (item: Pick<DbOrderItemRow, "line_weight_kg" | "unit_weight_kg" | "quantity_units">) => {
+  const storedWeight = Number(item.line_weight_kg ?? 0);
+  if (storedWeight > 0) return storedWeight;
+  return Math.max(0, Number(item.unit_weight_kg ?? 0)) * Math.max(0, Number(item.quantity_units ?? 0));
+};
+
+const resolveEffectiveWeightKgForOrder = (order: DbOrderRow, totalWeightKg: number) => {
+  const minWeightKg = Math.max(0, Number(order.min_weight_kg ?? 0));
+  const maxWeightKg = Number(order.max_weight_kg ?? 0);
+  if (maxWeightKg > 0) {
+    return Math.min(Math.max(totalWeightKg, minWeightKg), maxWeightKg);
+  }
+  return Math.max(totalWeightKg, minWeightKg);
+};
+
+const resolveDeliveryFeeTotalCentsForOrder = (order: DbOrderRow, effectiveWeightKg: number) => {
+  if (order.delivery_option === "producer_pickup") {
+    return toNonNegativeInteger(order.pickup_delivery_fee_cents);
+  }
+  if (order.delivery_option === "producer_delivery") {
+    return toNonNegativeInteger(order.delivery_fee_cents);
+  }
+  if (effectiveWeightKg <= 0) return 0;
+  return Math.max(15, 5 * Math.round((7 + 8 * Math.sqrt(effectiveWeightKg)) / 5));
+};
+
+type CloseCheckoutPlan = {
+  productId: string;
+  saleUnit: string | null;
+  quantityUnits: number;
+  storedQuantityUnits: number;
+  unitWeightKg: number;
+  unitBasePriceCents: number;
+};
+
+function computeClosePaymentBreakdown(params: {
+  order: DbOrderRow;
+  sharerParticipantId: string;
+  allOrderItems: DbOrderItemRow[];
+  extraPlans: CloseCheckoutPlan[];
+  coopBalanceCents: number;
+  useCoopBalance: boolean;
+}): PaymentBreakdown {
+  const currentSharerItems = params.allOrderItems.filter((item) => item.participant_id === params.sharerParticipantId);
+  const otherParticipantItems = params.allOrderItems.filter((item) => item.participant_id !== params.sharerParticipantId);
+  const shareFraction =
+    params.order.sharer_percentage > 0 && params.order.sharer_percentage < 100
+      ? params.order.sharer_percentage / (100 - params.order.sharer_percentage)
+      : 0;
+
+  const sharerProductStates = new Map<string, {
+    saleUnit: string | null;
+    displayQuantity: number;
+    unitWeightKg: number;
+    unitBasePriceCents: number;
+    baseRateCents: number;
+  }>();
+
+  for (const item of currentSharerItems) {
+    const saleUnit = normalizeText(item.unit_label).toLowerCase();
+    if (saleUnit === "kg") {
+      const displayQuantity = resolveOrderItemWeightKg(item);
+      const baseRateCents = displayQuantity > 0 ? Number(item.unit_base_price_cents ?? 0) / displayQuantity : 0;
+      sharerProductStates.set(item.product_id, {
+        saleUnit,
+        displayQuantity,
+        unitWeightKg: displayQuantity,
+        unitBasePriceCents: Number(item.unit_base_price_cents ?? 0),
+        baseRateCents,
+      });
+      continue;
+    }
+    sharerProductStates.set(item.product_id, {
+      saleUnit,
+      displayQuantity: Math.max(0, Number(item.quantity_units ?? 0)),
+      unitWeightKg: Math.max(0, Number(item.unit_weight_kg ?? 0)),
+      unitBasePriceCents: toNonNegativeInteger(item.unit_base_price_cents),
+      baseRateCents: 0,
+    });
+  }
+
+  for (const plan of params.extraPlans) {
+    const saleUnit = normalizeText(plan.saleUnit).toLowerCase();
+    const existingState = sharerProductStates.get(plan.productId);
+    if (saleUnit === "kg") {
+      const extraQuantityKg = Math.max(0, Number(plan.quantityUnits ?? 0));
+      const baseRateCents = extraQuantityKg > 0 ? plan.unitBasePriceCents / extraQuantityKg : 0;
+      if (existingState) {
+        existingState.displayQuantity += extraQuantityKg;
+        if (existingState.displayQuantity > 0) {
+          existingState.unitWeightKg = existingState.displayQuantity;
+          existingState.unitBasePriceCents = Math.round(existingState.baseRateCents * existingState.displayQuantity);
+        }
+      } else {
+        sharerProductStates.set(plan.productId, {
+          saleUnit,
+          displayQuantity: extraQuantityKg,
+          unitWeightKg: extraQuantityKg,
+          unitBasePriceCents: plan.unitBasePriceCents,
+          baseRateCents,
+        });
+      }
+      continue;
+    }
+
+    const extraUnits = Math.max(0, Number(plan.storedQuantityUnits ?? 0));
+    if (existingState) {
+      existingState.displayQuantity += extraUnits;
+    } else {
+      sharerProductStates.set(plan.productId, {
+        saleUnit,
+        displayQuantity: extraUnits,
+        unitWeightKg: Math.max(0, Number(plan.unitWeightKg ?? 0)),
+        unitBasePriceCents: toNonNegativeInteger(plan.unitBasePriceCents),
+        baseRateCents: 0,
+      });
+    }
+  }
+
+  const otherParticipantWeightKg = otherParticipantItems.reduce((sum, item) => sum + resolveOrderItemWeightKg(item), 0);
+  const sharerWeightKg = Array.from(sharerProductStates.values()).reduce((sum, state) => {
+    if (state.saleUnit === "kg") return sum + state.displayQuantity;
+    return sum + state.unitWeightKg * state.displayQuantity;
+  }, 0);
+  const totalWeightKg = otherParticipantWeightKg + sharerWeightKg;
+  const effectiveWeightKg = resolveEffectiveWeightKgForOrder(params.order, totalWeightKg);
+  const deliveryFeeTotalCents = resolveDeliveryFeeTotalCentsForOrder(params.order, effectiveWeightKg);
+  const feePerKg = effectiveWeightKg > 0 ? deliveryFeeTotalCents / effectiveWeightKg : 0;
+
+  let sharerProductsValueCents = 0;
+  let sharerOwnShareCents = 0;
+  for (const state of sharerProductStates.values()) {
+    if (state.displayQuantity <= 0) continue;
+    if (state.saleUnit === "kg") {
+      const lineBaseCents = Math.round(state.baseRateCents * state.displayQuantity);
+      const lineDeliveryCents = Math.round(feePerKg * state.displayQuantity);
+      const lineSharerFeeCents = Math.round((lineBaseCents + lineDeliveryCents) * shareFraction);
+      sharerProductsValueCents += lineBaseCents + lineDeliveryCents + lineSharerFeeCents;
+      sharerOwnShareCents += lineSharerFeeCents;
+      continue;
+    }
+
+    const unitDeliveryCents = Math.round(feePerKg * state.unitWeightKg);
+    const unitSharerFeeCents = Math.round((state.unitBasePriceCents + unitDeliveryCents) * shareFraction);
+    sharerProductsValueCents +=
+      (state.unitBasePriceCents + unitDeliveryCents + unitSharerFeeCents) * state.displayQuantity;
+    sharerOwnShareCents += unitSharerFeeCents * state.displayQuantity;
+  }
+
+  const currentSharerStoredShareCents = currentSharerItems.reduce(
+    (sum, item) =>
+      sum + toNonNegativeInteger(item.unit_sharer_fee_cents) * Math.max(0, Number(item.quantity_units ?? 0)),
+    0,
+  );
+  const otherParticipantShareCents = Math.max(
+    0,
+    toNonNegativeInteger(params.order.sharer_share_cents) - currentSharerStoredShareCents,
+  );
+  const pickupShareBonusCents =
+    params.order.delivery_option === "producer_pickup"
+      ? toNonNegativeInteger(params.order.pickup_delivery_fee_cents)
+      : 0;
+  const totalEconomicCents = Math.max(
+    0,
+    sharerProductsValueCents - (otherParticipantShareCents + sharerOwnShareCents + pickupShareBonusCents),
+  );
+  const coopCreditUsedCents = params.useCoopBalance
+    ? Math.min(Math.max(0, params.coopBalanceCents), totalEconomicCents)
+    : 0;
+  const cardAmountCents = Math.max(0, totalEconomicCents - coopCreditUsedCents);
+
+  return {
+    total_economic_cents: totalEconomicCents,
+    coop_credit_used_cents: coopCreditUsedCents,
+    card_amount_cents: cardAmountCents,
+    producer_net_target_cents: totalEconomicCents,
+    platform_retained_target_cents: 0,
+    platform_service_fee_cents: 0,
+    sharer_value_cents: 0,
+    platform_delivery_retained_cents: 0,
+    producer_delivery_cents: 0,
+    stripe_application_fee_amount_cents: 0,
+    producer_card_net_cents: cardAmountCents,
+    producer_topup_due_cents: coopCreditUsedCents,
+  };
 }
 
 async function computeParticipantPaymentBreakdownFromPlans(
@@ -2000,6 +2204,47 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
       return await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
         status: "draft",
         participant_id: participant.id,
+        payment_mode: paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero",
+        payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
+        stripe_account_id: producerStripe.stripeAccountId,
+        amount_cents: paymentBreakdown.card_amount_cents,
+        error_code: null,
+        error_message: null,
+      });
+    }
+    if (checkoutPaymentSession.flow_kind === "close") {
+      const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
+      const sharerParticipant = await getParticipantByProfile(
+        serviceClient,
+        order.id,
+        checkoutPaymentSession.profile_id,
+      );
+      if (!sharerParticipant || normalizeText(sharerParticipant.role) !== "sharer") {
+        throw new Error("Participant partageur introuvable pour la clôture.");
+      }
+      const allOrderItems = await listOrderItemsForOrder(serviceClient, order.id);
+      const draft = parseCloseDraft(checkoutPaymentSession.draft_payload);
+      const coopBalanceCents = draft.useCoopBalance
+        ? await fetchCoopBalance(serviceClient, checkoutPaymentSession.profile_id)
+        : 0;
+      const paymentBreakdown = computeClosePaymentBreakdown({
+        order,
+        sharerParticipantId: sharerParticipant.id,
+        allOrderItems,
+        extraPlans: plans.map((plan) => ({
+          productId: plan.productId,
+          saleUnit: plan.saleUnit,
+          quantityUnits: plan.quantityUnits,
+          storedQuantityUnits: plan.storedQuantityUnits,
+          unitWeightKg: plan.unitWeightKg,
+          unitBasePriceCents: plan.unitBasePriceCents,
+        })),
+        coopBalanceCents,
+        useCoopBalance: draft.useCoopBalance,
+      });
+      return await updateCheckoutPaymentSession(serviceClient, checkoutPaymentSession.id, {
+        status: "draft",
+        participant_id: sharerParticipant.id,
         payment_mode: paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero",
         payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
         stripe_account_id: producerStripe.stripeAccountId,
@@ -2238,10 +2483,12 @@ async function finalizeCloseCheckoutSession(
     throw new Error("Missing provider_payment_id on checkout payment session");
   }
   const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
+  const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
   if (order.sharer_profile_id !== checkoutPaymentSession.profile_id) {
     throw new Error("Only the sharer can finalize close payment");
   }
   const draft = parseCloseDraft(checkoutPaymentSession.draft_payload);
+  const paymentBreakdownFromSession = parsePaymentBreakdown(checkoutPaymentSession.payment_breakdown);
   const { data: sharerParticipantData, error: sharerParticipantError } = await serviceClient
     .from("order_participants")
     .select("id, order_id, profile_id, participation_status, role, total_amount_cents")
@@ -2337,32 +2584,55 @@ async function finalizeCloseCheckoutSession(
     }
     await recomputeCaches(serviceClient, order.id, sharerParticipant.id);
 
+    const refreshedOrder = await getOrderById(serviceClient, order.id);
+    const refreshedOrderItems = await listOrderItemsForOrder(serviceClient, order.id);
+    const paymentBreakdown =
+      paymentBreakdownFromSession.card_amount_cents > 0 ||
+        paymentBreakdownFromSession.coop_credit_used_cents > 0 ||
+        paymentBreakdownFromSession.total_economic_cents > 0
+        ? paymentBreakdownFromSession
+        : computeClosePaymentBreakdown({
+          order: refreshedOrder,
+          sharerParticipantId: sharerParticipant.id,
+          allOrderItems: refreshedOrderItems,
+          extraPlans: [],
+          coopBalanceCents: 0,
+          useCoopBalance: false,
+        });
+
     const stripeFeeDetails = await resolveStripeFeeDetails({
       stripeSession,
       paymentIntentId:
         typeof stripeSession.payment_intent === "string"
           ? stripeSession.payment_intent
           : stripeSession.payment_intent?.id ?? null,
+      stripeAccountId: producerStripe.stripeAccountId,
     });
 
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
       participantId: sharerParticipant.id,
-      amountCents: checkoutPaymentSession.amount_cents,
-      provider: checkoutPaymentSession.provider ?? "stripe",
+      amountCents: paymentBreakdown.card_amount_cents,
+      provider: paymentBreakdown.card_amount_cents > 0 ? (checkoutPaymentSession.provider ?? "stripe_direct_connect") : "coop_topup_internal",
       providerPaymentId: checkoutPaymentSession.provider_payment_id,
       idempotencyKey: checkoutPaymentSession.idempotency_key,
+      stripeAccountId: producerStripe.stripeAccountId,
       stripeCheckoutSessionId: normalizeText(stripeSession.id) || null,
       stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
         ? stripeSession.payment_intent
         : stripeSession.payment_intent?.id ?? null,
       stripeChargeId: stripeFeeDetails?.stripeChargeId ?? null,
+      legalEntityId: producerStripe.legalEntityId,
+      paymentBreakdown,
       feeCents: stripeFeeDetails?.feeCents ?? 0,
       feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
       raw: {
         flow_kind: "close",
         checkout_payment_session_id: checkoutPaymentSession.id,
         use_coop_balance: draft.useCoopBalance,
+        payment_mode: checkoutPaymentSession.payment_mode ?? (paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero"),
+        stripe_account_id: producerStripe.stripeAccountId,
+        payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
         stripe_status: stripeSession.status ?? null,
         payment_status: stripeSession.payment_status ?? null,
         payment_intent_id: typeof stripeSession.payment_intent === "string"
@@ -2374,11 +2644,22 @@ async function finalizeCloseCheckoutSession(
     if (!stripeFeeDetails) {
       await syncStripeFeesOnPayment(serviceClient, {
         paymentId: payment.id,
+        stripeAccountId: producerStripe.stripeAccountId,
         stripeSession,
         paymentIntentId:
           typeof stripeSession.payment_intent === "string"
             ? stripeSession.payment_intent
             : stripeSession.payment_intent?.id ?? null,
+      });
+    }
+    if (paymentBreakdown.producer_topup_due_cents > 0) {
+      await upsertProducerTopup(serviceClient, {
+        orderId: order.id,
+        participantId: sharerParticipant.id,
+        paymentId: payment.id,
+        legalEntityId: producerStripe.legalEntityId,
+        producerStripeAccountId: producerStripe.stripeAccountId,
+        amountCents: paymentBreakdown.producer_topup_due_cents,
       });
     }
     await finalizeClosePayment(serviceClient, payment.id);

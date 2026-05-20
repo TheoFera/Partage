@@ -1416,7 +1416,7 @@ const sharerAvatarUpdatedAt =
       (acc, payment) => {
         const fallbackFeeHt = Math.round(payment.amountCents * 0.015 + 25);
         const feeHt = Number.isFinite(payment.feeCents ?? NaN) ? payment.feeCents : fallbackFeeHt;
-        const feeVat = Number.isFinite(payment.feeVatCents ?? NaN) ? payment.feeVatCents : Math.round(feeHt * 0.2);
+        const feeVat = Number.isFinite(payment.feeVatCents ?? NaN) ? payment.feeVatCents : 0;
         const feeTtc = feeHt + feeVat;
         return {
           feeHt: acc.feeHt + feeHt,
@@ -1466,7 +1466,7 @@ const sharerAvatarUpdatedAt =
     [orderFullValue.participants, orderFullValue.payments, sharerParticipant?.id]
   );
   const remainingToCollectCents = Math.max(0, participantTotalsCents - paidTotalCents);
-  const paymentsReceivedCents = participantsTotalAllCents;
+  const statementBaseTotalCents = participantsTotalAllCents;
   const sharerWeightKg = sharerParticipant?.totalWeightKg ?? 0;
   const maxWeightKg = typeof order.maxWeightKg === 'number' ? order.maxWeightKg : null;
   const estimatedParticipantValuePerKg =
@@ -2392,7 +2392,7 @@ const sharerAvatarUpdatedAt =
     return lines;
   }, [producerProfileMeta?.contactEmailPublic, producerProfileMeta?.phonePublic]);
   const producerStatementData = React.useMemo(() => {
-    const totalOrderedCents = paymentsReceivedCents;
+    const totalStatementBaseCents = statementBaseTotalCents;
     const platformCommissionFromSource = producerStatementSources?.platformCommissionCents;
     const sharerDiscountFromSource = producerStatementSources?.sharerDiscountCents;
     const coopSurplusFromSource = producerStatementSources?.coopSurplusCents;
@@ -2432,8 +2432,8 @@ const sharerAvatarUpdatedAt =
       isProducerStatementLoading || participantCoopUsedFromSource === null || participantCoopUsedFromSource === undefined;
 
     const totalDeductionsCents =
-      platformCommissionCents + sharerDiscountCents + coopSurplusCents + participantGainsCents;
-    const transferToProducerCents = Math.max(0, totalOrderedCents - totalDeductionsCents);
+      platformCommissionCents + paymentFeeCents + sharerDiscountCents + coopSurplusCents + participantGainsCents;
+    const transferToProducerCents = Math.max(0, totalStatementBaseCents - totalDeductionsCents);
     const remainingToCollectAfterCoopCents = isRemainingToCollectEstimated
       ? 0
       : Math.max(0, remainingToCollectCents - participantCoopUsedCents);
@@ -2447,7 +2447,7 @@ const sharerAvatarUpdatedAt =
         : null;
 
     return {
-      totalOrderedCents,
+      totalOrderedCents: totalStatementBaseCents,
       platformCommissionCents,
       platformCommissionReference: producerStatementSources?.platformInvoice?.numero
         ? `Facture ${producerStatementSources.platformInvoice.numero}`
@@ -2476,7 +2476,7 @@ const sharerAvatarUpdatedAt =
     deliveryRoundingDeltaCents,
     isProducerStatementLoading,
     paymentFeeCents,
-    paymentsReceivedCents,
+    statementBaseTotalCents,
     platformShareCents,
     producerStatementSources,
     remainingToCollectCents,
@@ -3472,10 +3472,10 @@ const sharerAvatarUpdatedAt =
                       </div>
                       <div className="order-client-view__statement-row order-client-view__statement-row--detail">
                         <span className="order-client-view__statement-label">
-                          dont frais de paiement
+                          Frais de paiement en ligne Stripe
                         </span>
                         <span className="order-client-view__statement-value">
-                          {formatEurosFromCents(producerStatementData.paymentFeeTtcCents)}
+                          -{formatEurosFromCents(producerStatementData.paymentFeeTtcCents)}
                         </span>
                       </div>
                       <div className="order-client-view__statement-row">
@@ -3533,7 +3533,7 @@ const sharerAvatarUpdatedAt =
                       )}
                       <div className="order-client-view__statement-total">
                         <span className="order-client-view__statement-label order-client-view__statement-value--strong">
-                          Virement au producteur
+                          Montant dû au producteur
                         </span>
                         <span className="order-client-view__statement-value order-client-view__statement-value--strong">
                           {formatEurosFromCents(producerStatementData.transferToProducerCents)}

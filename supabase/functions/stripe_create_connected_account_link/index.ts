@@ -73,14 +73,6 @@ function normalizeCountry(value: string | null | undefined, fallback = "FR") {
   return normalized || fallback;
 }
 
-function hasRepresentativePrefillData(legalEntity: LegalEntityRecord | null) {
-  if (!legalEntity) return false;
-  const firstName = (legalEntity.representative_first_name ?? "").trim();
-  const lastName = (legalEntity.representative_last_name ?? "").trim();
-  const birthDate = (legalEntity.representative_birth_date ?? "").trim();
-  return Boolean(firstName && lastName && birthDate);
-}
-
 async function updateConnectedAccountFromToken(params: {
   stripeAccountId: string;
   accountToken: string;
@@ -110,34 +102,6 @@ async function updateConnectedAccountFromToken(params: {
       typeof json?.error?.message === "string" ? json.error.message : "Stripe connected account update failed";
     throw new Error(stripeMessage);
   }
-}
-
-async function upsertRepresentativePerson(params: {
-  stripeAccountId: string;
-  personToken: string;
-  existingPersonId: string | null;
-  stripeSecretKey: string;
-  stripeApiBaseV2: string;
-  stripeApiVersion: string;
-}) {
-  const personUrl = params.existingPersonId
-    ? `${params.stripeApiBaseV2}/v2/core/accounts/${encodeURIComponent(params.stripeAccountId)}/persons/${encodeURIComponent(params.existingPersonId)}`
-    : `${params.stripeApiBaseV2}/v2/core/accounts/${encodeURIComponent(params.stripeAccountId)}/persons`;
-
-  const response = await fetch(personUrl, {
-    method: "POST",
-    headers: buildStripeV2Headers(params.stripeSecretKey, params.stripeApiVersion),
-    body: JSON.stringify({
-      person_token: params.personToken,
-    }),
-  });
-  const json = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const stripeMessage =
-      typeof json?.error?.message === "string" ? json.error.message : "Stripe representative sync failed";
-    throw new Error(stripeMessage);
-  }
-  return typeof json?.id === "string" ? json.id.trim() : params.existingPersonId;
 }
 
 serve(async (req) => {
@@ -173,8 +137,6 @@ serve(async (req) => {
   const refreshUrl = toSafeAppUrl(body?.refresh_url) ?? returnUrl;
   const accountToken =
     typeof body?.account_token === "string" && body.account_token.trim() ? body.account_token.trim() : null;
-  const personToken =
-    typeof body?.person_token === "string" && body.person_token.trim() ? body.person_token.trim() : null;
 
   if (!returnUrl || !refreshUrl) {
     return json({ error: "Missing valid return_url / refresh_url" }, 400);
@@ -268,7 +230,6 @@ serve(async (req) => {
   const existingStripeAccountId = (legalEntity.stripe_account_id ?? "").trim();
   let stripeAccountId = existingStripeAccountId;
   const normalizedCountry = normalizeCountry(legalEntity.country, STRIPE_CONNECTED_ACCOUNT_COUNTRY);
-  const needsPersonToken = normalizedCountry === "FR" && hasRepresentativePrefillData(legalEntity);
 
   if (!stripeAccountId) {
     if (normalizedCountry === "FR" && !accountToken) {
@@ -376,13 +337,6 @@ serve(async (req) => {
       return json({ error: "Unable to persist Stripe account id", details: updateError.message }, 500);
     }
 
-    if (needsPersonToken && !personToken) {
-      return json({
-        stripe_account_id: stripeAccountId,
-        requires_person_token: true,
-        representative_prefill_requested: true,
-      });
-    }
   } else if (accountToken) {
     try {
       await updateConnectedAccountFromToken({
@@ -394,40 +348,6 @@ serve(async (req) => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Stripe connected account update failed";
-      return json({ error: message }, 502);
-    }
-  }
-
-  if (needsPersonToken && !personToken) {
-    return json({
-      stripe_account_id: stripeAccountId,
-      requires_person_token: true,
-      representative_prefill_requested: true,
-    });
-  }
-
-  if (personToken) {
-    try {
-      const representativePersonId = await upsertRepresentativePerson({
-        stripeAccountId,
-        personToken,
-        existingPersonId: (legalEntity.stripe_representative_person_id ?? "").trim() || null,
-        stripeSecretKey: STRIPE_SECRET_KEY,
-        stripeApiBaseV2: STRIPE_API_BASE_V2,
-        stripeApiVersion: STRIPE_V2_API_VERSION,
-      });
-      if (representativePersonId && representativePersonId !== legalEntity.stripe_representative_person_id) {
-        const { error: personUpdateError } = await serviceClient
-          .from("legal_entities")
-          .update({ stripe_representative_person_id: representativePersonId })
-          .eq("id", legalEntity.id)
-          .eq("profile_id", userData.user.id);
-        if (personUpdateError) {
-          return json({ error: "Unable to persist Stripe representative id", details: personUpdateError.message }, 500);
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Stripe representative sync failed";
       return json({ error: message }, 502);
     }
   }

@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
     const preparedCheckoutPaymentSession = await prepareCheckoutPaymentSessionForStripe(checkoutPaymentSession.id);
     const paymentBreakdown = parsePaymentBreakdown(preparedCheckoutPaymentSession.payment_breakdown);
 
-    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "local_zero") {
+    if (preparedCheckoutPaymentSession.payment_mode === "local_zero") {
       const finalized = await finalizeLocalZeroCheckoutPaymentSession(preparedCheckoutPaymentSession.id);
       return jsonResponse({
         checkout_payment_session_id: finalized.checkoutPaymentSession.id,
@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
     );
     form.append("payment_intent_data[metadata][producer_card_net_cents]", String(paymentBreakdown.producer_card_net_cents));
     form.append("payment_intent_data[metadata][producer_topup_due_cents]", String(paymentBreakdown.producer_topup_due_cents));
-    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
+    if (preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
       form.append(
         "payment_intent_data[application_fee_amount]",
         String(paymentBreakdown.stripe_application_fee_amount_cents),
@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
       "Content-Type": "application/x-www-form-urlencoded",
       "Idempotency-Key": checkoutPaymentSession.idempotency_key ?? checkoutPaymentSession.id,
     };
-    if (preparedCheckoutPaymentSession.flow_kind === "participant" && preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
+    if (preparedCheckoutPaymentSession.payment_mode === "direct_charge") {
       const stripeAccountId = preparedCheckoutPaymentSession.stripe_account_id?.trim() ?? "";
       if (!stripeAccountId) {
         return jsonResponse({ error: "Compte Stripe Connect producteur introuvable." }, 400);

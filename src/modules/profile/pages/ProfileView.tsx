@@ -1819,15 +1819,6 @@ function ProfileEditPanel({
     const resolvedUrl = nextUrl.toString();
     return isStripeCompatibleReturnUrl(resolvedUrl) ? resolvedUrl : null;
   }, [user.handle]);
-  const stripeRepresentativePrefillReady = React.useMemo(
-    () =>
-      Boolean(
-        representativeFirstName.trim() &&
-          representativeLastName.trim() &&
-          representativeBirthDate.trim()
-      ),
-    [representativeBirthDate, representativeFirstName, representativeLastName]
-  );
   const createStripeAccountToken = React.useCallback(async () => {
     if (!STRIPE_PUBLISHABLE_KEY) {
       throw new Error('Configurez VITE_STRIPE_PUBLISHABLE_KEY pour l onboarding Stripe des structures francaises.');
@@ -1911,111 +1902,6 @@ function ProfileEditPanel({
     user.contactEmailPublic,
     user.email,
   ]);
-  const createStripePersonToken = React.useCallback(
-    async (accountId: string) => {
-      if (!STRIPE_PUBLISHABLE_KEY) {
-        throw new Error('Configurez VITE_STRIPE_PUBLISHABLE_KEY pour le pré-remplissage Stripe.');
-      }
-      if (!stripeRepresentativePrefillReady) return null;
-
-      const birthDate = new Date(representativeBirthDate);
-      if (Number.isNaN(birthDate.getTime())) {
-        throw new Error('Date de naissance du représentant légal invalide.');
-      }
-
-      const trimmedCountry = (representativeCountry.trim() || country.trim() || 'FR').toUpperCase();
-      const repAddressLine1 = representativeUseProfileAddress ? address.trim() : representativeAddressLine1.trim();
-      const repAddressLine2 = representativeUseProfileAddress ? addressDetails.trim() : representativeAddressLine2.trim();
-      const repCity = representativeUseProfileAddress ? city.trim() : representativeCity.trim();
-      const repPostcode = representativeUseProfileAddress ? postcode.trim() : representativePostcode.trim();
-      const representativeAddress =
-        repAddressLine1 && repCity && repPostcode
-          ? {
-              line1: repAddressLine1,
-              ...(repAddressLine2 ? { line2: repAddressLine2 } : {}),
-              city: repCity,
-              postal_code: repPostcode,
-              country: trimmedCountry,
-            }
-          : undefined;
-
-      const response = await fetch(
-        `https://api.stripe.com/v2/core/accounts/${encodeURIComponent(accountId)}/person_tokens`,
-        {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${STRIPE_PUBLISHABLE_KEY}`,
-          'Content-Type': 'application/json',
-          'Stripe-Version': STRIPE_V2_API_VERSION,
-        },
-        body: JSON.stringify({
-          given_name: representativeFirstName.trim(),
-          surname: representativeLastName.trim(),
-          ...(representativeEmail.trim() ? { email: representativeEmail.trim() } : {}),
-          ...(representativePhone.trim() ? { phone: representativePhone.trim() } : {}),
-          ...(representativeTitle.trim()
-            ? {
-                relationship: {
-                  representative: true,
-                  title: representativeTitle.trim(),
-                },
-              }
-            : {
-                relationship: {
-                  representative: true,
-                },
-              }),
-          date_of_birth: {
-            day: birthDate.getDate(),
-            month: birthDate.getMonth() + 1,
-            year: birthDate.getFullYear(),
-          },
-          ...(representativeAddress ? { address: representativeAddress } : {}),
-        }),
-      }
-      );
-
-      const result = (await response.json().catch(() => ({}))) as {
-        id?: string;
-        error?: { message?: string };
-      };
-      if (!response.ok) {
-        const message =
-          typeof result?.error?.message === 'string' && result.error.message.trim()
-            ? result.error.message.trim()
-            : 'Création du token représentant Stripe impossible.';
-        throw new Error(message);
-      }
-
-      const token = typeof result?.id === 'string' ? result.id.trim() : '';
-      if (!token) {
-        throw new Error("Stripe n'a pas retourné de token représentant.");
-      }
-      return token;
-    },
-    [
-      STRIPE_PUBLISHABLE_KEY,
-      address,
-      addressDetails,
-      city,
-      country,
-      postcode,
-      representativeAddressLine1,
-      representativeAddressLine2,
-      representativeBirthDate,
-      representativeCity,
-      representativeCountry,
-      representativeEmail,
-      representativeFirstName,
-      representativeLastName,
-      representativePhone,
-      representativePostcode,
-      representativeTitle,
-      representativeUseProfileAddress,
-      stripeRepresentativePrefillReady,
-    ]
-  );
-
   const applyStripeConnectionPayload = React.useCallback((payload: {
     status?: string | null;
     stripe_account_id?: string | null;
@@ -2175,7 +2061,6 @@ function ProfileEditPanel({
     }
 
     let accountToken: string | null = null;
-    let personToken: string | null = null;
     const isFrenchConnectedAccount =
       (stripeConnection.country?.trim().toUpperCase() ||
         user.legalEntity?.stripeAccountCountry?.trim().toUpperCase() ||
@@ -2191,50 +2076,16 @@ function ProfileEditPanel({
       }
     }
 
-    if (isFrenchConnectedAccount && stripeRepresentativePrefillReady && stripeConnection.accountId) {
-      try {
-        personToken = await createStripePersonToken(stripeConnection.accountId);
-      } catch (tokenError) {
-        toast.error(await extractEdgeInvokeErrorMessage(tokenError, 'Creation du token representant Stripe impossible.'));
-        return;
-      }
-    }
-
     setStripeOnboardingLoading(true);
     let invokeResult = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
       body: {
         return_url: stripeReturnUrl,
         refresh_url: stripeReturnUrl,
         ...(accountToken ? { account_token: accountToken } : {}),
-        ...(personToken ? { person_token: personToken } : {}),
       },
     });
 
-    let payload = (invokeResult.data as Record<string, unknown> | null) ?? null;
-    if (
-      !invokeResult.error &&
-      payload?.requires_person_token === true &&
-      typeof payload?.stripe_account_id === 'string' &&
-      stripeRepresentativePrefillReady
-    ) {
-      try {
-        const deferredPersonToken = await createStripePersonToken(payload.stripe_account_id);
-        if (deferredPersonToken) {
-          invokeResult = await supabaseClient.functions.invoke('stripe_create_connected_account_link', {
-            body: {
-              return_url: stripeReturnUrl,
-              refresh_url: stripeReturnUrl,
-              person_token: deferredPersonToken,
-            },
-          });
-          payload = (invokeResult.data as Record<string, unknown> | null) ?? null;
-        }
-      } catch (tokenError) {
-        setStripeOnboardingLoading(false);
-        toast.error(await extractEdgeInvokeErrorMessage(tokenError, 'Creation du token representant Stripe impossible.'));
-        return;
-      }
-    }
+    const payload = (invokeResult.data as Record<string, unknown> | null) ?? null;
     setStripeOnboardingLoading(false);
 
     if (invokeResult.error) {
@@ -2278,10 +2129,8 @@ function ProfileEditPanel({
     stripeConnection.country,
     stripeConnection.dueCount,
     stripeConnection.outstandingRequirements,
-    stripeRepresentativePrefillReady,
     country,
     createStripeAccountToken,
-    createStripePersonToken,
     stripeLegalInfoNeedsSave,
     stripeReturnUrl,
     supabaseClient,

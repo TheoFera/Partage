@@ -8,8 +8,10 @@ build/
 
 # Supabase local artifacts
 supabase/.temp/
-supabase/scripts/*
+supabase/scripts/
 !supabase/scripts/2026-04-16_notification_email_pipeline.sql
+!supabase/scripts/2026-05-13_fix_payment_fee_vat_fallback.sql
+!supabase/scripts/2026-05-13_enrich_coop_gain_metadata.sql
 supabase/notifications.sql
 db-introspect.txt
 AGENTS.md
