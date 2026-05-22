@@ -588,6 +588,32 @@ const resolveEffectiveWeightKg = (orderedWeightKg: number, minWeightKg: number, 
   return Math.max(current, min);
 };
 
+const resolveProjectedDeliveryFeeCents = (order: Order, effectiveWeightKg: number) => {
+  if (order.deliveryOption === 'producer_pickup') {
+    return Math.max(0, Number.isFinite(order.pickupDeliveryFeeCents ?? NaN) ? order.pickupDeliveryFeeCents ?? 0 : 0);
+  }
+  if (order.deliveryOption === 'producer_delivery') {
+    return Math.max(0, Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents ?? 0 : 0);
+  }
+  if (effectiveWeightKg <= 0) return 0;
+  return Math.max(15, 5 * Math.round((7 + 8 * Math.sqrt(effectiveWeightKg)) / 5));
+};
+
+const buildProjectedOrderPricingContext = (order: Order, addedWeightKg: number): Order => {
+  const projectedOrderedWeightKg = Math.max(0, Number(order.orderedWeightKg ?? 0) + Math.max(0, addedWeightKg));
+  const projectedEffectiveWeightKg = resolveEffectiveWeightKg(
+    projectedOrderedWeightKg,
+    order.minWeightKg,
+    order.maxWeightKg ?? null
+  );
+  return {
+    ...order,
+    orderedWeightKg: projectedOrderedWeightKg,
+    effectiveWeightKg: projectedEffectiveWeightKg,
+    deliveryFeeCents: resolveProjectedDeliveryFeeCents(order, projectedEffectiveWeightKg),
+  };
+};
+
 const calculateOrderItemPricing = (params: {
   order: Order;
   basePriceCents: number;
@@ -1258,8 +1284,9 @@ export const addItem = async (params: {
     orderProduct.unit_base_price_cents,
     params.quantityUnits
   );
+  const projectedOrder = buildProjectedOrderPricingContext(mapOrderRow(orderRow as DbOrder), unitWeightKg * storedQuantityUnits);
   const pricing = calculateOrderItemPricing({
-    order: mapOrderRow(orderRow as DbOrder),
+    order: projectedOrder,
     basePriceCents: unitBasePriceCents,
     unitWeightKg,
     quantityUnits: storedQuantityUnits,
@@ -1401,8 +1428,14 @@ export const updateOrderItemQuantity = async (
     orderProduct.unit_base_price_cents,
     quantityUnits
   );
+  const previousLineWeightKg = Math.max(0, Number(itemRow?.line_weight_kg ?? 0));
+  const nextLineWeightKg = unitWeightKg * storedQuantityUnits;
+  const projectedOrder = buildProjectedOrderPricingContext(
+    mapOrderRow(orderRow as DbOrder),
+    nextLineWeightKg - previousLineWeightKg
+  );
   const pricing = calculateOrderItemPricing({
-    order: mapOrderRow(orderRow as DbOrder),
+    order: projectedOrder,
     basePriceCents: unitBasePriceCents,
     unitWeightKg,
     quantityUnits: storedQuantityUnits,

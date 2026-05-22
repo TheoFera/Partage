@@ -562,6 +562,19 @@ const calculateOrderItemPricing = (params: {
   };
 };
 
+const buildProjectedOrderPricingContext = (
+  order: DbOrderRow,
+  addedWeightKg: number,
+): Pick<DbOrderRow, "effective_weight_kg" | "delivery_fee_cents" | "sharer_percentage"> => {
+  const projectedOrderedWeightKg = Math.max(0, Number(order.ordered_weight_kg ?? 0) + Math.max(0, addedWeightKg));
+  const projectedEffectiveWeightKg = resolveEffectiveWeightKgForOrder(order, projectedOrderedWeightKg);
+  return {
+    effective_weight_kg: projectedEffectiveWeightKg,
+    delivery_fee_cents: resolveDeliveryFeeTotalCentsForOrder(order, projectedEffectiveWeightKg),
+    sharer_percentage: order.sharer_percentage,
+  };
+};
+
 const fetchLatestActiveLotsByProductId = async (serviceClient: ReturnType<typeof createServiceClient>, productIds: string[]) => {
   const uniqueProductIds = Array.from(new Set(productIds.filter(Boolean)));
   const result = new Map<string, { id: string; price_cents: number; produced_at: string | null; created_at: string }>();
@@ -1513,8 +1526,9 @@ async function insertOrderItem(
     params.quantityUnits,
   );
   const storedQuantityUnits = normalizeQuantityUnitsForStorage(productListing.sale_unit, params.quantityUnits);
+  const projectedOrder = buildProjectedOrderPricingContext(params.order, unitWeightKg * storedQuantityUnits);
   const pricing = calculateOrderItemPricing({
-    order: params.order,
+    order: projectedOrder,
     basePriceCents: unitBasePriceCents,
     unitWeightKg,
     quantityUnits: storedQuantityUnits,
@@ -1604,12 +1618,6 @@ async function updateOrderItemQuantity(
     params.quantityUnits,
   );
   const storedQuantityUnits = normalizeQuantityUnitsForStorage(productListing.sale_unit, params.quantityUnits);
-  const pricing = calculateOrderItemPricing({
-    order: params.order,
-    basePriceCents: unitBasePriceCents,
-    unitWeightKg,
-    quantityUnits: storedQuantityUnits,
-  });
   const { data: currentItemData, error: currentItemError } = await serviceClient
     .from("order_items")
     .select("*")
@@ -1617,6 +1625,15 @@ async function updateOrderItemQuantity(
     .maybeSingle();
   if (currentItemError || !currentItemData) throw currentItemError ?? new Error("Order item not found");
   const previousItem = currentItemData as DbOrderItemRow;
+  const previousLineWeightKg = Math.max(0, Number(previousItem.line_weight_kg ?? 0));
+  const nextLineWeightKg = unitWeightKg * storedQuantityUnits;
+  const projectedOrder = buildProjectedOrderPricingContext(params.order, nextLineWeightKg - previousLineWeightKg);
+  const pricing = calculateOrderItemPricing({
+    order: projectedOrder,
+    basePriceCents: unitBasePriceCents,
+    unitWeightKg,
+    quantityUnits: storedQuantityUnits,
+  });
   const reservation = await fetchPrimaryReservationForOrderItem(serviceClient, params.orderItemId);
   const nextItemPayload = {
     quantity_units: storedQuantityUnits,
@@ -1798,8 +1815,9 @@ async function buildCheckoutReservationPlans(
       orderProduct.unit_base_price_cents ?? fallbackBasePriceCents,
       quantityUnits,
     );
+    const projectedOrder = buildProjectedOrderPricingContext(order, unitWeightKg * storedQuantityUnits);
     const pricing = calculateOrderItemPricing({
-      order,
+      order: projectedOrder,
       basePriceCents: unitBasePriceCents,
       unitWeightKg,
       quantityUnits: storedQuantityUnits,

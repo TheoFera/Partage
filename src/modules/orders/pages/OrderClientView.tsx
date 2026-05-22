@@ -377,6 +377,18 @@ const resolveOrderEffectiveWeightKg = (
   return Math.max(current, min);
 };
 
+const resolveProjectedDeliveryFeeCents = (
+  deliveryOption: Order['deliveryOption'],
+  effectiveWeightKg: number,
+  deliveryFeeCents: number,
+  pickupDeliveryFeeCents: number
+) => {
+  if (deliveryOption === 'producer_pickup') return pickupDeliveryFeeCents;
+  if (deliveryOption === 'producer_delivery') return deliveryFeeCents;
+  if (effectiveWeightKg <= 0) return 0;
+  return Math.max(15, 5 * Math.round((7 + 8 * Math.sqrt(effectiveWeightKg)) / 5));
+};
+
 const PAID_PAYMENT_STATUSES = new Set(['paid', 'authorized']);
 
 const sumPaidCentsForParticipant = (payments: OrderFull['payments'], participantId?: string | null) => {
@@ -1256,8 +1268,8 @@ const sharerAvatarUpdatedAt =
   const pricingDeliveryFeeCents = React.useMemo(() => {
     const baseFee = Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0;
     const pickupFee = Number.isFinite(order.pickupDeliveryFeeCents ?? NaN) ? order.pickupDeliveryFeeCents : 0;
-    return order.deliveryOption === 'producer_pickup' ? pickupFee : baseFee;
-  }, [order.deliveryFeeCents, order.deliveryOption, order.pickupDeliveryFeeCents]);
+    return resolveProjectedDeliveryFeeCents(order.deliveryOption, pricingWeightKg, baseFee, pickupFee);
+  }, [order.deliveryFeeCents, order.deliveryOption, order.pickupDeliveryFeeCents, pricingWeightKg]);
   const unitPriceCentsById = React.useMemo(() => {
     const feePerKg = pricingWeightKg > 0 ? pricingDeliveryFeeCents / pricingWeightKg : 0;
     const shareFraction =
