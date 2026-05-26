@@ -846,9 +846,6 @@ export function ShareOverlay({
               <h3>Répartition du prix</h3>
               <span>{detail?.repartitionValeur?.mode === 'detaille' ? 'Montants exacts' : 'Montants estimatifs'}</span>
             </div>
-            <p className="share-overlay__body-text">
-              {detail?.repartitionValeur?.notePedagogique || LOT_BREAKDOWN_NOTE}
-            </p>
             {productBreakdownPie.slices.length ? (
               <div className="share-overlay__pie-layout">
                 <div className="share-overlay__pie-chart" style={{ backgroundImage: productBreakdownPie.gradient }}>
