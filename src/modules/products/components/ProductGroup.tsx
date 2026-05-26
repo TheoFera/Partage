@@ -612,37 +612,24 @@ export function ProductGroupContainer({
 
   const availabilityProgress = React.useMemo(() => {
     if (group.variant !== 'producer') return null;
-    const buckets = {
-      kg: { total: 0, max: 0, count: 0 },
-      unit: { total: 0, max: 0, count: 0 },
-    };
+    let totalAvailableKg = 0;
+    let totalCapacityKg = 0;
     group.products.forEach((product) => {
       const quantity = Number.isFinite(product.quantity) ? Math.max(0, product.quantity) : 0;
-      const bucket = product.measurement === 'kg' ? buckets.kg : buckets.unit;
-      bucket.total += quantity;
-      bucket.count += 1;
-      bucket.max = Math.max(bucket.max, quantity);
+      const unitWeightKg = getProductWeightKg(product);
+      const quantityKg = product.measurement === 'kg' ? quantity : quantity * unitWeightKg;
+      const capacityKg = product.measurement === 'kg' ? quantity : Math.max(quantityKg, unitWeightKg);
+      totalAvailableKg += quantityKg;
+      totalCapacityKg += capacityKg;
     });
-    const ratioParts = [
-      buckets.kg.count && buckets.kg.max > 0
-        ? buckets.kg.total / (buckets.kg.max * buckets.kg.count)
-        : null,
-      buckets.unit.count && buckets.unit.max > 0
-        ? buckets.unit.total / (buckets.unit.max * buckets.unit.count)
-        : null,
-    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-    const ratio = ratioParts.length
-      ? Math.max(0, Math.min(1, ratioParts.reduce((sum, value) => sum + value, 0) / ratioParts.length))
-      : 0;
-    const formatQuantity = (value: number) => {
-      const rounded = Math.round(value * 100) / 100;
-      return Number.isInteger(rounded) ? `${rounded}` : `${rounded}`;
-    };
-    const labelParts = [
-      buckets.kg.total > 0 ? `${formatQuantity(buckets.kg.total)} kg` : null,
-      buckets.unit.total > 0 ? `${formatQuantity(buckets.unit.total)} unités` : null,
-    ].filter(Boolean);
-    const label = labelParts.length ? `${labelParts.join(' + ')} disponibles` : 'Stock indisponible';
+    const ratio =
+      totalCapacityKg > 0 ? Math.max(0, Math.min(1, totalAvailableKg / totalCapacityKg)) : 0;
+    const roundedAvailableKg = Math.round(totalAvailableKg * 100) / 100;
+    const formattedAvailableKg =
+      roundedAvailableKg > 0 ? `${Number(roundedAvailableKg.toFixed(2)).toString()} Kg` : '';
+    const label = formattedAvailableKg
+      ? `${formattedAvailableKg} disponibles`
+      : 'Stock indisponible';
     return { ratio, label };
   }, [group.products, group.variant]);
 
