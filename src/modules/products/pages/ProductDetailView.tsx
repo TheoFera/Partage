@@ -28,6 +28,13 @@ import { ProductResultCard } from '../components/ProductGroup';
 import './ProductDetailView.css';
 import { generateBase62Code } from '../utils/codeGenerator';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
+import {
+  LOT_BREAKDOWN_NOTE,
+  buildLotBreakdownSlices,
+  isLockedLotBreakdownPost,
+  sumLotBreakdownCents,
+  synchronizeLotBreakdownPosts,
+} from '../../../shared/lib/lotPriceBreakdown';
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from '../../../shared/lib/storageObjectPath';
 import { formatUnitWeightLabel } from '../utils/weight';
 import {
@@ -347,19 +354,6 @@ const formatValue = (post: RepartitionPoste) => {
   if (post.type === 'percent') return `${post.valeur}%`;
   return formatEurosValue(post.valeur);
 };
-
-const PIE_COLORS = [
-  '#FF6B4A',
-  '#FFD166',
-  '#4CC9F0',
-  '#90BE6D',
-  '#F8961E',
-  '#577590',
-  '#F28482',
-  '#8E9AAF',
-  '#43AA8B',
-  '#277DA1',
-];
 
 const LOT_CARD_WIDTH = 220;
 const LOT_CARD_GAP = 12;
@@ -891,21 +885,23 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   const mapBreakdownRowsToPosts = React.useCallback(
     (rows: DbLotPriceBreakdown[]): RepartitionPoste[] =>
-      rows
-        .slice()
-        .sort((a, b) => a.sort_order - b.sort_order)
-        .map((entry) => ({
-          id: entry.id,
-          lotId: entry.lot_id,
-          partiePrenante: entry.stakeholder ?? undefined,
-          stakeholderKey: entry.stakeholder_key ?? undefined,
-          platformCostCode: entry.platform_cost_code ?? undefined,
-          source: entry.source ?? 'producer',
-          nom: entry.label,
-          valeur: centsToEuros(entry.value_cents ?? 0),
-          type: 'eur',
-          sortOrder: entry.sort_order,
-        })),
+      synchronizeLotBreakdownPosts(
+        rows
+          .slice()
+          .sort((a, b) => a.sort_order - b.sort_order)
+          .map((entry) => ({
+            id: entry.id,
+            lotId: entry.lot_id,
+            partiePrenante: entry.stakeholder ?? undefined,
+            stakeholderKey: entry.stakeholder_key ?? undefined,
+            platformCostCode: entry.platform_cost_code ?? undefined,
+            source: entry.source ?? 'producer',
+            nom: entry.label,
+            valeur: centsToEuros(entry.value_cents ?? 0),
+            type: 'eur',
+            sortOrder: entry.sort_order,
+          }))
+      ),
     []
   );
 
@@ -990,12 +986,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     if (isCreateMode && hasCreateDraftSnapshot) return;
     const posts = detail.repartitionValeur?.postes ?? [];
     setProductPosts(
-      posts.map((post, index) => ({
-        ...post,
-        type: post.type ?? 'eur',
-        source: post.source ?? 'producer',
-        sortOrder: Number.isFinite(post.sortOrder) ? post.sortOrder : index,
-      }))
+      synchronizeLotBreakdownPosts(
+        posts.map((post, index) => ({
+          ...post,
+          type: post.type ?? 'eur',
+          source: post.source ?? 'producer',
+          sortOrder: Number.isFinite(post.sortOrder) ? post.sortOrder : index,
+        }))
+      )
     );
   }, [detail.repartitionValeur?.postes]);
 
@@ -1008,12 +1006,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       if (prev[selectedLotId]) return prev;
       return {
         ...prev,
-        [selectedLotId]: posts.map((post, index) => ({
-          ...post,
-          type: post.type ?? 'eur',
-          source: post.source ?? 'producer',
-          sortOrder: Number.isFinite(post.sortOrder) ? post.sortOrder : index,
-        })),
+        [selectedLotId]: synchronizeLotBreakdownPosts(
+          posts.map((post, index) => ({
+            ...post,
+            type: post.type ?? 'eur',
+            source: post.source ?? 'producer',
+            sortOrder: Number.isFinite(post.sortOrder) ? post.sortOrder : index,
+          }))
+        ),
       };
     });
     seededLotPriceRef.current = true;
@@ -1405,44 +1405,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     return productPosts;
   }, [activeLotId, isLotManagement, lotPriceBreakdownByLot, productPosts]);
 
-  const sumPostsCents = React.useCallback(
-    (posts: RepartitionPoste[]) =>
-      posts.reduce((acc, post) => {
-        if (post.type === 'percent') return acc;
-        return acc + eurosToCents(post.valeur);
-      }, 0),
-    []
-  );
-
   const breakdownPriceCents = React.useMemo(
-    () => sumPostsCents(activePosts),
-    [activePosts, sumPostsCents]
+    () => sumLotBreakdownCents(activePosts),
+    [activePosts]
   );
 
-  const breakdownSlices = React.useMemo(() => {
-    const groups = new Map<string, { label: string; valueCents: number }>();
-    activePosts.forEach((post) => {
-      if (post.type === 'percent') return;
-      const rawKey = post.stakeholderKey ?? post.partiePrenante ?? 'autre';
-      const key = String(rawKey).trim().toLowerCase() || 'autre';
-      const label =
-        post.partiePrenante?.trim() ||
-        post.stakeholderKey?.trim() ||
-        'Autre';
-      const valueCents = eurosToCents(post.valeur);
-      const existing = groups.get(key);
-      if (existing) {
-        existing.valueCents += valueCents;
-      } else {
-        groups.set(key, { label, valueCents });
-      }
-    });
-    return Array.from(groups.values()).map((group, index) => ({
-      label: group.label,
-      value: centsToEuros(group.valueCents),
-      color: PIE_COLORS[index % PIE_COLORS.length],
-    }));
-  }, [activePosts]);
+  const breakdownSlices = React.useMemo(() => buildLotBreakdownSlices(activePosts), [activePosts]);
 
   const updateActivePosts = React.useCallback(
     (updater: (prev: RepartitionPoste[]) => RepartitionPoste[]) => {
@@ -1450,11 +1418,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         if (!activeLotId) return;
         setLotPriceBreakdownByLot((prev) => ({
           ...prev,
-          [activeLotId]: updater(prev[activeLotId] ?? []),
+          [activeLotId]: synchronizeLotBreakdownPosts(updater(prev[activeLotId] ?? [])),
         }));
         return;
       }
-      setProductPosts((prev) => updater(prev));
+      setProductPosts((prev) => synchronizeLotBreakdownPosts(updater(prev)));
     },
     [activeLotId, isLotManagement]
   );
@@ -1493,6 +1461,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const handleAddPost = () => {
     updateActivePosts((prev) => {
       const sortOrders = prev
+        .filter((post) => !isLockedLotBreakdownPost(post))
         .map((post) => (Number.isFinite(post.sortOrder) ? (post.sortOrder as number) : -1))
         .filter((value) => value >= 0);
       const nextSortOrder = sortOrders.length ? Math.max(...sortOrders) + 1 : 0;
@@ -1514,8 +1483,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const handleRemovePost = (index: number) => {
     updateActivePosts((prev) => {
       const target = prev[index];
-      if (target?.source === 'platform') {
-        toast.info('Les lignes plateforme sont verrouillees.');
+      if (target && isLockedLotBreakdownPost(target)) {
+        toast.info('Les lignes automatiques sont verrouillées.');
         return prev;
       }
       return prev.filter((_, idx) => idx !== index);
@@ -1526,7 +1495,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     updateActivePosts((prev) =>
       prev.map((post, idx) =>
         idx === index
-          ? post.source === 'platform'
+          ? isLockedLotBreakdownPost(post)
             ? post
             : {
                 ...post,
@@ -2373,7 +2342,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     const description = (draft.shortDescription || draft.longDescription || '').trim();
     const imageUrl = (draft.productImage?.url || product.imageUrl || '').trim();
     const unitValue = (localUnit || '').trim();
-    const priceCents = sumPostsCents(activePosts);
+    const priceCents = sumLotBreakdownCents(activePosts);
     const priceValue = centsToEuros(priceCents);
     const weightValue =
       typeof localWeightKg === 'number'
@@ -2535,7 +2504,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     setLocalMeasurement(product.measurement);
     setLocalUnit('');
     setLocalWeightKg(product.weightKg ?? '');
-    setProductPosts(detail.repartitionValeur?.postes ?? []);
+    setProductPosts(synchronizeLotBreakdownPosts(detail.repartitionValeur?.postes ?? []));
     clearImagePreview();
     setImageFile(null);
     setNotificationMessage('');
@@ -2925,10 +2894,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
   }, [lotDraft, lotEditMode]);
 
   const estimateLotPriceCents = React.useCallback(
-    (posts: RepartitionPoste[]) =>
-      posts
-        .filter((post) => post.source !== 'platform')
-        .reduce((acc, post) => acc + eurosToCents(post.valeur), 0),
+    (posts: RepartitionPoste[]) => sumLotBreakdownCents(posts),
     []
   );
 
@@ -3410,6 +3376,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             </p>
           )}
         </div>
+        <p className="pd-text-xs pd-text-muted">{display.repartitionValeur?.notePedagogique || LOT_BREAKDOWN_NOTE}</p>
         {isLotManagement ? (
           <div className="pd-card pd-stack pd-stack--md">
             <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
@@ -3977,7 +3944,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                       </thead>
                       <tbody>
                         {activePosts.map((post, idx) => {
-                          const isLocked = post.source === 'platform';
+                          const isLocked = isLockedLotBreakdownPost(post);
                           return (
                             <tr
                               key={`lot-post-${idx}`}

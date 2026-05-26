@@ -4,6 +4,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Copy, Printer, SlidersHorizontal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { GroupOrder, Product, ProductDetail, TimelineStep, User } from '../types';
+import {
+  LOT_BREAKDOWN_NOTE,
+  buildLotBreakdownSlices,
+  synchronizeLotBreakdownPosts,
+} from '../lib/lotPriceBreakdown';
 import { eurosToCents, formatEurosFromCents } from '../lib/money';
 import { Avatar } from './Avatar';
 import { ImageWithFallback } from './ImageWithFallback';
@@ -39,7 +44,6 @@ const PRINT_MODE_CLASS = 'share-overlay--printing';
 const PRINT_WIDTH_MM = 190;
 const PRINT_HEIGHT_MM = 277;
 const PX_PER_MM = 96 / 25.4;
-const PIE_COLORS = ['#F97316', '#FB923C', '#FACC15', '#34D399', '#38BDF8', '#818CF8'];
 const ORDER_CALENDAR_WEEKDAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const ORDER_DAY_LABELS: Record<string, string> = {
   monday: 'Lundi',
@@ -232,14 +236,7 @@ export function ShareOverlay({
 
   const productBreakdown = React.useMemo(() => {
     const rows = detail?.repartitionValeur?.postes ?? [];
-    return rows
-      .slice(0, 6)
-      .map((row) => ({
-        label: row.nom,
-        value: Number.isFinite(row.valeur) ? row.valeur : 0,
-        type: row.type,
-      }))
-      .filter((row) => row.label);
+    return buildLotBreakdownSlices(synchronizeLotBreakdownPosts(rows));
   }, [detail?.repartitionValeur?.postes]);
 
   const productBreakdownPie = React.useMemo(() => {
@@ -247,7 +244,7 @@ export function ShareOverlay({
       .map((entry) => ({
         label: entry.label,
         value: Math.max(0, entry.value),
-        type: entry.type === 'percent' ? 'percent' : 'eur',
+        color: entry.color,
       }))
       .filter((entry) => entry.value > 0);
     const totalWeight = rows.reduce((sum, entry) => sum + entry.value, 0);
@@ -255,28 +252,21 @@ export function ShareOverlay({
       return { slices: [] as Array<{
         label: string;
         value: number;
-        type: 'eur' | 'percent';
         color: string;
         percent: number;
         start: number;
         end: number;
       }>, gradient: '', totalLabel: '' };
     }
-    const totalEur = rows
-      .filter((entry) => entry.type === 'eur')
-      .reduce((sum, entry) => sum + entry.value, 0);
-    const totalLabel = rows.every((entry) => entry.type === 'percent')
-      ? '100%'
-      : formatCurrency(totalEur > 0 ? totalEur : totalWeight);
+    const totalLabel = formatCurrency(totalWeight);
     let cursor = 0;
-    const slices = rows.map((entry, index) => {
+    const slices = rows.map((entry) => {
       const percent = (entry.value / totalWeight) * 100;
       const start = cursor;
       const end = cursor + percent;
       cursor = end;
       return {
         ...entry,
-        color: PIE_COLORS[index % PIE_COLORS.length],
         percent,
         start,
         end,
@@ -856,6 +846,9 @@ export function ShareOverlay({
               <h3>Répartition du prix</h3>
               <span>{detail?.repartitionValeur?.mode === 'detaille' ? 'Montants exacts' : 'Montants estimatifs'}</span>
             </div>
+            <p className="share-overlay__body-text">
+              {detail?.repartitionValeur?.notePedagogique || LOT_BREAKDOWN_NOTE}
+            </p>
             {productBreakdownPie.slices.length ? (
               <div className="share-overlay__pie-layout">
                 <div className="share-overlay__pie-chart" style={{ backgroundImage: productBreakdownPie.gradient }}>
@@ -872,7 +865,7 @@ export function ShareOverlay({
                         <span>{slice.label}</span>
                       </div>
                       <div className="share-overlay__pie-legend-value">
-                        <strong>{slice.type === 'percent' ? `${slice.value}%` : formatCurrency(slice.value)}</strong>
+                        <strong>{formatCurrency(slice.value)}</strong>
                         <span>{slice.percent.toFixed(1)}%</span>
                       </div>
                     </li>

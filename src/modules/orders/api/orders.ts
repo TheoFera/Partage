@@ -294,6 +294,7 @@ const mapPaymentRow = (row: DbPayment): Payment => ({
   cardAmountCents: Number(row.card_amount_cents ?? row.amount_cents ?? 0),
   platformRetainedTargetCents: Number(row.platform_retained_target_cents ?? 0),
   platformServiceFeeCents: Number(row.platform_service_fee_cents ?? 0),
+  paymentProviderRetainedCents: Number(row.payment_provider_retained_cents ?? 0),
   sharerValueCents: Number(row.sharer_value_cents ?? 0),
   platformDeliveryRetainedCents: Number(row.platform_delivery_retained_cents ?? 0),
   producerDeliveryCents: Number(row.producer_delivery_cents ?? 0),

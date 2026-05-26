@@ -1,6 +1,7 @@
 import React from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { eurosToCents } from '../../../shared/lib/money';
+import { sumLotBreakdownCents, synchronizeLotBreakdownPosts } from '../../../shared/lib/lotPriceBreakdown';
 import type {
   DbLot,
   DbLotLabel,
@@ -67,26 +68,28 @@ const resolveLatestPlanningLot = (lots: Omit<ProducerLotsPlanningLot, 'laneIndex
 };
 
 const mapBreakdownRowsToPosts = (rows: DbLotPriceBreakdown[]): RepartitionPoste[] =>
-  rows
-    .slice()
-    .sort((a, b) => a.sort_order - b.sort_order)
-    .map((entry) => ({
-      id: entry.id,
-      lotId: entry.lot_id,
-      partiePrenante: entry.stakeholder ?? undefined,
-      stakeholderKey: entry.stakeholder_key ?? undefined,
-      platformCostCode: entry.platform_cost_code ?? undefined,
-      source: entry.source ?? 'producer',
-      nom: entry.label,
-      valeur: (entry.value_cents ?? 0) / 100,
-      type: 'eur',
-      sortOrder: entry.sort_order,
-    }));
+  synchronizeLotBreakdownPosts(
+    rows
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((entry) => ({
+        id: entry.id,
+        lotId: entry.lot_id,
+        partiePrenante: entry.stakeholder ?? undefined,
+        stakeholderKey: entry.stakeholder_key ?? undefined,
+        platformCostCode: entry.platform_cost_code ?? undefined,
+        source: entry.source ?? 'producer',
+        nom: entry.label,
+        valeur: (entry.value_cents ?? 0) / 100,
+        type: 'eur',
+        sortOrder: entry.sort_order,
+      }))
+  );
 
 const resolveBreakdownPriceCents = (rows: DbLotPriceBreakdown[]) => {
-  const producerRows = rows.filter((row) => row.source !== 'platform');
-  if (!producerRows.length) return null;
-  return producerRows.reduce((total, row) => total + Math.max(0, row.value_cents ?? 0), 0);
+  const normalizedPosts = mapBreakdownRowsToPosts(rows);
+  const totalCents = sumLotBreakdownCents(normalizedPosts);
+  return totalCents > 0 ? totalCents : null;
 };
 
 export function useProducerLotsPlanning({

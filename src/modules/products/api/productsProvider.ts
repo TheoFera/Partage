@@ -1,6 +1,7 @@
 ﻿import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
 import { centsToEuros } from '../../../shared/lib/money';
+import { LOT_BREAKDOWN_NOTE, synchronizeLotBreakdownPosts } from '../../../shared/lib/lotPriceBreakdown';
 import { fetchLotByLotCode } from '../utils/pricing';
 import { mapDbLotToProductionLot } from '../utils/lots';
 import {
@@ -229,23 +230,25 @@ const mapPriceBreakdown = (
   unitReference: RepartitionValeur['uniteReference']
 ): RepartitionValeur | undefined => {
   if (!breakdown.length) return undefined;
-  const postes: RepartitionPoste[] = breakdown
-    .slice()
-    .sort((a, b) => a.sort_order - b.sort_order)
-    .map((entry) => {
-      return {
-        id: entry.id,
-        lotId: entry.lot_id,
-        partiePrenante: entry.stakeholder ?? undefined,
-        stakeholderKey: entry.stakeholder_key ?? undefined,
-        platformCostCode: entry.platform_cost_code ?? undefined,
-        source: entry.source ?? 'producer',
-        nom: entry.label,
-        valeur: centsToEuros(entry.value_cents ?? 0),
-        type: 'eur',
-        sortOrder: entry.sort_order,
-      };
-    });
+  const postes: RepartitionPoste[] = synchronizeLotBreakdownPosts(
+    breakdown
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((entry) => {
+        return {
+          id: entry.id,
+          lotId: entry.lot_id,
+          partiePrenante: entry.stakeholder ?? undefined,
+          stakeholderKey: entry.stakeholder_key ?? undefined,
+          platformCostCode: entry.platform_cost_code ?? undefined,
+          source: entry.source ?? 'producer',
+          nom: entry.label,
+          valeur: centsToEuros(entry.value_cents ?? 0),
+          type: 'eur',
+          sortOrder: entry.sort_order,
+        };
+      })
+  );
 
   return {
     mode: 'detaille',
@@ -255,6 +258,7 @@ const mapPriceBreakdown = (
         ? centsToEuros(lotPriceCents)
         : undefined,
     postes,
+    notePedagogique: LOT_BREAKDOWN_NOTE,
   };
 };
 

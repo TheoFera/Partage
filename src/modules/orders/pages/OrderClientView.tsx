@@ -1422,7 +1422,6 @@ const sharerAvatarUpdatedAt =
     () => paidPayments.reduce((sum, payment) => sum + payment.amountCents, 0),
     [paidPayments]
   );
-  const paidPaymentCount = paidPayments.length;
   const paymentFeeTotals = React.useMemo(() => {
     return paidPayments.reduce(
       (acc, payment) => {
@@ -1440,8 +1439,16 @@ const sharerAvatarUpdatedAt =
     );
   }, [paidPayments]);
   const paymentFeeCents = paymentFeeTotals.feeTtc;
-  const paymentFeeVatCents = paymentFeeTotals.feeVat;
-  const paymentFeeHtCents = paymentFeeTotals.feeHt;
+  const paymentProviderRetainedCents = React.useMemo(
+    () =>
+      paidPayments.reduce(
+        (sum, payment) => sum + Math.max(0, Number(payment.paymentProviderRetainedCents ?? 0)),
+        0
+      ),
+    [paidPayments]
+  );
+  const producerStatementPaymentProviderCents =
+    paymentProviderRetainedCents > 0 ? paymentProviderRetainedCents : paymentFeeCents;
   const baseDeliveryFeeCents = Math.max(0, Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0);
   const deliveryFeeToProducerCents = order.deliveryOption === 'producer_delivery' ? baseDeliveryFeeCents : 0;
   const deliveryFeeToPlatformCents = order.deliveryOption === 'chronofresh' ? baseDeliveryFeeCents : 0;
@@ -2444,7 +2451,11 @@ const sharerAvatarUpdatedAt =
       isProducerStatementLoading || participantCoopUsedFromSource === null || participantCoopUsedFromSource === undefined;
 
     const totalDeductionsCents =
-      platformCommissionCents + paymentFeeCents + sharerDiscountCents + coopSurplusCents + participantGainsCents;
+      platformCommissionCents +
+      producerStatementPaymentProviderCents +
+      sharerDiscountCents +
+      coopSurplusCents +
+      participantGainsCents;
     const transferToProducerCents = Math.max(0, totalStatementBaseCents - totalDeductionsCents);
     const remainingToCollectAfterCoopCents = isRemainingToCollectEstimated
       ? 0
@@ -2478,7 +2489,7 @@ const sharerAvatarUpdatedAt =
       participantGainsCents,
       participantGainsReference,
       participantGainsEstimated: isParticipantGainsEstimated,
-      paymentFeeTtcCents: paymentFeeCents,
+      paymentProviderRetainedCents: producerStatementPaymentProviderCents,
       deliveryFeeToPlatformCents,
       transferToProducerCents,
       remainingToCollectCents: remainingToCollectAfterCoopCents,
@@ -2487,7 +2498,7 @@ const sharerAvatarUpdatedAt =
     deliveryFeeToPlatformCents,
     deliveryRoundingDeltaCents,
     isProducerStatementLoading,
-    paymentFeeCents,
+    producerStatementPaymentProviderCents,
     statementBaseTotalCents,
     platformShareCents,
     producerStatementSources,
@@ -3484,10 +3495,10 @@ const sharerAvatarUpdatedAt =
                       </div>
                       <div className="order-client-view__statement-row order-client-view__statement-row--detail">
                         <span className="order-client-view__statement-label">
-                          Frais de paiement en ligne Stripe
+                          Prestataire de paiement
                         </span>
                         <span className="order-client-view__statement-value">
-                          -{formatEurosFromCents(producerStatementData.paymentFeeTtcCents)}
+                          -{formatEurosFromCents(producerStatementData.paymentProviderRetainedCents)}
                         </span>
                       </div>
                       <div className="order-client-view__statement-row">

@@ -85,6 +85,10 @@ Deno.serve(async (req) => {
     form.append("metadata[card_amount_cents]", String(paymentBreakdown.card_amount_cents));
     form.append("metadata[platform_retained_target_cents]", String(paymentBreakdown.platform_retained_target_cents));
     form.append(
+      "metadata[payment_provider_retained_cents]",
+      String(paymentBreakdown.payment_provider_retained_cents),
+    );
+    form.append(
       "metadata[stripe_application_fee_amount_cents]",
       String(paymentBreakdown.stripe_application_fee_amount_cents),
     );
@@ -107,6 +111,10 @@ Deno.serve(async (req) => {
     form.append(
       "payment_intent_data[metadata][platform_retained_target_cents]",
       String(paymentBreakdown.platform_retained_target_cents),
+    );
+    form.append(
+      "payment_intent_data[metadata][payment_provider_retained_cents]",
+      String(paymentBreakdown.payment_provider_retained_cents),
     );
     form.append(
       "payment_intent_data[metadata][stripe_application_fee_amount_cents]",

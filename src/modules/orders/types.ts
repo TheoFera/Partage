@@ -178,6 +178,7 @@ export type DbPayment = {
   card_amount_cents?: number;
   platform_retained_target_cents?: number;
   platform_service_fee_cents?: number;
+  payment_provider_retained_cents?: number;
   sharer_value_cents?: number;
   platform_delivery_retained_cents?: number;
   producer_delivery_cents?: number;
@@ -430,6 +431,7 @@ export type Payment = {
   cardAmountCents: number;
   platformRetainedTargetCents: number;
   platformServiceFeeCents: number;
+  paymentProviderRetainedCents: number;
   sharerValueCents: number;
   platformDeliveryRetainedCents: number;
   producerDeliveryCents: number;

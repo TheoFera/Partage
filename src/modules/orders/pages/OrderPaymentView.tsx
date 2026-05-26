@@ -78,6 +78,10 @@ const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined):
   producerNetTargetCents: Math.max(0, Math.round(Number(value?.producer_net_target_cents ?? 0) || 0)),
   platformRetainedTargetCents: Math.max(0, Math.round(Number(value?.platform_retained_target_cents ?? 0) || 0)),
   platformServiceFeeCents: Math.max(0, Math.round(Number(value?.platform_service_fee_cents ?? 0) || 0)),
+  paymentProviderRetainedCents: Math.max(
+    0,
+    Math.round(Number(value?.payment_provider_retained_cents ?? 0) || 0)
+  ),
   sharerValueCents: Math.max(0, Math.round(Number(value?.sharer_value_cents ?? 0) || 0)),
   platformDeliveryRetainedCents: Math.max(
     0,

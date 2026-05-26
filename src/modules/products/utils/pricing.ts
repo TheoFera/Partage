@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DbLot, DbLotPriceBreakdown, RepartitionPoste } from '../../../shared/types';
 import { eurosToCents } from '../../../shared/lib/money';
+import { isLockedLotBreakdownPost } from '../../../shared/lib/lotPriceBreakdown';
 
 export const fetchLotByLotCode = async (
   client: SupabaseClient,
@@ -34,7 +35,7 @@ export const saveProducerLotBreakdown = async (
 ): Promise<{ breakdown: DbLotPriceBreakdown[]; lot: DbLot | null }> => {
   const defaultStakeholder = options?.defaultStakeholder ?? 'Producteur';
   const defaultStakeholderKey = options?.defaultStakeholderKey ?? 'producer';
-  const producerLines = draftLines.filter((line) => line.source !== 'platform');
+  const producerLines = draftLines.filter((line) => !isLockedLotBreakdownPost(line));
 
   const { data: existingRows, error: existingError } = await client
     .from('lot_price_breakdown')

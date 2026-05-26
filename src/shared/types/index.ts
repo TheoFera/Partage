@@ -119,6 +119,7 @@ export interface PaymentBreakdown {
   producerNetTargetCents: number;
   platformRetainedTargetCents: number;
   platformServiceFeeCents: number;
+  paymentProviderRetainedCents: number;
   sharerValueCents: number;
   platformDeliveryRetainedCents: number;
   producerDeliveryCents: number;
@@ -371,7 +372,7 @@ export interface RepartitionPoste {
   partiePrenante?: string;
   stakeholderKey?: string;
   platformCostCode?: string;
-  source?: 'producer' | 'platform';
+  source?: 'producer' | 'platform' | 'payment_provider';
   sortOrder?: number;
   nom: string;
   valeur: number;
@@ -695,7 +696,7 @@ export interface DbLotPriceBreakdown {
   lot_id: string;
   stakeholder: string | null;
   stakeholder_key?: string | null;
-  source?: 'producer' | 'platform';
+  source?: 'producer' | 'platform' | 'payment_provider';
   platform_cost_code?: string | null;
   label: string;
   value_type: 'cents' | 'percent';
