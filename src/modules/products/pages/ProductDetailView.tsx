@@ -83,6 +83,11 @@ interface ProductDetailViewProps {
   timelineExtraSteps?: TimelineStep[];
   mode?: 'view' | 'create';
   onCreateProduct?: (payload: CreateProductPayload) => Promise<void> | void;
+  onProductUpdated?: (payload: {
+    product: Product;
+    detail: ProductDetail;
+    activeLotCode?: string | null;
+  }) => Promise<void> | void;
   createDraftStorageKey?: string;
   categoryOptions?: string[];
   producerProfileLabels?: ProducerLabelDetail[];
@@ -585,6 +590,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   timelineExtraSteps,
   mode = 'view',
   onCreateProduct,
+  onProductUpdated,
   createDraftStorageKey,
   categoryOptions,
   producerProfileLabels,
@@ -2344,7 +2350,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       <span>
         {isCreateMode
           ? 'Création du produit : renseignez les champs pour publier.'
-          : 'Mode editeur : éditez le produit (actuellement sauvegarde fictive pour le prototype).'}
+          : 'Mode éditeur : éditez le produit puis enregistrez vos modifications.'}
       </span>
     </div>
   );
@@ -2698,6 +2704,21 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
     }
 
     const saleUnit = localMeasurement === 'kg' ? 'kg' : 'unit';
+    const nameValue = (draft.name || '').trim();
+    if (!nameValue) {
+      toast.error('Ajoutez un nom de produit.');
+      return;
+    }
+    const categoryValue = normalizedDraftCategory;
+    if (!categoryValue) {
+      toast.error('Ajoutez une catégorie.');
+      return;
+    }
+    if (!availableCategories.includes(categoryValue)) {
+      toast.error('Choisissez une catégorie dans la liste.');
+      return;
+    }
+    const descriptionValue = (draft.longDescription || draft.shortDescription || '').trim();
     const unitValue = (localUnit || '').trim();
     const packagingValue = unitValue || (saleUnit === 'kg' ? 'kg' : 'piece');
     const weightValue =
@@ -2725,6 +2746,10 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       const { error: updateError } = await supabaseClient
         .from('products')
         .update({
+          slug: slugify(nameValue) || productCode,
+          name: nameValue,
+          description: descriptionValue || null,
+          category: categoryValue,
           packaging: packagingValue,
           sale_unit: saleUnit,
           unit_weight_kg: saleUnit === 'unit' ? weightValue : null,
@@ -2737,10 +2762,43 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
 
       const persistedTimeline = await persistJourneySteps(productRow.id);
       setTimelineOverride(persistedTimeline ?? localTimeline);
+      const nextProduct: Product = {
+        ...product,
+        name: nameValue,
+        slug: slugify(nameValue) || product.slug,
+        description: descriptionValue,
+        category: categoryValue,
+        unit: packagingValue,
+        measurement: localMeasurement,
+        weightKg: saleUnit === 'unit' ? weightValue ?? undefined : undefined,
+        vatRate: vatRateValue,
+      };
+      const nextDetail: ProductDetail = {
+        ...detail,
+        ...draft,
+        productId: product.productCode ?? product.id,
+        name: nameValue,
+        category: categoryValue,
+        shortDescription: descriptionValue,
+        longDescription: descriptionValue,
+        vatRate: vatRateValue,
+        tracabilite: {
+          ...(detail.tracabilite ?? {}),
+          ...(draft.tracabilite ?? {}),
+          timeline: persistedTimeline ?? localTimeline,
+        },
+      };
+      await Promise.resolve(
+        onProductUpdated?.({
+          product: nextProduct,
+          detail: nextDetail,
+          activeLotCode: product.activeLotCode ?? null,
+        })
+      );
       setEditMode(false);
       toast.success('Modifications enregistrées.');
       if (notifyFollowers && !notificationMessage.trim()) {
-        toast.error('Ajoutez un message de notification pour prevenir les abonnés.');
+        toast.error('Ajoutez un message de notification pour prévenir les abonnés.');
       }
     } catch (error) {
       console.error('Product update error:', error);

@@ -502,6 +502,12 @@ type ProductShareContext = {
   sharePath?: string;
 };
 
+type UpdatedProductPayload = {
+  product: Product;
+  detail: ProductDetail;
+  activeLotCode?: string | null;
+};
+
 type ShareOverlayKind = 'order' | 'product' | 'profile' | 'generic';
 
 type ShareOverlayPayload =
@@ -1322,6 +1328,7 @@ type ProductRouteViewProps = {
   onShareProduct: (product: Product, context?: ProductShareContext) => void;
   onShareContextChange?: (context: ProductShareContext | null) => void;
   onSearchProductOrders?: (product: Product) => void;
+  onProductUpdated?: (payload: UpdatedProductPayload) => Promise<void> | void;
 };
 
 const ProductRouteView: React.FC<ProductRouteViewProps> = ({
@@ -1341,6 +1348,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
   onShareProduct,
   onShareContextChange,
   onSearchProductOrders,
+  onProductUpdated,
 }) => {
   const params = useParams<{
     id?: string;
@@ -1401,6 +1409,16 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
       }
     },
     [onAddToDeck, onRemoveFromDeck, product]
+  );
+
+  const handleProductUpdated = React.useCallback(
+    async (payload: UpdatedProductPayload) => {
+      setProduct(payload.product);
+      setDetail(payload.detail);
+      setActiveLotCode(payload.activeLotCode ?? null);
+      await Promise.resolve(onProductUpdated?.(payload));
+    },
+    [onProductUpdated]
   );
 
   React.useEffect(() => {
@@ -1701,6 +1719,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
       onCreateOrder={() => onStartOrderFromProduct(product)}
       onParticipate={handleParticipate}
       onToggleSave={canSaveProduct ? handleToggleSave : undefined}
+      onProductUpdated={handleProductUpdated}
       initialLotId={lotCode ?? activeLotCode ?? undefined}
       timelineExtraSteps={orderTimelineStep ? [orderTimelineStep] : undefined}
     />
@@ -1828,6 +1847,45 @@ export default function App() {
       console.warn('Products listing error:', error);
       setProducts([]);
     }
+  }, []);
+  const handleProductUpdated = React.useCallback((payload: UpdatedProductPayload) => {
+    const productKey = payload.product.productCode ?? payload.product.id;
+    setProducts((prev) =>
+      prev.map((item) =>
+        item.productCode === productKey || item.id === productKey || item.dbId === payload.product.dbId
+          ? { ...item, ...payload.product }
+          : item
+      )
+    );
+    setCreatedProductDetails((prev) => {
+      if (!prev[productKey]) return prev;
+      return {
+        ...prev,
+        [productKey]: {
+          ...payload.detail,
+          productId: productKey,
+          name: payload.product.name,
+          category: payload.product.category,
+        },
+      };
+    });
+    setDeck((prev) =>
+      prev.map((card) =>
+        card.productCode === productKey || card.id === productKey || card.dbId === payload.product.dbId
+          ? { ...card, ...payload.product }
+          : card
+      )
+    );
+    setProductShareContext((prev) => {
+      if (!prev) return prev;
+      const contextKey = prev.product.productCode ?? prev.product.id;
+      if (contextKey !== productKey) return prev;
+      return {
+        ...prev,
+        product: payload.product,
+        detail: payload.detail,
+      };
+    });
   }, []);
   React.useEffect(() => {
     void reloadProducts();
@@ -5166,6 +5224,7 @@ export default function App() {
                 onShareProduct={openProductShare}
                 onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
+                onProductUpdated={handleProductUpdated}
               />
             }
           />
@@ -5189,6 +5248,7 @@ export default function App() {
                 onShareProduct={openProductShare}
                 onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
+                onProductUpdated={handleProductUpdated}
               />
             }
           />
@@ -5212,6 +5272,7 @@ export default function App() {
                 onShareProduct={openProductShare}
                 onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
+                onProductUpdated={handleProductUpdated}
               />
             }
           />
@@ -5235,6 +5296,7 @@ export default function App() {
                 onShareProduct={openProductShare}
                 onShareContextChange={setProductShareContext}
                 onSearchProductOrders={handleSearchProductOrders}
+                onProductUpdated={handleProductUpdated}
               />
             }
           />
