@@ -38,6 +38,7 @@ import {
 import { Avatar } from '../../../shared/ui/Avatar';
 import { AvatarUploader } from '../components/AvatarUploader';
 import { LotsPlanningTab } from '../components/LotsPlanningTab';
+import { useProducerLotsPlanning } from '../hooks/useProducerLotsPlanning';
 import { ProductGroupContainer, ProductGroupDescriptor, ProductResultCard } from '../../products/components/ProductGroup';
 import { toast } from 'sonner';
 import {
@@ -681,6 +682,15 @@ React.useEffect(() => {
   }, [orders, isOwnProfile, profileMetaById]);
 
   const productCount = producerProducts.length;
+  const { items: lotsPlanningItems } = useProducerLotsPlanning({
+    enabled: isOwnProfile && isProducerProfile,
+    products: producerProducts,
+    supabaseClient,
+  });
+  const activeLotsCount = lotsPlanningItems.reduce(
+    (count, item) => count + item.lots.filter((lot) => lot.lot.statut === 'en_cours').length,
+    0
+  );
   const ordersCount = orderGroups.length;
   const selectionCount = deck.length;
 
@@ -688,7 +698,7 @@ React.useEffect(() => {
     products: { value: productCount, meta: '' },
     orders: { value: ordersCount, meta: '' },
     selection: { value: selectionCount, meta: '' },
-    lots_planning: { value: productCount, meta: '' },
+    lots_planning: { value: activeLotsCount, meta: '' },
   };
 
   const tabOptions = React.useMemo(
@@ -816,6 +826,7 @@ React.useEffect(() => {
                   onCreateOrder={onStartOrderFromProduct}
                   onOpen={handleOpenProduct}
                   showSelectionControl={selectionActionsEnabled}
+                  allowDisplayPriceWithoutActiveLot
                 />
               ))}
               {addProductCard}

@@ -266,6 +266,7 @@ export function ProductResultCard({
   compact = false,
   cardWidth = CARD_WIDTH,
   priceLabelOverride,
+  allowDisplayPriceWithoutActiveLot = false,
 }: {
   product: Product;
   related: Product[];
@@ -281,6 +282,7 @@ export function ProductResultCard({
   compact?: boolean;
   cardWidth?: number | string;
   priceLabelOverride?: string;
+  allowDisplayPriceWithoutActiveLot?: boolean;
 }) {
   const [heartPulse, setHeartPulse] = React.useState(false);
   const [selected, setSelected] = React.useState(inDeck);
@@ -288,7 +290,7 @@ export function ProductResultCard({
     setSelected(inDeck);
   }, [inDeck]);
   const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
-  const hasPrice = hasValidLotPrice(product);
+  const hasPrice = allowDisplayPriceWithoutActiveLot ? Number(product.price) > 0 : hasValidLotPrice(product);
   const priceLabel =
     priceLabelOverride ?? (hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir');
   const canShowPriceDetails = Boolean(priceLabelOverride) || hasPrice;

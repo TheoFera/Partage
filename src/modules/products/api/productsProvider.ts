@@ -85,7 +85,7 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
   const measurement = row.sale_unit === 'kg' ? 'kg' : 'unit';
   const quantity = measurement === 'kg' ? toNumber(row.active_lot_stock_kg) : toNumber(row.active_lot_stock_units);
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
-  const priceCents = row.active_lot_price_cents ?? 0;
+  const priceCents = row.active_lot_price_cents ?? row.display_price_cents ?? 0;
   const imageUrl = buildImageUrl(client, row.primary_image_path);
   const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
 
