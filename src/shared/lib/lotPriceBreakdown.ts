@@ -11,10 +11,18 @@ export const LOT_BREAKDOWN_COLORS = {
 } as const;
 
 export const LOT_BREAKDOWN_NOTE =
-  "Le producteur fixe son prix de base. La plateforme ajoute ensuite automatiquement sa commission et l'estimation du paiement en ligne.";
+  "Le producteur fixe son prix de base. La plateforme ajoute ensuite automatiquement sa commission. Le coût estimatif du paiement en ligne est calculé sur le total prix producteur + commission plateforme, puis déduit de la part du producteur sans diminuer la commission de la plateforme.";
 
 export type LotBreakdownSource = NonNullable<RepartitionPoste['source']>;
 export type LotBreakdownGroupKey = 'producer' | 'platform' | 'payment_provider';
+
+type LotBreakdownTotals = {
+  producerGrossCents: number;
+  producerNetCents: number;
+  platformFeeCents: number;
+  paymentProviderFeeCents: number;
+  consumerTotalCents: number;
+};
 
 const roundCentsFromPercent = (baseCents: number, percent: number) =>
   Math.max(0, Math.round(baseCents * (percent / 100)));
@@ -42,14 +50,98 @@ export const getLotBreakdownGroupMeta = (key: LotBreakdownGroupKey) => {
   if (key === 'payment_provider') {
     return { label: 'Prestataire de paiement', color: LOT_BREAKDOWN_COLORS.payment_provider };
   }
-  return { label: 'Prix fixé par le producteur', color: LOT_BREAKDOWN_COLORS.producer };
+  return { label: 'Part producteur', color: LOT_BREAKDOWN_COLORS.producer };
 };
 
-export const sumLotBreakdownCents = (posts: RepartitionPoste[]) =>
+const sumPostValuesCents = (posts: RepartitionPoste[]) =>
   posts.reduce((sum, post) => {
     if (post.type === 'percent') return sum;
     return sum + Math.max(0, eurosToCents(post.valeur));
   }, 0);
+
+export const computeLotBreakdownTotals = (posts: RepartitionPoste[]): LotBreakdownTotals => {
+  const producerPosts = posts.filter((post) => getLotBreakdownGroupKey(post) === 'producer');
+  const platformPosts = posts.filter((post) => getLotBreakdownGroupKey(post) === 'platform');
+  const paymentProviderPosts = posts.filter((post) => getLotBreakdownGroupKey(post) === 'payment_provider');
+  const producerGrossCents = sumPostValuesCents(producerPosts);
+  const platformFeeCents = sumPostValuesCents(platformPosts);
+  const paymentProviderFeeCents = sumPostValuesCents(paymentProviderPosts);
+  const producerNetCents = Math.max(0, producerGrossCents - paymentProviderFeeCents);
+  const consumerTotalCents = producerGrossCents + platformFeeCents;
+
+  return {
+    producerGrossCents,
+    producerNetCents,
+    platformFeeCents,
+    paymentProviderFeeCents,
+    consumerTotalCents,
+  };
+};
+
+export const sumLotBreakdownCents = (posts: RepartitionPoste[]) => computeLotBreakdownTotals(posts).consumerTotalCents;
+
+const distributeCentsProportionally = (totalCents: number, weights: number[]) => {
+  if (totalCents <= 0 || !weights.length) {
+    return weights.map(() => 0);
+  }
+  const safeWeights = weights.map((weight) => Math.max(0, weight));
+  const totalWeight = safeWeights.reduce((sum, weight) => sum + weight, 0);
+  if (totalWeight <= 0) {
+    return safeWeights.map((_, index) => (index === 0 ? totalCents : 0));
+  }
+
+  const scaled = safeWeights.map((weight, index) => {
+    const raw = (totalCents * weight) / totalWeight;
+    const floorValue = Math.floor(raw);
+    return {
+      index,
+      value: floorValue,
+      remainder: raw - floorValue,
+    };
+  });
+  let remaining = totalCents - scaled.reduce((sum, entry) => sum + entry.value, 0);
+  scaled
+    .slice()
+    .sort((left, right) => {
+      if (right.remainder !== left.remainder) return right.remainder - left.remainder;
+      return left.index - right.index;
+    })
+    .forEach((entry) => {
+      if (remaining <= 0) return;
+      scaled[entry.index].value += 1;
+      remaining -= 1;
+    });
+
+  return scaled.map((entry) => entry.value);
+};
+
+export const buildReadonlyLotBreakdownPosts = (posts: RepartitionPoste[]) => {
+  const producerPosts = posts.filter((post) => getLotBreakdownGroupKey(post) === 'producer');
+  if (!producerPosts.length) return posts;
+
+  const totals = computeLotBreakdownTotals(posts);
+  if (totals.paymentProviderFeeCents <= 0 || totals.producerGrossCents <= 0) {
+    return posts;
+  }
+
+  const producerNetValues = distributeCentsProportionally(
+    totals.producerNetCents,
+    producerPosts.map((post) => Math.max(0, eurosToCents(post.valeur))),
+  );
+  let producerIndex = 0;
+
+  return posts.map((post) => {
+    if (getLotBreakdownGroupKey(post) !== 'producer' || post.type === 'percent') {
+      return post;
+    }
+    const valueCents = producerNetValues[producerIndex] ?? 0;
+    producerIndex += 1;
+    return {
+      ...post,
+      valeur: centsToEuros(valueCents),
+    };
+  });
+};
 
 export const synchronizeLotBreakdownPosts = (
   posts: RepartitionPoste[],
@@ -64,7 +156,7 @@ export const synchronizeLotBreakdownPosts = (
   const platformFeePercent = options?.platformFeePercent ?? DEFAULT_PLATFORM_FEE_PERCENT;
   const paymentProviderFeePercent =
     options?.paymentProviderFeePercent ?? DEFAULT_PAYMENT_PROVIDER_FEE_PERCENT;
-  const producerSubtotalCents = sumLotBreakdownCents(producerPosts);
+  const producerSubtotalCents = sumPostValuesCents(producerPosts);
   const nextSortOrderBase = producerPosts.reduce((max, post, index) => {
     const sortOrder = Number.isFinite(post.sortOrder) ? Number(post.sortOrder) : index;
     return Math.max(max, sortOrder);
@@ -128,16 +220,14 @@ export const synchronizeLotBreakdownPosts = (
 };
 
 export const buildLotBreakdownSlices = (posts: RepartitionPoste[]) => {
-  const groups = new Map<LotBreakdownGroupKey, number>();
-  posts.forEach((post) => {
-    if (post.type === 'percent') return;
-    const cents = Math.max(0, eurosToCents(post.valeur));
-    if (cents <= 0) return;
-    const key = getLotBreakdownGroupKey(post);
-    groups.set(key, (groups.get(key) ?? 0) + cents);
-  });
+  const totals = computeLotBreakdownTotals(posts);
+  const entries: Array<{ key: LotBreakdownGroupKey; valueCents: number }> = [
+    { key: 'producer', valueCents: totals.producerNetCents },
+    { key: 'platform', valueCents: totals.platformFeeCents },
+    { key: 'payment_provider', valueCents: totals.paymentProviderFeeCents },
+  ].filter((entry) => entry.valueCents > 0);
 
-  return Array.from(groups.entries()).map(([key, valueCents]) => {
+  return entries.map(({ key, valueCents }) => {
     const meta = getLotBreakdownGroupMeta(key);
     return {
       key,

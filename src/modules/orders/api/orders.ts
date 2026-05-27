@@ -1560,7 +1560,7 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
   const orderIds = rows.map((row) => row.id);
   const { data: orderProductsRows, error: orderProductsError } = await client
     .from('order_products')
-    .select('order_id, product_id, sort_order')
+    .select('order_id, product_id, sort_order, unit_label, unit_weight_kg, unit_base_price_cents')
     .in('order_id', orderIds);
   if (orderProductsError) throw orderProductsError;
   const { data: orderPickupSlotsRows, error: orderPickupSlotsError } = await client
@@ -1573,15 +1573,30 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
     order_id: string;
     product_id: string;
     sort_order: number | null;
+    unit_label: string | null;
+    unit_weight_kg: number | null;
+    unit_base_price_cents: number | null;
   }>) ?? [];
 
   const orderProductMap = new Map<
     string,
-    Array<{ productId: string; sortOrder: number | null }>
+    Array<{
+      productId: string;
+      sortOrder: number | null;
+      unitLabel: string | null;
+      unitWeightKg: number | null;
+      unitBasePriceCents: number | null;
+    }>
   >();
   orderProducts.forEach((row) => {
     const list = orderProductMap.get(row.order_id) ?? [];
-    list.push({ productId: row.product_id, sortOrder: row.sort_order });
+    list.push({
+      productId: row.product_id,
+      sortOrder: row.sort_order,
+      unitLabel: row.unit_label,
+      unitWeightKg: row.unit_weight_kg,
+      unitBasePriceCents: row.unit_base_price_cents,
+    });
     orderProductMap.set(row.order_id, list);
   });
 
@@ -1667,6 +1682,15 @@ const buildGroupOrdersFromRows = async (client: SupabaseClient, rows: DbOrder[])
         if (!product) return null;
         return {
           ...product,
+          price:
+            Number.isFinite(entry.unitBasePriceCents ?? NaN) && (entry.unitBasePriceCents ?? 0) > 0
+              ? centsToEuros(entry.unitBasePriceCents ?? 0)
+              : product.price,
+          unit: entry.unitLabel?.trim() || product.unit,
+          weightKg:
+            Number.isFinite(entry.unitWeightKg ?? NaN) && (entry.unitWeightKg ?? 0) > 0
+              ? entry.unitWeightKg ?? undefined
+              : product.weightKg,
           producerProfileCity: producerProfile?.city ?? null,
           producerProfilePostcode: producerProfile?.postcode ?? null,
         } satisfies Product;

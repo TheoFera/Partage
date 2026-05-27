@@ -541,7 +541,7 @@ export function ProductGroupContainer({
         : 0;
     const labels: Record<string, string> = {};
     group.products.forEach((product) => {
-      if (!hasValidLotPrice(product)) return;
+      if (!(Number(product.price) > 0)) return;
       const unitWeightKg = getProductWeightKg(product);
       const basePriceCents = eurosToCents(product.price);
       const unitDeliveryCents = Math.round(feePerKg * unitWeightKg);

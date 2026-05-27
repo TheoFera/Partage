@@ -29,6 +29,7 @@ import './ProductDetailView.css';
 import { generateBase62Code } from '../utils/codeGenerator';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
 import {
+  buildReadonlyLotBreakdownPosts,
   LOT_BREAKDOWN_NOTE,
   buildLotBreakdownSlices,
   isLockedLotBreakdownPost,
@@ -1409,6 +1410,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     () => sumLotBreakdownCents(activePosts),
     [activePosts]
   );
+  const readonlyBreakdownPosts = React.useMemo(() => buildReadonlyLotBreakdownPosts(activePosts), [activePosts]);
 
   const breakdownSlices = React.useMemo(() => buildLotBreakdownSlices(activePosts), [activePosts]);
 
@@ -3376,7 +3378,6 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
             </p>
           )}
         </div>
-        <p className="pd-text-xs pd-text-muted">{display.repartitionValeur?.notePedagogique || LOT_BREAKDOWN_NOTE}</p>
         {isLotManagement ? (
           <div className="pd-card pd-stack pd-stack--md">
             <div className="pd-row pd-row--between pd-row--wrap pd-gap-sm">
@@ -4026,7 +4027,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   </tr>
                 </thead>
                 <tbody>
-                  {activePosts.map((post, idx) => (
+                  {readonlyBreakdownPosts.map((post, idx) => (
                     <tr key={`${post.nom}-${idx}`} className="pd-table__row">
                       <td className="pd-table__cell">
                         <span className="pd-text-body">{post.partiePrenante || '-'}</span>
