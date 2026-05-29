@@ -375,6 +375,7 @@ export function CreateOrderForm({
   const pickupDateSlotsTouchedRef = React.useRef(false);
 
   const producerLegal = producer?.legalEntity;
+  const availableProducts = React.useMemo(() => products.filter(hasValidLotPrice), [products]);
   const deliveryOptionConfig = React.useMemo(
     () => ({
       chronofresh: {
@@ -475,12 +476,12 @@ export function CreateOrderForm({
   );
   const producerProfileIds = React.useMemo(() => {
     const ids = new Set<string>();
-    products.forEach((product) => {
+    availableProducts.forEach((product) => {
       if (isUuid(product.producerId)) ids.add(product.producerId);
     });
     if (producer?.id && isUuid(producer.id)) ids.add(producer.id);
     return Array.from(ids);
-  }, [products, producer?.id]);
+  }, [availableProducts, producer?.id]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -689,7 +690,7 @@ export function CreateOrderForm({
     shouldCheckDeliveryZone,
   ]);
 
-  const selectedProductsData = products.filter((p) => selectedProducts.includes(p.id));
+  const selectedProductsData = availableProducts.filter((p) => selectedProducts.includes(p.id));
   const deliveryOptionStates = React.useMemo(() => {
     const orderMinWeight = Number.isFinite(minWeight) ? minWeight : 0;
     const orderMaxWeight = Number.isFinite(maxWeight) ? maxWeight : 0;
@@ -1160,7 +1161,7 @@ export function CreateOrderForm({
   const selectedDeliveryOptionState = deliveryOptionStates[deliveryOption];
   const isDeliveryOptionValid = selectedDeliveryOptionState?.eligible ?? true;
 
-  const groupedByProducer = products.reduce((acc, card) => {
+  const groupedByProducer = availableProducts.reduce((acc, card) => {
     const producerId = card.producerId;
     if (!acc[producerId]) {
       acc[producerId] = {
@@ -1239,14 +1240,15 @@ export function CreateOrderForm({
   React.useEffect(() => {
     if (preselectedProductIds && preselectedProductIds.length > 0) {
       setSelectedProducts((prev) => {
-        const validPrev = prev.filter((id) => products.some((p) => p.id === id));
-        const next = [...preselectedProductIds, ...validPrev];
+        const validPrev = prev.filter((id) => availableProducts.some((p) => p.id === id));
+        const validPreselected = preselectedProductIds.filter((id) => availableProducts.some((p) => p.id === id));
+        const next = [...validPreselected, ...validPrev];
         return Array.from(new Set(next));
       });
     } else {
-      setSelectedProducts((prev) => prev.filter((id) => products.some((p) => p.id === id)));
+      setSelectedProducts((prev) => prev.filter((id) => availableProducts.some((p) => p.id === id)));
     }
-  }, [preselectedProductIds, products]);
+  }, [availableProducts, preselectedProductIds]);
 
   React.useEffect(() => {
     setShareQuantities((prev) => {
@@ -1649,7 +1651,7 @@ export function CreateOrderForm({
       .finally(() => setIsSubmitting(false));
   };
 
-  if (products.length === 0) {
+  if (availableProducts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 px-4">
         <div className="w-24 h-24 rounded-full bg-[#FF6B4A]/20 flex items-center justify-center mb-4">
@@ -3020,7 +3022,7 @@ function ProducerProductCarousel({
       >
         {productsToShow.map((product) => {
           const isSelected = selectedProducts.includes(product.id);
-          const hasPrice = Boolean(product.activeLotCode) && product.price > 0;
+          const hasPrice = Boolean(product.activeLotCode ?? product.activeLotId) && product.price > 0;
           const priceLabel = hasPrice
             ? formatEurosFromCents(eurosToCents(product.price))
             : 'Prix à venir';
