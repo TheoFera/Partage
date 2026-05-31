@@ -1273,12 +1273,7 @@ export function CreateOrderForm({
       setDeliveryGeoStatus('idle');
       return;
     }
-    if (isDeliveryAddressFromProfile) {
-      if (!deliveryProfileCoords) {
-        setDeliveryGeoCoords(null);
-        setDeliveryGeoStatus('error');
-        return;
-      }
+    if (isDeliveryAddressFromProfile && deliveryProfileCoords) {
       setDeliveryGeoCoords(deliveryProfileCoords);
       setDeliveryGeoStatus('resolved');
       return;
