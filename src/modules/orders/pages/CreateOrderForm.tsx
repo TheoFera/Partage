@@ -139,31 +139,14 @@ const buildOpeningHoursByDay = (openingHours?: Record<string, string>) => {
 const hasTimeRange = (slot: { start?: string; end?: string }) =>
   Boolean(slot.start?.trim() && slot.end?.trim());
 
-const buildProducerPickupScheduleByDay = (params: {
-  openingHours?: Record<string, string>;
-  pickupDays?: DeliveryDay[];
-  pickupStart?: string;
-  pickupEnd?: string;
-}) => {
-  const fromOpeningHours = buildOpeningHoursByDay(params.openingHours);
-  if (Object.keys(fromOpeningHours).length > 0) return fromOpeningHours;
-  if (!params.pickupDays || params.pickupDays.length === 0) return {};
-  const start = parseTimeSegment(params.pickupStart);
-  const end = parseTimeSegment(params.pickupEnd);
-  if (!hasTimeRange({ start, end })) return {};
-  return params.pickupDays.reduce((acc, day) => {
-    acc[day] = { start, end };
-    return acc;
-  }, {} as Partial<Record<DeliveryDay, OpeningHourSlot>>);
-};
-
 const buildPickupSlotsFromOpeningHours = (openingHours?: Record<string, string>) => {
   const openingByDay = buildOpeningHoursByDay(openingHours);
   const hasOpeningHours = Object.keys(openingByDay).length > 0;
   return defaultSlots.map((slot) => {
-    if (!slot.day) return { ...slot, enabled: false, start: '', end: '' };
+    if (!slot.day) return { ...slot, enabled: hasTimeRange(slot) };
     if (!hasOpeningHours) {
-      return { ...slot, enabled: false, start: '', end: '' };
+      const enabled = hasTimeRange(slot);
+      return { ...slot, enabled };
     }
     const openingSlot = openingByDay[slot.day as DeliveryDay];
     if (!openingSlot) {
@@ -457,21 +440,6 @@ export function CreateOrderForm({
   const openingHoursByDay = React.useMemo(
     () => buildOpeningHoursByDay(user?.openingHours),
     [user?.openingHours]
-  );
-  const producerPickupScheduleByDay = React.useMemo(
-    () =>
-      buildProducerPickupScheduleByDay({
-        openingHours: producer?.openingHours,
-        pickupDays: producerLegal?.producerPickupDays,
-        pickupStart: producerLegal?.producerPickupStartTime,
-        pickupEnd: producerLegal?.producerPickupEndTime,
-      }),
-    [
-      producer?.openingHours,
-      producerLegal?.producerPickupDays,
-      producerLegal?.producerPickupStartTime,
-      producerLegal?.producerPickupEndTime,
-    ]
   );
   const producerProfileIds = React.useMemo(() => {
     const ids = new Set<string>();
@@ -837,12 +805,8 @@ export function CreateOrderForm({
       while (current <= last) {
         const key = toDateKey(current);
         const existing = previousByDate.get(key);
-        const openingSlot = getOpeningSlotForDate(current);
-        const defaultStart = openingSlot?.start ?? '';
-        const defaultEnd = openingSlot?.end ?? '';
-        const shouldKeepExisting = pickupDateSlotsTouchedRef.current && existing;
-        const nextStart = shouldKeepExisting ? existing.start : defaultStart;
-        const nextEnd = shouldKeepExisting ? existing.end : defaultEnd;
+        const nextStart = existing?.start ?? '';
+        const nextEnd = existing?.end ?? '';
         next.push({
           date: key,
           label: current.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: '2-digit' }),
@@ -2385,12 +2349,7 @@ export function CreateOrderForm({
                           const isToday = todayKey === dateKey;
                           const slot = pickupDateSlotsByDate.get(dateKey);
                           const hasSlot = Boolean(slot && hasTimeRange(slot));
-                          const scheduleKey = deliveryDayIndexToKey[day.getDay()];
-                          const producerSlot =
-                            deliveryOption === 'producer_pickup' ? producerPickupScheduleByDay[scheduleKey] : undefined;
-                          const hasProducerPickupDay = Boolean(producerSlot && hasTimeRange(producerSlot));
-                          const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
-                          const hasCalendarMarker = hasSlot || showProducerPickupIndicator;
+                          const hasCalendarMarker = hasSlot;
                           const isClickable = Boolean(availabilityRange) && isInAvailability;
                           const toneClass = isInAvailability
                             ? 'order-client-view__calendar-day--availability'
