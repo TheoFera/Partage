@@ -1167,6 +1167,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const display = editMode ? draft : detail;
   const resolvedVatRate = (editMode ? draft.vatRate : detail.vatRate) ?? DEFAULT_VAT_RATE;
   const hasOrders = ordersWithProduct.length > 0;
+  const hasCurrentLotForOrder = lotList.some((lot) => lot.statut === 'en_cours');
   const summaryOrdersLabel = hasOrders
     ? `${ordersWithProduct.length} commande${ordersWithProduct.length > 1 ? 's' : ''} disponible`
     : 'Aucune commande active';
@@ -2440,7 +2441,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
       productions: lotList,
     };
 
-    const inStockValue = lotList.some((lot) => lot.statut !== 'epuise');
+    const inStockValue = lotList.some((lot) => lot.statut === 'en_cours');
     const journeyImageFiles = Object.entries(pendingJourneyImages).map(([localId, entry]) => {
       const step = localTimeline.find((item) => item.localId === localId);
       const stepLabel = (step?.etape ?? '').trim() || 'Etape';
@@ -4967,9 +4968,12 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                   type="button"
                   onClick={onCreateOrder}
                   hidden={!canCreateOrderFromProducer}
-                  disabled={actionButtonsDisabled || !canCreateOrderFromProducer}
+                  disabled={actionButtonsDisabled || !canCreateOrderFromProducer || !hasCurrentLotForOrder}
+                  title={!hasCurrentLotForOrder ? 'Aucun lot en cours pour ce produit.' : undefined}
                   className={`pd-btn pd-btn--pill ${
-                    actionButtonsDisabled || !canCreateOrderFromProducer ? 'pd-btn--disabled' : 'pd-btn--primary'
+                    actionButtonsDisabled || !canCreateOrderFromProducer || !hasCurrentLotForOrder
+                      ? 'pd-btn--disabled'
+                      : 'pd-btn--primary'
                   }`}
                 >
                   Créer une commande avec ce produit

@@ -81,11 +81,29 @@ const resolveProducerName = (name?: string | null) => name?.trim() || 'Producteu
 
 const resolveProducerLocation = (location?: string | null) => location?.trim() || 'Local';
 
-const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient | null): Product => {
+const resolveLotReferenceTimestamp = (lot: Pick<DbLot, 'produced_at' | 'created_at'>) => {
+  const timestamp = Date.parse(lot.produced_at ?? lot.created_at);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const pickLatestLotForDisplay = (lots: DbLot[]) => {
+  const eligibleLots = lots.filter((lot) => lot.status !== 'draft' && Number(lot.price_cents ?? 0) > 0);
+  if (!eligibleLots.length) return null;
+  return eligibleLots
+    .slice()
+    .sort((a, b) => resolveLotReferenceTimestamp(b) - resolveLotReferenceTimestamp(a))[0];
+};
+
+const mapListingRowToProduct = (
+  row: ProductListingRow,
+  client: SupabaseClient | null,
+  options?: { fallbackLot?: DbLot | null; lots?: DbLot[] }
+): Product => {
   const measurement = row.sale_unit === 'kg' ? 'kg' : 'unit';
   const quantity = measurement === 'kg' ? toNumber(row.active_lot_stock_kg) : toNumber(row.active_lot_stock_units);
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
-  const priceCents = row.active_lot_price_cents ?? row.display_price_cents ?? 0;
+  const fallbackLot = options?.fallbackLot ?? null;
+  const priceCents = row.active_lot_price_cents ?? fallbackLot?.price_cents ?? row.display_price_cents ?? 0;
   const imageUrl = buildImageUrl(client, row.primary_image_path);
   const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
 
@@ -114,6 +132,7 @@ const mapListingRowToProduct = (row: ProductListingRow, client: SupabaseClient |
     inStock,
     measurement,
     weightKg: row.unit_weight_kg ?? undefined,
+    productions: options?.lots?.length ? mapLotsToProductions(options.lots, measurement) : undefined,
   };
 };
 
@@ -125,11 +144,7 @@ const pickLatestActiveLot = (lots: DbLot[]) => {
   if (!activeLots.length) return null;
   return activeLots
     .slice()
-    .sort((a, b) => {
-      const aDate = Date.parse(a.produced_at ?? a.created_at);
-      const bDate = Date.parse(b.produced_at ?? b.created_at);
-      return bDate - aDate;
-    })[0];
+    .sort((a, b) => resolveLotReferenceTimestamp(b) - resolveLotReferenceTimestamp(a))[0];
 };
 
 const resolveJourneyEvidence = (client: SupabaseClient | null, step: DbProductJourneyStep) => {
@@ -578,7 +593,35 @@ export const listProducts = async (): Promise<Product[]> => {
     return [];
   }
 
-  return (data as ProductListingRow[]).map((row) => mapListingRowToProduct(row, client));
+  const listingRows = data as ProductListingRow[];
+  const productIds = Array.from(new Set(listingRows.map((row) => row.product_id).filter(Boolean)));
+  const lotsByProductId = new Map<string, DbLot[]>();
+
+  if (productIds.length) {
+    const { data: lotsData, error: lotsError } = await client
+      .from('lots')
+      .select(
+        'id, lot_code, lot_reference, product_id, status, price_cents, stock_units, stock_kg, lot_comment, produced_at, dlc, ddm, notes, metadata, created_at, updated_at'
+      )
+      .in('product_id', productIds);
+    if (lotsError) {
+      console.warn('Supabase lots listing error:', lotsError);
+    } else {
+      ((lotsData as DbLot[] | null) ?? []).forEach((lot) => {
+        const bucket = lotsByProductId.get(lot.product_id) ?? [];
+        bucket.push(lot);
+        lotsByProductId.set(lot.product_id, bucket);
+      });
+    }
+  }
+
+  return listingRows.map((row) => {
+    const lots = lotsByProductId.get(row.product_id) ?? [];
+    return mapListingRowToProduct(row, client, {
+      fallbackLot: pickLatestLotForDisplay(lots),
+      lots,
+    });
+  });
 };
 
 export const getProductByCode = async (

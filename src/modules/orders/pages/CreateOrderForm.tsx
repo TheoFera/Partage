@@ -161,10 +161,9 @@ const buildPickupSlotsFromOpeningHours = (openingHours?: Record<string, string>)
   const openingByDay = buildOpeningHoursByDay(openingHours);
   const hasOpeningHours = Object.keys(openingByDay).length > 0;
   return defaultSlots.map((slot) => {
-    if (!slot.day) return { ...slot, enabled: hasTimeRange(slot) };
+    if (!slot.day) return { ...slot, enabled: false, start: '', end: '' };
     if (!hasOpeningHours) {
-      const enabled = hasTimeRange(slot);
-      return { ...slot, enabled };
+      return { ...slot, enabled: false, start: '', end: '' };
     }
     const openingSlot = openingByDay[slot.day as DeliveryDay];
     if (!openingSlot) {
