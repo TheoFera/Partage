@@ -13,6 +13,7 @@ import {
   type DbOrderItem,
   type DbOrderParticipant,
   type DbOrderPickupSlot,
+  type DbLotReservation,
   type DbPayment,
   type DbFacture,
   type DbFactureLigne,

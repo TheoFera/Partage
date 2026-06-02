@@ -115,7 +115,7 @@ export function OrderProductContextView() {
           className="inline-flex items-center gap-2 text-sm font-semibold text-[#FF6B4A] hover:text-[#FF5A39]"
         >
           <ArrowLeft className="w-4 h-4" />
-          Retour a la commande
+          Retour à la commande
         </Link>
         <div className="text-xs text-[#6B7280]">Commande {order.orderCode}</div>
       </div>

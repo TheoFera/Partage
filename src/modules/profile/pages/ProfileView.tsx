@@ -3789,7 +3789,7 @@ function ProfileEditPanel({
                     disabled={producerSettingsDisabled}
                     className="rounded border-gray-300 text-[#FF6B4A] focus:ring-[#FF6B4A]"
                   />
-                  Habilitation a partager des produits frais
+                  Habilitation à partager des produits frais
                 </label>
               </div>
             </div>

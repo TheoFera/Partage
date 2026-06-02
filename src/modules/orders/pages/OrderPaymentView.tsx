@@ -743,6 +743,21 @@ export function OrderPaymentView({
     void createServerBackedCheckoutSession(true);
   }, [createServerBackedCheckoutSession, disposeCheckout, storageKey]);
 
+  const hasResolvedPaymentBreakdown = React.useMemo(
+    () =>
+      Object.values(paymentBreakdown).some(
+        (value) => typeof value === 'number' && Number.isFinite(value) && value > 0
+      ),
+    [paymentBreakdown]
+  );
+  const displayedTotalEconomicCents = hasResolvedPaymentBreakdown
+    ? paymentBreakdown.totalEconomicCents
+    : selectedItemsSubtotalCents;
+  const displayedCardAmountCents = hasResolvedPaymentBreakdown
+    ? paymentBreakdown.cardAmountCents
+    : totalDueCents;
+  const canSubmitWithoutCardPayment =
+    !isClosePayment && displayedCardAmountCents === 0 && (hasResolvedPaymentBreakdown || totalDueCents === 0);
   const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting;
   const hasCheckoutSession = Boolean(checkoutClientSecret && providerPaymentId);
   const shouldShowEmbeddedCheckout =
@@ -795,15 +810,15 @@ export function OrderPaymentView({
               </div>
             ) : null}
             <div className="order-payment-view__summary-row">
-              <span>Total économique</span>
+              <span>Montant total</span>
               <span className="order-payment-view__summary-value">
-                {formatEurosFromCents(paymentBreakdown.totalEconomicCents || selectedItemsSubtotalCents)}
+                {formatEurosFromCents(displayedTotalEconomicCents)}
               </span>
             </div>
             <div className="order-payment-view__summary-row">
               <span>Reste à payer par carte</span>
               <span className="order-payment-view__summary-value">
-                {formatEurosFromCents(paymentBreakdown.cardAmountCents || totalDueCents)}
+                {formatEurosFromCents(displayedCardAmountCents)}
               </span>
             </div>
             <div className="order-payment-view__summary-row">
@@ -817,12 +832,6 @@ export function OrderPaymentView({
               </div>
             ) : null}
           </div>
-          {!isClosePayment ? (
-            <p className="order-payment-view__confirm-feedback" role="note">
-              Votre gain de coopération est appliqué comme avoir. Le producteur reste payé sur la base du montant total
-              de la commande.
-            </p>
-          ) : null}
           <button
             type="button"
             onClick={() => createServerBackedCheckoutSession(false)}
@@ -834,7 +843,7 @@ export function OrderPaymentView({
               ? 'Paiement en cours...'
               : hasCheckoutSession
                 ? 'Reprendre le paiement'
-                : paymentBreakdown.cardAmountCents === 0 && !isClosePayment
+                : canSubmitWithoutCardPayment
                   ? 'Valider sans paiement carte'
                   : isClosePayment
                   ? 'Payer et clôturer'

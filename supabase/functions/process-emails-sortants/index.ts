@@ -710,17 +710,17 @@ Deno.serve(async (req) => {
             : kind === "FACTURE_PLATEFORME"
               ? "Votre facture de commission est disponible"
               : kind === "RELEVE_REGLEMENT"
-                ? "Votre releve de reglement est disponible"
+                ? "Votre relevé de réglement est disponible"
                 : "Votre document est disponible";
       const introText =
         kind === "FACTURE_CLIENT"
-          ? "Bonjour, voici le recapitulatif de votre commande."
+          ? "Bonjour, voici le récapitulatif de votre commande."
           : kind === "FACTURE_AUTO_SHARER"
             ? "Bonjour, vous trouverez en piece jointe votre auto-facture."
             : kind === "FACTURE_PLATEFORME"
-              ? "Bonjour, vous trouverez en piece jointe la facture de commission liee a cette commande producteur."
+              ? "Bonjour, vous trouverez en piece jointe la facture de commission liée à cette commande producteur."
               : kind === "RELEVE_REGLEMENT"
-                ? "Bonjour, vous trouverez en piece jointe le releve de reglement de cette commande producteur."
+                ? "Bonjour, vous trouverez en piece jointe le relevé de réglement de cette commande producteur."
                 : "Bonjour, vous trouverez en piece jointe votre document.";
       const paymentLabel = isProducerDocument ? "Paiements participants" : "Paiement";
       const paymentValue = isProducerDocument ? "Carte bancaire / gains de cooperation" : "Carte bancaire";

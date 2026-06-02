@@ -264,7 +264,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess }: AuthPageProps) {
           onAuthSuccess(data.user);
         }
         clearStoredRedirect();
-        toast.success('Mot de passe mis a jour.');
+        toast.success('Mot de passe mis à jour.');
         navigate(storedRedirect || '/', { replace: true });
       }
     } catch (error) {

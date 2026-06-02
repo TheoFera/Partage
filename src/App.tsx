@@ -4055,7 +4055,7 @@ export default function App() {
       .maybeSingle();
 
     if (error) {
-      toast.error('Mise a jour du profil impossible.');
+      toast.error('Mise à jour du profil impossible.');
       return;
     }
 
@@ -4180,7 +4180,7 @@ export default function App() {
         .maybeSingle();
       if (legalError) {
         console.error('legal_entities upsert error:', legalError);
-        toast.error('Informations legales non mises a jour.');
+        toast.error('Informations légales non mises à jour.');
       } else {
         legalEntityRow = legalData as LegalEntityRow;
       }
@@ -4623,7 +4623,7 @@ export default function App() {
       <AuthWall
         onLogin={() => redirectToAuth(redirectPath, 'login')}
         onSignup={() => redirectToAuth(redirectPath, 'signup')}
-        description="Connectez-vous ou creez un compte pour acceder a cette page."
+        description="Connectez-vous ou créez un compte pour acceder à cette page."
       />
     );
   };
@@ -4656,7 +4656,7 @@ export default function App() {
                   <p className="text-sm font-semibold text-[#1F2937]">{order.title}</p>
                   <p className="text-xs text-[#6B7280]">
                     Par {order.sharerName} à Producteur {order.producerName} �{' '}
-                    {order.pickupCity || order.pickupPostcode || 'Ville a preciser'}
+                    {order.pickupCity || order.pickupPostcode || 'Ville à préciser'}
                   </p>
                 </div>
                 <button

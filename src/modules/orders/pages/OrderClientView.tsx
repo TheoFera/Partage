@@ -66,7 +66,14 @@ import {
   updateOrderVisibility,
 } from '../api/orders';
 import type { ProducerStatementSources } from '../api/orders';
-import { centsToEuros, type Facture, type OrderFull, type OrderStatus, type PickupSlotStatus } from '../types';
+import {
+  centsToEuros,
+  type Facture,
+  type Order,
+  type OrderFull,
+  type OrderStatus,
+  type PickupSlotStatus,
+} from '../types';
 
 interface OrderClientViewProps {
   onClose: () => void;

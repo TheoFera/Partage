@@ -4374,7 +4374,7 @@ const normalizeLotDates = (dates: LotStepDates): LotStepDates => {
                 </div>
               </div>
             ) : (
-              <p className="pd-text-sm pd-text-muted">Valeurs nutritionnelles a renseigner.</p>
+              <p className="pd-text-sm pd-text-muted">Valeurs nutritionnelles à renseigner.</p>
             )}
           </div>
         </div>
