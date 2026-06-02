@@ -229,7 +229,6 @@ const formatPickupSlotStatusLabel = (status?: PickupSlotStatus | null) =>
   status ? PICKUP_SLOT_STATUS_LABELS[status] ?? null : null;
 
 const WEEKDAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
-const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
 
 const toDateKey = (date: Date) => {
   const year = date.getFullYear();
@@ -3178,7 +3177,6 @@ const sharerAvatarUpdatedAt =
                               );
                             }
                             const dateKey = toDateKey(day);
-                            const isInAvailability = availabilityRange ? isDateInRange(day, availabilityRange) : false;
                             const isInDelivery = deliveryRange ? isDateInRange(day, deliveryRange) : false;
                             const isInOpen = openRange ? isDateInRange(day, openRange) : false;
                             const isSelected = selectedPickupDateKey === dateKey;
@@ -3187,19 +3185,13 @@ const sharerAvatarUpdatedAt =
                             const isMyPickupDayAccepted = isMyPickupDay && myPickupSlotStatus === 'accepted';
                             const isMyPickupDayPending = isMyPickupDay && myPickupSlotStatus === 'requested';
                             const myPickupSymbol = isMyPickupDayAccepted ? 'v' : isMyPickupDayPending ? '...' : null;
-                            const dayScheduleKey = WEEKDAY_KEYS[day.getDay()];
-                            const hasProducerPickupDay = Boolean(
-                              shouldShowProducerPickupDetails && producerOpeningHoursByDay[dayScheduleKey]
-                            );
-                            const showProducerPickupIndicator = hasProducerPickupDay && isInAvailability;
                             const hasSlots =
                               canShowPickupSlotDetails &&
                               (pickupSlotsByDate.get(dateKey) ?? []).some((slot) => slot.enabled);
-                            const hasCalendarMarker = hasSlots || showProducerPickupIndicator;
                             const reservationCount = pickupSlotReservationCountsByDate.get(dateKey) ?? 0;
                             const reservationCountLabel = reservationCount > 9 ? '9+' : String(reservationCount);
-                            const isClickable = Boolean(availabilityRange) && isInAvailability && canShowPickupSlotDetails;
-                            const toneClass = isInAvailability
+                            const isClickable = hasSlots;
+                            const toneClass = hasSlots
                               ? 'order-client-view__calendar-day--availability'
                               : isInDelivery
                                 ? 'order-client-view__calendar-day--delivery'
@@ -3228,7 +3220,6 @@ const sharerAvatarUpdatedAt =
                                 tabIndex={isClickable ? 0 : -1}
                               >
                                 <span>{day.getDate()}</span>
-                                {hasCalendarMarker && <span className="order-client-view__calendar-day-dot" />}
                                 {myPickupSymbol && (
                                   <span
                                     className={`order-client-view__calendar-day-pickup ${
@@ -4236,6 +4227,7 @@ function OrderProductsCarousel({
   const useSwipeScroll = containerWidth > 0 && containerWidth < MOBILE_PRODUCTS_SWIPE_BREAKPOINT;
   const useCarousel = !useSwipeScroll && products.length > visibleCount;
   const maxIndex = Math.max(0, products.length - visibleCount);
+  const trackJustifyContent = useSwipeScroll || useCarousel ? 'flex-start' : 'center';
 
   const containerMinWidth =
     MIN_VISIBLE_CARDS * CARD_WIDTH +
@@ -4279,7 +4271,7 @@ function OrderProductsCarousel({
         }`}
         style={{
           alignItems: 'stretch',
-          justifyContent: useCarousel ? 'flex-start' : 'center',
+          justifyContent: trackJustifyContent,
           paddingInline: useSwipeScroll ? 0 : CONTAINER_SIDE_PADDING,
         }}
       >
