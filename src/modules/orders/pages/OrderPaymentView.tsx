@@ -908,25 +908,25 @@ export function OrderPaymentView({
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={() => createServerBackedCheckoutSession(false)}
-            className="order-payment-view__confirm-button"
-            disabled={isBusy || Boolean(producerStripeBlockingReason)}
-            aria-busy={isBusy}
-          >
+          {!shouldShowEmbeddedCheckout ? (
+            <button
+              type="button"
+              onClick={() => createServerBackedCheckoutSession(false)}
+              className="order-payment-view__confirm-button"
+              disabled={isBusy || Boolean(producerStripeBlockingReason)}
+              aria-busy={isBusy}
+            >
             {isProducerStripeLoading
               ? 'Vérification du paiement...'
               : isBusy
               ? 'Paiement en cours...'
-              : hasCheckoutSession
-                ? 'Reprendre le paiement'
-                : canSubmitWithoutCardPayment
+              : canSubmitWithoutCardPayment
                   ? 'Valider sans paiement carte'
                   : isClosePayment
                   ? 'Payer et clôturer'
                   : 'Payer avec votre carte bancaire'}
-          </button>
+            </button>
+          ) : null}
           {producerStripeBlockingReason ? (
             <p className="order-payment-view__confirm-feedback" role="alert">
               {producerStripeBlockingReason}

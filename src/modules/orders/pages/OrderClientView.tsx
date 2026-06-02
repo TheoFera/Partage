@@ -3453,7 +3453,7 @@ const sharerAvatarUpdatedAt =
                         </>
                       ) : (
                         <p className="order-client-view__calendar-slots-note">
-                          Le rendez-vous de récupération des produits se fait dans la période de récupération.
+                          Une fois la commande reçu par le créateur de la commande, vous pourrez choisir votre rendez-vous de récupération.
                         </p>
                       )}
                     </div>

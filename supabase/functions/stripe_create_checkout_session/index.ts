@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 30 * 60;
     const form = new URLSearchParams();
     form.append("mode", "payment");
-    form.append("ui_mode", "embedded");
+    form.append("ui_mode", "embedded_page");
     form.append("redirect_on_completion", "if_required");
     form.append("locale", "fr");
     form.append("return_url", parsedReturnUrl);
