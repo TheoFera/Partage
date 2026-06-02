@@ -1317,8 +1317,9 @@ const sharerAvatarUpdatedAt =
           const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
           if (quantity <= 0) return null;
           const unitPriceCents = unitPriceCentsById[product.id] ?? eurosToCents(product.price);
+          const paymentProductId = product.dbId ?? product.id;
           return {
-            productCode: product.id,
+            productCode: paymentProductId,
             label: product.name,
             quantity,
             unitPriceCents,
@@ -1748,8 +1749,18 @@ const sharerAvatarUpdatedAt =
       return;
     }
     if (remainingToPayCents > 0 && onStartPayment) {
+      const paymentQuantities = products.reduce(
+        (acc, product) => {
+          const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
+          const paymentProductId = product.dbId ?? product.id;
+          if (!paymentProductId || quantity <= 0) return acc;
+          acc[paymentProductId] = quantity;
+          return acc;
+        },
+        {} as Record<string, number>
+      );
       onStartPayment({
-        quantities: { ...quantities },
+        quantities: paymentQuantities,
         lineItems: paymentLineItems,
         total: centsToEuros(remainingToPayCents),
         weight: selectedWeight,
