@@ -526,7 +526,6 @@ export interface ProductListingRow {
   producer_avatar_path?: string | null;
   producer_avatar_updated_at?: string | null;
   primary_image_path: string | null;
-  active_lot_id?: string | null;
   active_lot_code: string | null;
   active_lot_price_cents: number | null;
   active_lot_stock_units: number | null;

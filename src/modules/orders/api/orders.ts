@@ -385,7 +385,7 @@ const mapListingRowToOrderProductInfo = (
     code: row.product_code,
     slug: row.slug ?? null,
     activeLotCode: row.active_lot_code ?? null,
-    activeLotId: row.active_lot_id ?? null,
+    activeLotId: null,
     name: row.name,
     description: row.description ?? null,
     packaging: row.packaging ?? null,
@@ -411,7 +411,7 @@ const mapProductListingToProduct = (row: ProductListingRow, client: SupabaseClie
     dbId: row.product_id,
     slug: row.slug,
     activeLotCode: row.active_lot_code ?? undefined,
-    activeLotId: row.active_lot_id ?? undefined,
+    activeLotId: undefined,
     name: row.name,
     description: row.description ?? '',
     price: centsToEuros(priceCents),
@@ -443,7 +443,6 @@ const mapDbProductToListingRow = (row: DbProduct): ProductListingRow => ({
   producer_name: row.producer_name ?? null,
   producer_location: row.producer_location ?? null,
   primary_image_path: null,
-  active_lot_id: null,
   active_lot_code: null,
   active_lot_price_cents: null,
   active_lot_stock_units: null,
@@ -955,7 +954,7 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
           orderId: order.id,
           participantId: (sharerParticipant as DbOrderParticipant).id,
           productId: productRow.product_id,
-          lotId: (productRow.active_lot_id as string | null) ?? activeLotsByProductId.get(productRow.product_id as string)?.id ?? null,
+          lotId: activeLotsByProductId.get(productRow.product_id as string)?.id ?? null,
           quantityUnits: entry.quantity,
           isSharerShare: true,
           reservationStatus: 'consumed',
@@ -1252,11 +1251,11 @@ export const addItem = async (params: {
     throw new Error('Plusieurs lots detectes pour ce produit dans la commande.');
   }
   let fallbackLotId: string | null = null;
-  if (!params.lotId && !existingLotId && !(productRow.active_lot_id as string | null)) {
+  if (!params.lotId && !existingLotId) {
     const activeLotsByProductId = await fetchLatestActiveLotsByProductId(client, [params.productId]);
     fallbackLotId = activeLotsByProductId.get(params.productId)?.id ?? null;
   }
-  const listingLotId = (productRow.active_lot_id as string | null) ?? fallbackLotId;
+  const listingLotId = fallbackLotId;
   if (existingLotId && params.lotId && params.lotId !== existingLotId) {
     throw new Error('Un seul lot est autorise pour ce produit dans la commande.');
   }

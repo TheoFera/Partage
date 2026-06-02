@@ -154,7 +154,7 @@ type ProductListingRow = {
   sale_unit: string | null;
   packaging: string | null;
   unit_weight_kg: number | null;
-  active_lot_id: string | null;
+  active_lot_code: string | null;
   active_lot_price_cents: number | null;
   default_price_cents: number | null;
 };
@@ -1475,7 +1475,7 @@ async function getProductListingRow(
 ) {
   const { data, error } = await serviceClient
     .from("v_products_listing")
-    .select("product_id, sale_unit, packaging, unit_weight_kg, active_lot_id, active_lot_price_cents, default_price_cents")
+    .select("product_id, sale_unit, packaging, unit_weight_kg, active_lot_code, active_lot_price_cents, default_price_cents")
     .eq("product_id", productId)
     .maybeSingle();
   if (error || !data) throw error ?? new Error("Product listing not found");
@@ -1505,8 +1505,7 @@ async function insertOrderItem(
     fetchLatestActiveLotsByProductId(serviceClient, [params.productId]),
   ]);
   const fallbackLot = activeLotsByProductId.get(params.productId) ?? null;
-  const resolvedLotId = normalizeText(params.lotId) || normalizeText(productListing.active_lot_id) ||
-    normalizeText(fallbackLot?.id);
+  const resolvedLotId = normalizeText(params.lotId) || normalizeText(fallbackLot?.id);
   if (!resolvedLotId) {
     throw new Error("Active lot not found for product");
   }
@@ -1795,7 +1794,7 @@ async function buildCheckoutReservationPlans(
       getProductListingRow(serviceClient, productId),
     ]);
     const fallbackLot = activeLotsByProductId.get(productId) ?? null;
-    const resolvedLotId = normalizeText(productListing.active_lot_id) || normalizeText(fallbackLot?.id);
+    const resolvedLotId = normalizeText(fallbackLot?.id);
     if (!resolvedLotId) {
       throw new Error("Lot actif introuvable pour ce produit.");
     }
