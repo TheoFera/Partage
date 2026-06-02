@@ -18,10 +18,6 @@ interface OrderPaymentViewProps {
   initialSnapshot?: OrderPaymentPageSnapshot | null;
 }
 
-function formatPrice(value: number) {
-  return formatEurosFromCents(eurosToCents(value));
-}
-
 export type OrderPaymentConfirmationPayload = {
   provider: 'stripe';
   providerPaymentId: string;
@@ -756,6 +752,7 @@ export function OrderPaymentView({
   const displayedCardAmountCents = hasResolvedPaymentBreakdown
     ? paymentBreakdown.cardAmountCents
     : totalDueCents;
+  const shouldShowGrossTotal = !isClosePayment && displayedTotalEconomicCents !== displayedCardAmountCents;
   const canSubmitWithoutCardPayment =
     !isClosePayment && displayedCardAmountCents === 0 && (hasResolvedPaymentBreakdown || totalDueCents === 0);
   const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting;
@@ -788,7 +785,7 @@ export function OrderPaymentView({
           </div>
           <div className="order-payment-view__summary-list">
             <div className="order-payment-view__summary-row">
-              <span>Participation à la commande</span>
+              <span>Nom de la commande</span>
               <span className="order-payment-view__summary-value">{order.title}</span>
             </div>
             {selectedItems.map((item) => (
@@ -809,21 +806,19 @@ export function OrderPaymentView({
                 </span>
               </div>
             ) : null}
+            {shouldShowGrossTotal ? (
+              <div className="order-payment-view__summary-row">
+                <span>Montant total</span>
+                <span className="order-payment-view__summary-value">
+                  {formatEurosFromCents(displayedTotalEconomicCents)}
+                </span>
+              </div>
+            ) : null}
             <div className="order-payment-view__summary-row">
-              <span>Montant total</span>
-              <span className="order-payment-view__summary-value">
-                {formatEurosFromCents(displayedTotalEconomicCents)}
-              </span>
-            </div>
-            <div className="order-payment-view__summary-row">
-              <span>Reste à payer par carte</span>
+              <span>À payer par carte</span>
               <span className="order-payment-view__summary-value">
                 {formatEurosFromCents(displayedCardAmountCents)}
               </span>
-            </div>
-            <div className="order-payment-view__summary-row">
-              <span>{isClosePayment ? 'Reste à payer' : 'Total'}</span>
-              <span className="order-payment-view__summary-value">{formatPrice(draft.total)}</span>
             </div>
             {!isClosePayment ? (
               <div className="order-payment-view__summary-row">
