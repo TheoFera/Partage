@@ -1428,7 +1428,7 @@ async function createParticipant(
   return data as DbParticipantRow;
 }
 
-async function deleteParticipantIfNoActivity(
+export async function deleteParticipantIfNoActivity(
   serviceClient: ReturnType<typeof createServiceClient>,
   params: { orderId: string; participantId: string },
 ) {
@@ -2238,6 +2238,9 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
 
   await releaseCheckoutSessionLotReservations(serviceClient, checkoutPaymentSession.id, "released");
 
+  let participantCreatedInFlow = false;
+  let participantIdForRollback: string | null = null;
+
   try {
     const reservationKind = checkoutPaymentSession.flow_kind === "close"
       ? "close_checkout"
@@ -2263,6 +2266,8 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
         : await getParticipantByProfile(serviceClient, order.id, checkoutPaymentSession.profile_id);
       if (!participant) {
         participant = await createParticipant(serviceClient, order, checkoutPaymentSession.profile_id);
+        participantCreatedInFlow = true;
+        participantIdForRollback = participant.id;
       }
       const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
       const draft = parseParticipantDraft(checkoutPaymentSession.draft_payload);
@@ -2340,6 +2345,16 @@ export async function prepareCheckoutPaymentSessionForStripe(checkoutPaymentSess
     });
   } catch (error) {
     await releaseCheckoutSessionLotReservations(serviceClient, checkoutPaymentSession.id, "released");
+    if (participantCreatedInFlow && participantIdForRollback) {
+      try {
+        await deleteParticipantIfNoActivity(serviceClient, {
+          orderId: checkoutPaymentSession.order_id,
+          participantId: participantIdForRollback,
+        });
+      } catch (rollbackError) {
+        console.error("Checkout participant rollback error:", rollbackError);
+      }
+    }
     throw error;
   }
 }

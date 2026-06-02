@@ -1,6 +1,7 @@
 import {
   corsHeaders,
   createServiceClient,
+  deleteParticipantIfNoActivity,
   finalizeLocalZeroCheckoutPaymentSession,
   jsonResponse,
   parsePaymentBreakdown,
@@ -43,6 +44,11 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Function env is missing" }, 500);
   }
 
+  let serviceClient: ReturnType<typeof createServiceClient> | null = null;
+  let preparedCheckoutPaymentSession: Awaited<ReturnType<typeof prepareCheckoutPaymentSessionForStripe>> | null = null;
+  let participantExistedBeforePrepare = true;
+  let stripeCheckoutCreated = false;
+
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     const user = await requireAuthenticatedUser(authHeader);
@@ -57,7 +63,42 @@ Deno.serve(async (req) => {
     const checkoutPaymentSession = await verifySessionOwnership(user.id, {
       checkoutPaymentSessionId,
     });
-    const preparedCheckoutPaymentSession = await prepareCheckoutPaymentSessionForStripe(checkoutPaymentSession.id);
+    serviceClient = createServiceClient();
+
+    if (checkoutPaymentSession.flow_kind === "participant") {
+      const { data: existingParticipantRows, error: existingParticipantError } = await serviceClient
+        .from("order_participants")
+        .select("id")
+        .eq("order_id", checkoutPaymentSession.order_id)
+        .eq("profile_id", checkoutPaymentSession.profile_id)
+        .limit(1);
+      if (existingParticipantError) {
+        throw existingParticipantError;
+      }
+      participantExistedBeforePrepare = ((existingParticipantRows as Array<{ id: string }> | null) ?? []).length > 0;
+    }
+
+    const rollbackPreparedParticipantIfNeeded = async () => {
+      if (
+        !serviceClient ||
+        !preparedCheckoutPaymentSession ||
+        participantExistedBeforePrepare ||
+        preparedCheckoutPaymentSession.flow_kind !== "participant" ||
+        !preparedCheckoutPaymentSession.participant_id
+      ) {
+        return;
+      }
+      try {
+        await deleteParticipantIfNoActivity(serviceClient, {
+          orderId: preparedCheckoutPaymentSession.order_id,
+          participantId: preparedCheckoutPaymentSession.participant_id,
+        });
+      } catch (rollbackError) {
+        console.error("Stripe checkout participant rollback error:", rollbackError);
+      }
+    };
+
+    preparedCheckoutPaymentSession = await prepareCheckoutPaymentSessionForStripe(checkoutPaymentSession.id);
     const paymentBreakdown = parsePaymentBreakdown(preparedCheckoutPaymentSession.payment_breakdown);
 
     if (preparedCheckoutPaymentSession.payment_mode === "local_zero") {
@@ -185,15 +226,16 @@ Deno.serve(async (req) => {
         typeof stripeJson?.error?.code === "string" ? stripeJson.error.code : null;
       const stripeParam =
         typeof stripeJson?.error?.param === "string" ? stripeJson.error.param : null;
-      const serviceClient = createServiceClient();
       await serviceClient.rpc("release_checkout_session_lot_reservations", {
         p_checkout_payment_session_id: preparedCheckoutPaymentSession.id,
         p_status: "released",
       });
+      await rollbackPreparedParticipantIfNeeded();
       await serviceClient
         .from("checkout_payment_sessions")
         .update({
           status: "failed",
+          participant_id: participantExistedBeforePrepare ? preparedCheckoutPaymentSession.participant_id : null,
           error_code: stripeCode ?? "stripe_checkout_create_failed",
           error_message: stripeMessage ?? "La création de la session Stripe a échoué.",
         })
@@ -214,15 +256,16 @@ Deno.serve(async (req) => {
     const providerPaymentId = typeof stripeJson?.id === "string" ? stripeJson.id : "";
     const clientSecret = typeof stripeJson?.client_secret === "string" ? stripeJson.client_secret : "";
     if (!providerPaymentId || !clientSecret) {
-      const serviceClient = createServiceClient();
       await serviceClient.rpc("release_checkout_session_lot_reservations", {
         p_checkout_payment_session_id: preparedCheckoutPaymentSession.id,
         p_status: "released",
       });
+      await rollbackPreparedParticipantIfNeeded();
       await serviceClient
         .from("checkout_payment_sessions")
         .update({
           status: "failed",
+          participant_id: participantExistedBeforePrepare ? preparedCheckoutPaymentSession.participant_id : null,
           error_code: "stripe_checkout_invalid_response",
           error_message: "Stripe n'a pas retourné les identifiants attendus.",
         })
@@ -230,7 +273,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Stripe response missing id/client_secret", details: stripeJson }, 502);
     }
 
-    const serviceClient = createServiceClient();
+    stripeCheckoutCreated = true;
     const { error: updateError } = await serviceClient
       .from("checkout_payment_sessions")
       .update({
@@ -256,6 +299,26 @@ Deno.serve(async (req) => {
       stripe_account_id: preparedCheckoutPaymentSession.stripe_account_id ?? null,
     });
   } catch (error) {
+    if (serviceClient && preparedCheckoutPaymentSession && !stripeCheckoutCreated) {
+      try {
+        await serviceClient.rpc("release_checkout_session_lot_reservations", {
+          p_checkout_payment_session_id: preparedCheckoutPaymentSession.id,
+          p_status: "released",
+        });
+        if (
+          !participantExistedBeforePrepare &&
+          preparedCheckoutPaymentSession.flow_kind === "participant" &&
+          preparedCheckoutPaymentSession.participant_id
+        ) {
+          await deleteParticipantIfNoActivity(serviceClient, {
+            orderId: preparedCheckoutPaymentSession.order_id,
+            participantId: preparedCheckoutPaymentSession.participant_id,
+          });
+        }
+      } catch (rollbackError) {
+        console.error("Stripe checkout rollback error:", rollbackError);
+      }
+    }
     const message = serializeUnknownError(error);
     const status = message === "Unauthorized" ? 401 : message === "Forbidden" ? 403 : 400;
     return jsonResponse({ error: message }, status);
