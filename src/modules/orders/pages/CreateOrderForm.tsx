@@ -37,16 +37,6 @@ type PickupSlot = {
   end: string;
 };
 
-const defaultSlots: PickupSlot[] = [
-  { day: 'monday', label: 'Lundi', enabled: false, start: '', end: '' },
-  { day: 'tuesday', label: 'Mardi', enabled: false, start: '', end: '' },
-  { day: 'wednesday', label: 'Mercredi', enabled: false, start: '', end: '' },
-  { day: 'thursday', label: 'Jeudi', enabled: false, start: '', end: '' },
-  { day: 'friday', label: 'Vendredi', enabled: true, start: '17:30', end: '19:30' },
-  { day: 'saturday', label: 'Samedi', enabled: true, start: '10:00', end: '12:00' },
-  { day: 'sunday', label: 'Dimanche', enabled: false, start: '', end: '' },
-];
-
 const DEFAULT_PROFILE_AVATAR =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -138,28 +128,6 @@ const buildOpeningHoursByDay = (openingHours?: Record<string, string>) => {
 
 const hasTimeRange = (slot: { start?: string; end?: string }) =>
   Boolean(slot.start?.trim() && slot.end?.trim());
-
-const buildPickupSlotsFromOpeningHours = (openingHours?: Record<string, string>) => {
-  const openingByDay = buildOpeningHoursByDay(openingHours);
-  const hasOpeningHours = Object.keys(openingByDay).length > 0;
-  return defaultSlots.map((slot) => {
-    if (!slot.day) return { ...slot, enabled: hasTimeRange(slot) };
-    if (!hasOpeningHours) {
-      const enabled = hasTimeRange(slot);
-      return { ...slot, enabled };
-    }
-    const openingSlot = openingByDay[slot.day as DeliveryDay];
-    if (!openingSlot) {
-      return { ...slot, enabled: false, start: '', end: '' };
-    }
-    return {
-      ...slot,
-      start: openingSlot.start,
-      end: openingSlot.end,
-      enabled: hasTimeRange(openingSlot),
-    };
-  });
-};
 
 const WEEKDAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
@@ -332,9 +300,6 @@ export function CreateOrderForm({
   const [pickupInfo, setPickupInfo] = React.useState('');
   const [pickupCity, setPickupCity] = React.useState('');
   const [pickupPostcode, setPickupPostcode] = React.useState('');
-  const [pickupSlots, setPickupSlots] = React.useState<PickupSlot[]>(() =>
-    buildPickupSlotsFromOpeningHours(user?.openingHours)
-  );
   const [pickupWindowWeeks, setPickupWindowWeeks] = React.useState(2);
   const [pickupDateSlots, setPickupDateSlots] = React.useState<PickupSlot[]>([]);
   const [producerProfileMetaById, setProducerProfileMetaById] = React.useState<
@@ -353,7 +318,6 @@ export function CreateOrderForm({
   const [deliveryGeoCoords, setDeliveryGeoCoords] = React.useState<GeoPoint | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const geocodeCacheRef = React.useRef<Map<string, GeoPoint>>(new Map());
-  const pickupSlotsTouchedRef = React.useRef(false);
   const pickupDateSlotsTouchedRef = React.useRef(false);
 
   const producerLegal = producer?.legalEntity;
@@ -552,12 +516,6 @@ export function CreateOrderForm({
       return next ? next : prev;
     });
   }, [user]);
-
-  React.useEffect(() => {
-    if (!user) return;
-    if (pickupSlotsTouchedRef.current) return;
-    setPickupSlots(buildPickupSlotsFromOpeningHours(user.openingHours));
-  }, [user?.id, user?.openingHours]);
 
   const deliveryProfileCoords = React.useMemo(() => {
     const lat = user?.addressLat;
@@ -944,9 +902,7 @@ export function CreateOrderForm({
   const deliveryRange = toRange(deadlineDay, estimatedDeliveryDay);
   const availabilityRange = explicitPickupDay
     ? { start: explicitPickupDay, end: explicitPickupDay }
-    : visibility === 'public'
-      ? toRange(pickupStartDay, pickupWindowEndDay)
-      : null;
+    : toRange(pickupStartDay, pickupWindowEndDay);
   const calendarSeedKey = availabilityRange
     ? toDateKey(availabilityRange.start)
     : deliveryRange
@@ -1319,7 +1275,6 @@ export function CreateOrderForm({
   }, [visibility, usePickupDate]);
 
   React.useEffect(() => {
-    if (visibility !== 'public') return;
     if (pickupWindowStart === null || pickupWindowEnd === null) {
       setPickupDateSlots([]);
       return;
@@ -1327,19 +1282,7 @@ export function CreateOrderForm({
     const start = new Date(pickupWindowStart);
     const end = new Date(pickupWindowEnd);
     setPickupDateSlots((prev) => buildPickupDateSlots(start, end, prev));
-  }, [buildPickupDateSlots, pickupWindowEnd, pickupWindowStart, visibility]);
-
-  const getDefaultTimesForDay = React.useCallback(
-    (day: string) => {
-      const normalized = normalizeOpeningHoursDayKey(day);
-      const opening = normalized ? openingHoursByDay[normalized] : undefined;
-      if (opening?.start && opening?.end) return { start: opening.start, end: opening.end };
-      const fallback = defaultSlots.find((slot) => slot.day === day);
-      if (fallback?.start && fallback?.end) return { start: fallback.start, end: fallback.end };
-      return { start: '17:00', end: '19:00' };
-    },
-    [openingHoursByDay]
-  );
+  }, [buildPickupDateSlots, pickupWindowEnd, pickupWindowStart]);
 
   const getDefaultTimesForDate = React.useCallback(
     (date: string) => {
@@ -1351,42 +1294,6 @@ export function CreateOrderForm({
     },
     [getOpeningSlotForDate]
   );
-
-  const toggleSlot = (day: string) => {
-    pickupSlotsTouchedRef.current = true;
-    setPickupSlots((prev) =>
-      prev.map((slot) => {
-        if (slot.day !== day) return slot;
-        if (hasTimeRange(slot)) {
-          return { ...slot, start: '', end: '', enabled: false };
-        }
-        const defaults = getDefaultTimesForDay(day);
-        return {
-          ...slot,
-          start: defaults.start,
-          end: defaults.end,
-          enabled: hasTimeRange(defaults),
-        };
-      })
-    );
-  };
-
-  const updateSlotTime = (day: string, key: 'start' | 'end', value: string) => {
-    pickupSlotsTouchedRef.current = true;
-    setPickupSlots((prev) =>
-      prev.map((slot) => {
-        if (slot.day !== day) return slot;
-        const nextStart = key === 'start' ? value : slot.start;
-        const nextEnd = key === 'end' ? value : slot.end;
-        return {
-          ...slot,
-          start: nextStart,
-          end: nextEnd,
-          enabled: hasTimeRange({ start: nextStart, end: nextEnd }),
-        };
-      })
-    );
-  };
 
   const toggleDateSlot = (date: string) => {
     pickupDateSlotsTouchedRef.current = true;
@@ -1467,9 +1374,7 @@ export function CreateOrderForm({
 
     const activeSlots: PickupSlot[] = usePickupDate
       ? []
-      : visibility === 'public'
-        ? pickupDateSlots.filter((slot) => hasTimeRange(slot) && slot.date)
-        : pickupSlots.filter((slot) => hasTimeRange(slot) && slot.day);
+      : pickupDateSlots.filter((slot) => hasTimeRange(slot) && slot.date);
 
     if (!user) {
       toast.info('Connectez-vous pour créer une commande.');
@@ -1516,7 +1421,7 @@ export function CreateOrderForm({
       maxWeight: normalizedMaxWeight,
       deliveryPhone,
       deliveryEmail,
-      pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
+      pickupWindowWeeks: usePickupDate ? undefined : pickupWindowWeeks,
       pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
       pickupInfo: useSamePickupAddress ? deliveryInfo : pickupInfo,
       pickupCity: useSamePickupAddress ? deliveryCity : pickupCity,
@@ -1565,7 +1470,7 @@ export function CreateOrderForm({
       deliveryLat,
       deliveryLng,
       estimatedDeliveryDate,
-      pickupWindowWeeks: visibility === 'public' ? pickupWindowWeeks : undefined,
+      pickupWindowWeeks: usePickupDate ? undefined : pickupWindowWeeks,
       pickupStreet: useSamePickupAddress ? deliveryStreet : pickupStreet,
       pickupInfo: useSamePickupAddress ? deliveryInfo : pickupInfo,
       pickupCity: useSamePickupAddress ? deliveryCity : pickupCity,
@@ -1628,21 +1533,13 @@ export function CreateOrderForm({
       if (!pickupDate) return 'Date precise à définir';
       return new Date(pickupDate).toLocaleDateString('fr-FR');
     }
-    if (visibility === 'public') {
-      if (!pickupWindowRange) return 'Date de récupération à définir';
-      return `Du ${pickupWindowRange.start.toLocaleDateString('fr-FR')} au ${pickupWindowRange.end.toLocaleDateString('fr-FR')}`;
-    }
-    const active = pickupSlots.filter((slot) => hasTimeRange(slot));
-    if (active.length === 0) return 'Non precisé';
-    return active
-      .map((slot) => `${slot.label} ${slot.start || '??'}-${slot.end || '??'}`)
-      .join(' / ');
+    if (!pickupWindowRange) return 'Date de récupération à définir';
+    return `Du ${pickupWindowRange.start.toLocaleDateString('fr-FR')} au ${pickupWindowRange.end.toLocaleDateString('fr-FR')}`;
   };
   const hasEstimatedDeliveryDate = Boolean(estimatedDeliveryDate);
   const hasPickupInfo =
     (usePickupDate && Boolean(pickupDate)) ||
-    (visibility === 'public' && Boolean(pickupWindowRange)) ||
-    (visibility !== 'public' && pickupSlots.some((slot) => hasTimeRange(slot)));
+    (!usePickupDate && Boolean(pickupWindowRange));
 
   return (
     <form onSubmit={handleSubmit} className="pb-6">
@@ -2264,7 +2161,28 @@ export function CreateOrderForm({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-3">
-                {visibility === 'public' ? (
+                {visibility === 'private' && (
+                  <label className="flex items-center gap-2 text-sm text-[#1F2937]">
+                    <input
+                      type="checkbox"
+                      checked={usePickupDate}
+                      onChange={(e) => setUsePickupDate(e.target.checked)}
+                    />
+                    Choisir une date précise (valable pour les commandes privées uniquement)
+                  </label>
+                )}
+                {usePickupDate ? (
+                  <div>
+                    <label className="block text-sm text-[#6B7280] mb-2">Date de retrait</label>
+                    <input
+                      type="date"
+                      value={pickupDate}
+                      onChange={(e) => setPickupDate(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
+                      required={usePickupDate}
+                    />
+                  </div>
+                ) : (
                   <>
                     <div>
                       <label className="block text-sm text-[#6B7280] mb-2">Durée de la période de recupération</label>
@@ -2460,85 +2378,10 @@ export function CreateOrderForm({
                       </div>
                     </div>
                   </>
-                ) : (
-                  <>
-                    {visibility === 'private' && (
-                      <label className="flex items-center gap-2 text-sm text-[#1F2937]">
-                        <input
-                          type="checkbox"
-                          checked={usePickupDate}
-                          onChange={(e) => setUsePickupDate(e.target.checked)}
-                        />
-                        Choisir une date précise (valable pour les commandes privées uniquement)
-                      </label>
-                    )}
-
-                    {usePickupDate ? (
-                      <div>
-                        <label className="block text-sm text-[#6B7280] mb-2">Date de retrait</label>
-                        <input
-                          type="date"
-                          value={pickupDate}
-                          onChange={(e) => setPickupDate(e.target.value)}
-                          className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                          required={usePickupDate}
-                        />
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {pickupSlots.map((slot) => {
-                          const isSlotEnabled = hasTimeRange(slot);
-                          return (
-                            <div key={slot.day ?? slot.label} className="flex items-center gap-3">
-                              <button
-                                type="button"
-                                onClick={() => slot.day && toggleSlot(slot.day)}
-                                className={`px-3 py-1 rounded-full border text-sm ${
-                                  isSlotEnabled
-                                    ? 'border-[#FF6B4A] bg-[#FFF1ED] text-[#FF6B4A]'
-                                    : 'border-gray-200 text-[#6B7280]'
-                                }`}
-                              >
-                                {slot.label}
-                              </button>
-                              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                                <input
-                                  type="time"
-                                  value={slot.start}
-                                  onChange={(e) => slot.day && updateSlotTime(slot.day, 'start', e.target.value)}
-                                  className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                  disabled={!isSlotEnabled}
-                                />
-                                <span>-</span>
-                                <input
-                                  type="time"
-                                  value={slot.end}
-                                  onChange={(e) => slot.day && updateSlotTime(slot.day, 'end', e.target.value)}
-                                  className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:border-[#FF6B4A]"
-                                  disabled={!isSlotEnabled}
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
                 )}
               </div>
               <div className="bg-[#F9FAFB] rounded-xl border border-gray-200 p-4 text-sm text-[#6B7280] space-y-2">
-                {visibility === 'public' ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
-                      <span>1) Définissez la durée qu'ont les participants pour venir récupérer leurs produits après réception.</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
-                      <span>2) Indiquez vos disponibilités pour chaque jour de la plage. Sur ces plages de disponibilités les participants pourront faire des demandes de rendez-vous de récupération pour venir chercher leurs produits</span>
-                    </div>
-                  </>
-                ) : usePickupDate ? (
+                {usePickupDate ? (
                   <>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
@@ -2553,11 +2396,11 @@ export function CreateOrderForm({
                   <>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#FF6B4A]" />
-                      <span>Activez les jours ou vous pouvez distribuer la commande.</span>
+                      <span>1) Définissez la durée qu'ont les participants pour venir récupérer leurs produits après réception.</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[#28C1A5]" />
-                      <span>Précisez une plage horaire par jour pour éviter les confusions.</span>
+                      <span>2) Indiquez vos disponibilités pour chaque jour de la plage. Sur ces plages de disponibilités les participants pourront faire des demandes de rendez-vous de récupération pour venir chercher leurs produits</span>
                     </div>
                   </>
                 )}

@@ -262,6 +262,35 @@
   background-color: rgba(255, 107, 74, 0.2);
 }
 
+.order-client-view__quantity-controls {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.order-client-view__quantity-controls .order-client-view__quantity-button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+}
+
+.order-client-view__quantity-input {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.25rem;
+  text-align: center;
+}
+
+.order-client-view__quantity-input:focus {
+  outline: none;
+  border-color: #ff6b4a;
+}
+
 .order-client-view__products-section {
   background-color: #ffffff;
 }

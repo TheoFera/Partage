@@ -4313,7 +4313,7 @@ function OrderProductsCarousel({
                   </p>
                 )}
                 {!isSelectionLocked && (
-                  <div className="flex items-center justify-center gap-2">
+                  <div className="order-client-view__quantity-controls">
                     <button
                       type="button"
                       onClick={() => onDeltaQuantity(product.id, -1)}
@@ -4342,7 +4342,7 @@ function OrderProductsCarousel({
                           [product.id]: formatQuantityInputValue(quantities[product.id] ?? 0, allowDecimal),
                         }));
                       }}
-                      className="w-20 text-center border border-gray-200 rounded-lg py-2 focus:outline-none focus:border-[#FF6B4A]"
+                      className="order-client-view__quantity-input"
                       aria-label={`Quantite pour ${product.name}`}
                       disabled={isSelectionLocked}
                     />
