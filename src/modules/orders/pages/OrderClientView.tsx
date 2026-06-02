@@ -2959,7 +2959,7 @@ const sharerAvatarUpdatedAt =
   }
 
   return (
-    <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 space-y-6 md:space-y-8">
+    <div className="w-full space-y-6 md:space-y-8">
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <button

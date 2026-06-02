@@ -153,6 +153,10 @@ type EmbeddedCheckoutInstance = {
   destroy?: () => void;
 };
 
+type StripeInitOptions = {
+  stripeAccount?: string;
+};
+
 type StripeInstance = {
   initEmbeddedCheckout: (options: {
     fetchClientSecret: () => Promise<string>;
@@ -162,7 +166,7 @@ type StripeInstance = {
 
 declare global {
   interface Window {
-    Stripe?: (publishableKey: string) => StripeInstance;
+    Stripe?: (publishableKey: string, options?: StripeInitOptions) => StripeInstance;
   }
 }
 
@@ -243,6 +247,9 @@ export function OrderPaymentView({
   );
   const [providerPaymentId, setProviderPaymentId] = React.useState<string | null>(
     () => initialSnapshot?.providerPaymentId ?? null
+  );
+  const [stripeAccountId, setStripeAccountId] = React.useState<string | null>(
+    () => initialSnapshot?.stripeAccountId ?? null
   );
   const [isCreatingPayment, setIsCreatingPayment] = React.useState(false);
   const [isVerifying, setIsVerifying] = React.useState(false);
@@ -384,6 +391,7 @@ export function OrderPaymentView({
         if (data.provider_payment_id) {
           setProviderPaymentId(data.provider_payment_id);
         }
+        setStripeAccountId(data.stripe_account_id ?? null);
         setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
 
         if (data.status === 'succeeded') {
@@ -521,6 +529,7 @@ export function OrderPaymentView({
             setCheckoutPaymentSessionId(data.checkout_payment_session_id);
             setProviderPaymentId(data.provider_payment_id || data.checkout_payment_session_id);
             setCheckoutClientSecret(null);
+            setStripeAccountId(data.stripe_account_id ?? null);
             setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
             setPaymentState(data.status === 'succeeded' ? 'succeeded' : 'processing');
             setPaymentStatusMessage(
@@ -545,6 +554,7 @@ export function OrderPaymentView({
         setCheckoutPaymentSessionId(data.checkout_payment_session_id);
         setProviderPaymentId(data.provider_payment_id);
         setCheckoutClientSecret(data.client_secret);
+        setStripeAccountId(data.stripe_account_id ?? null);
         setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
       } catch (error) {
         console.error('Stripe checkout session error:', error);
@@ -711,7 +721,10 @@ export function OrderPaymentView({
         if (!window.Stripe) {
           throw new Error('Stripe.js non disponible.');
         }
-        const stripe = window.Stripe(STRIPE_PUBLISHABLE_KEY);
+        const stripe = window.Stripe(
+          STRIPE_PUBLISHABLE_KEY,
+          stripeAccountId ? { stripeAccount: stripeAccountId } : undefined
+        );
         const checkout = await stripe.initEmbeddedCheckout({
           fetchClientSecret: async () => checkoutClientSecret,
           onComplete: () => syncCheckoutPaymentStatus(providerPaymentId, checkoutPaymentSessionId),
@@ -745,6 +758,7 @@ export function OrderPaymentView({
     checkoutPaymentSessionId,
     paymentState,
     providerPaymentId,
+    stripeAccountId,
     syncCheckoutPaymentStatus,
   ]);
 
@@ -756,6 +770,7 @@ export function OrderPaymentView({
       checkoutPaymentSessionId,
       checkoutClientSecret,
       providerPaymentId,
+      stripeAccountId,
       paymentBreakdown: paymentBreakdown as unknown as Record<string, unknown>,
       paymentState,
       paymentStatusMessage,
@@ -771,6 +786,7 @@ export function OrderPaymentView({
     paymentState,
     paymentStatusMessage,
     providerPaymentId,
+    stripeAccountId,
     snapshotKey,
   ]);
 
@@ -813,6 +829,7 @@ export function OrderPaymentView({
     setCheckoutPaymentSessionId(null);
     setCheckoutClientSecret(null);
     setProviderPaymentId(null);
+    setStripeAccountId(null);
     setCheckoutReady(false);
     setPaymentState('idle');
     setPaymentStatusMessage(null);
