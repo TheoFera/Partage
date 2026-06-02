@@ -44,7 +44,7 @@ type EdgeInvokeErrorLike = {
 };
 
 type StripeCreateCheckoutSessionErrorBody = {
-  error?: string;
+  error?: unknown;
   stripe_message?: string | null;
   status?: number;
   details?: unknown;
@@ -65,6 +65,61 @@ type StripeCheckoutSessionStatusResponse = {
   payment_mode?: 'stripe_checkout' | 'direct_charge' | 'local_zero';
   payment_breakdown?: Record<string, unknown> | null;
   stripe_account_id?: string | null;
+};
+
+type ProducerStripeState = {
+  readyForOrders: boolean;
+  status: 'not_connected' | 'action_required' | 'connected';
+};
+
+const extractErrorText = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed && trimmed !== '[object Object]' ? trimmed : null;
+  }
+  if (value && typeof value === 'object') {
+    const message = (value as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized && serialized !== '{}' ? serialized : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const extractEdgeInvokeErrorMessage = async (error: unknown, fallback: string) => {
+  const maybeContext = (error as EdgeInvokeErrorLike | null)?.context;
+  if (maybeContext instanceof Response) {
+    try {
+      const payload = (await maybeContext.clone().json()) as StripeCreateCheckoutSessionErrorBody;
+      const message =
+        extractErrorText(payload?.stripe_message) ??
+        extractErrorText(payload?.error) ??
+        extractErrorText(
+          payload?.details && typeof payload.details === 'object'
+            ? (payload.details as { error?: { message?: unknown } }).error?.message
+            : null
+        ) ??
+        extractErrorText(payload?.details);
+      if (message) {
+        return message;
+      }
+    } catch {
+      try {
+        const text = await maybeContext.clone().text();
+        if (text.trim()) return text.trim();
+      } catch {
+        // Ignore response parsing fallback failures.
+      }
+    }
+  }
+
+  return extractErrorText((error as { message?: unknown } | null)?.message) ?? fallback;
 };
 
 const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined): PaymentBreakdown => ({
@@ -199,6 +254,8 @@ export function OrderPaymentView({
     () => initialSnapshot?.paymentStatusMessage ?? null
   );
   const [paymentError, setPaymentError] = React.useState<string | null>(() => initialSnapshot?.paymentError ?? null);
+  const [isProducerStripeLoading, setIsProducerStripeLoading] = React.useState(true);
+  const [producerStripeState, setProducerStripeState] = React.useState<ProducerStripeState | null>(null);
   const [checkoutReady, setCheckoutReady] = React.useState(false);
   const [paymentBreakdown, setPaymentBreakdown] = React.useState<PaymentBreakdown>(() =>
     mapPaymentBreakdown((initialSnapshot?.paymentBreakdown as Record<string, unknown> | null | undefined) ?? null)
@@ -220,6 +277,55 @@ export function OrderPaymentView({
       console.warn('Unable to clear stale sessionStorage idempotency key:', error);
     }
   }, [storageKey]);
+
+  React.useEffect(() => {
+    let active = true;
+    const loadProducerStripeState = async () => {
+      const supabase = getSupabaseClient();
+
+      setIsProducerStripeLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('legal_entities_public')
+          .select('stripe_ready_for_orders, stripe_connection_status')
+          .eq('profile_id', order.producerId)
+          .maybeSingle();
+        if (!active) return;
+        if (error || !data) {
+          setProducerStripeState(null);
+          return;
+        }
+        setProducerStripeState({
+          readyForOrders: Boolean(data.stripe_ready_for_orders),
+          status:
+            data.stripe_connection_status === 'connected' ||
+            data.stripe_connection_status === 'action_required' ||
+            data.stripe_connection_status === 'not_connected'
+              ? data.stripe_connection_status
+              : 'not_connected',
+        });
+      } finally {
+        if (active) {
+          setIsProducerStripeLoading(false);
+        }
+      }
+    };
+
+    void loadProducerStripeState();
+
+    return () => {
+      active = false;
+    };
+  }, [order.producerId]);
+
+  const producerStripeBlockingReason = React.useMemo(() => {
+    if (!producerStripeState || producerStripeState.readyForOrders) return null;
+    const producerLabel = order.producerName?.trim() || 'Le producteur';
+    if (producerStripeState.status === 'not_connected') {
+      return `${producerLabel} n’a pas encore de compte Stripe Connect. Le paiement par carte n’est pas disponible pour cette commande.`;
+    }
+    return `${producerLabel} n’a pas encore terminé Stripe Connect. Le paiement par carte n’est pas disponible pour cette commande.`;
+  }, [order.producerName, producerStripeState]);
 
   const disposeCheckout = React.useCallback(() => {
     const checkout = checkoutRef.current;
@@ -373,6 +479,16 @@ export function OrderPaymentView({
   const createServerBackedCheckoutSession = React.useCallback(
     async (forceNew = false) => {
       if (isCreatingPayment || isVerifying) return;
+      if (isProducerStripeLoading) {
+        setPaymentError('Vérification du compte de paiement du producteur en cours. Merci de patienter.');
+        return;
+      }
+      if (producerStripeBlockingReason) {
+        setPaymentState('failed');
+        setPaymentStatusMessage(producerStripeBlockingReason);
+        setPaymentError(producerStripeBlockingReason);
+        return;
+      }
       if (checkoutClientSecret && providerPaymentId && checkoutPaymentSessionId && !forceNew) {
         return;
       }
@@ -432,29 +548,11 @@ export function OrderPaymentView({
         setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
       } catch (error) {
         console.error('Stripe checkout session error:', error);
-        let detailedMessage: string | null = null;
-        const maybeContext = (error as EdgeInvokeErrorLike | null)?.context;
-        if (maybeContext instanceof Response) {
-          try {
-            const payload =
-              (await maybeContext.clone().json()) as StripeCreateCheckoutSessionErrorBody;
-            const msg = payload?.stripe_message ?? payload?.error;
-            if (typeof msg === 'string' && msg.trim()) {
-              detailedMessage = msg.trim();
-            }
-          } catch {
-            try {
-              const text = await maybeContext.clone().text();
-              if (text.trim()) detailedMessage = text.trim();
-            } catch {
-              // Ignore parse fallback failure.
-            }
-          }
-        }
-        const message =
-          detailedMessage
-            ? `Impossible d initier le paiement. ${detailedMessage}`
-            : 'Impossible d initier le paiement. Merci de reessayer.';
+        const detailedMessage = await extractEdgeInvokeErrorMessage(
+          error,
+          'Merci de reessayer.'
+        );
+        const message = `Impossible d initier le paiement. ${detailedMessage}`;
         setPaymentState('failed');
         setPaymentStatusMessage(message);
         setPaymentError(message);
@@ -467,10 +565,12 @@ export function OrderPaymentView({
       checkoutPaymentSessionId,
       createCheckoutPaymentSessionDraft,
       disposeCheckout,
+      isProducerStripeLoading,
       isCreatingPayment,
       isVerifying,
       order.id,
       order.orderCode,
+      producerStripeBlockingReason,
       providerPaymentId,
     ]
   );
@@ -570,30 +670,11 @@ export function OrderPaymentView({
         setCheckoutClientSecret(data.client_secret);
       } catch (error) {
         console.error('Stripe checkout session error:', error);
-        let detailedMessage: string | null = null;
-        const maybeContext = (error as EdgeInvokeErrorLike | null)?.context;
-        if (maybeContext instanceof Response) {
-          try {
-            const payload =
-              (await maybeContext.clone().json()) as StripeCreateCheckoutSessionErrorBody;
-            const msg = payload?.stripe_message ?? payload?.error;
-            if (typeof msg === 'string' && msg.trim()) {
-              detailedMessage = msg.trim();
-            }
-          } catch {
-            try {
-              const text = await maybeContext.clone().text();
-              if (text.trim()) detailedMessage = text.trim();
-            } catch {
-              // Ignore parse fallback failure.
-            }
-          }
-        }
-        setPaymentError(
-          detailedMessage
-            ? `Impossible d initier le paiement. ${detailedMessage}`
-            : 'Impossible d initier le paiement. Merci de reessayer.'
+        const detailedMessage = await extractEdgeInvokeErrorMessage(
+          error,
+          'Merci de reessayer.'
         );
+        setPaymentError(`Impossible d initier le paiement. ${detailedMessage}`);
       } finally {
         setIsCreatingPayment(false);
       }
@@ -755,7 +836,7 @@ export function OrderPaymentView({
   const shouldShowGrossTotal = !isClosePayment && displayedTotalEconomicCents !== displayedCardAmountCents;
   const canSubmitWithoutCardPayment =
     !isClosePayment && displayedCardAmountCents === 0 && (hasResolvedPaymentBreakdown || totalDueCents === 0);
-  const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting;
+  const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting || isProducerStripeLoading;
   const hasCheckoutSession = Boolean(checkoutClientSecret && providerPaymentId);
   const shouldShowEmbeddedCheckout =
     hasCheckoutSession && paymentState !== 'processing' && paymentState !== 'succeeded';
@@ -831,10 +912,12 @@ export function OrderPaymentView({
             type="button"
             onClick={() => createServerBackedCheckoutSession(false)}
             className="order-payment-view__confirm-button"
-            disabled={isBusy}
+            disabled={isBusy || Boolean(producerStripeBlockingReason)}
             aria-busy={isBusy}
           >
-            {isBusy
+            {isProducerStripeLoading
+              ? 'Vérification du paiement...'
+              : isBusy
               ? 'Paiement en cours...'
               : hasCheckoutSession
                 ? 'Reprendre le paiement'
@@ -844,9 +927,16 @@ export function OrderPaymentView({
                   ? 'Payer et clôturer'
                   : 'Payer avec votre carte bancaire'}
           </button>
+          {producerStripeBlockingReason ? (
+            <p className="order-payment-view__confirm-feedback" role="alert">
+              {producerStripeBlockingReason}
+            </p>
+          ) : null}
           {isBusy ? (
             <p className="order-payment-view__confirm-feedback" role="status">
-              Paiement en cours. Merci de finaliser votre paiement dans le module.
+              {isProducerStripeLoading
+                ? 'Vérification du compte de paiement du producteur...'
+                : 'Paiement en cours. Merci de finaliser votre paiement dans le module.'}
             </p>
           ) : null}
           {paymentStatusMessage ? (

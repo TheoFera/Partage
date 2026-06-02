@@ -14,6 +14,27 @@ import {
   verifySessionOwnership,
 } from "../_shared/checkout-payment.ts";
 
+const serializeUnknownError = (error: unknown) => {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  if (error && typeof error === "object") {
+    const message = "message" in error && typeof error.message === "string" ? error.message.trim() : "";
+    if (message) {
+      return message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "[unserializable error object]";
+    }
+  }
+  return String(error);
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
@@ -235,7 +256,7 @@ Deno.serve(async (req) => {
       stripe_account_id: preparedCheckoutPaymentSession.stripe_account_id ?? null,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = serializeUnknownError(error);
     const status = message === "Unauthorized" ? 401 : message === "Forbidden" ? 403 : 400;
     return jsonResponse({ error: message }, status);
   }
