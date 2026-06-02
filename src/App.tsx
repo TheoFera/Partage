@@ -1534,7 +1534,7 @@ const ProductRouteView: React.FC<ProductRouteViewProps> = ({
     if (!locationLabel && !dateLabel) return null;
     return {
       localId: `order-step-${orderCode}`,
-      etape: 'Recuperation de la commande',
+      etape: 'Récupération de la commande',
       city,
       postcode,
       lat: typeof lat === 'number' ? lat : orderData.mapLocation?.lat,

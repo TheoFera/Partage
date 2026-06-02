@@ -2322,7 +2322,7 @@ export function CreateOrderForm({
                         </span>
                         <span className="order-client-view__calendar-legend-item">
                           <span className="order-client-view__calendar-legend-swatch order-client-view__calendar-legend-swatch--availability" />
-                          Récuperation
+                          Récupération
                         </span>
                       </div>
                       <div className="order-client-view__calendar-grid">
@@ -2453,7 +2453,7 @@ export function CreateOrderForm({
                         ) : (
                           <p className="order-client-view__calendar-slots-note">
                             {pickupWindowRange
-                              ? 'Définissez les jours et heures de récuperation des produits.'
+                              ? 'Définissez les jours et heures de récupération des produits.'
                               : 'Définissez une date de clôture pour visualiser la période de récupération du produit.'}
                           </p>
                         )}

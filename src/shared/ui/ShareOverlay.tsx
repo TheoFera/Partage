@@ -698,7 +698,7 @@ export function ShareOverlay({
                   </span>
                   <span className="share-overlay__calendar-legend-item">
                     <span className="share-overlay__calendar-legend-swatch share-overlay__calendar-legend-swatch--pickup" />
-                    Récuperation
+                    Récupération
                   </span>
                 </div>
                 {(() => {
