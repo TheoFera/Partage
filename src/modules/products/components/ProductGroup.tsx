@@ -292,7 +292,7 @@ export function ProductResultCard({
   const measurementLabel = product.measurement === 'kg' ? '/ Kg' : '/ unité';
   const hasPrice = allowDisplayPriceWithoutActiveLot ? Number(product.price) > 0 : hasValidLotPrice(product);
   const priceLabel =
-    priceLabelOverride ?? (hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir');
+    priceLabelOverride ?? (hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix à venir');
   const canShowPriceDetails = Boolean(priceLabelOverride) || hasPrice;
   const width = typeof cardWidth === 'number' ? `${cardWidth}px` : cardWidth ?? `${CARD_WIDTH}px`;
   const cardStyle = {

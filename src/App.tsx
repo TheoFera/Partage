@@ -1980,7 +1980,7 @@ export default function App() {
   const buildProductSharePayload = React.useCallback(
     (product: Product, context?: ProductShareContext | null): ShareOverlayPayload => {
       const hasPrice = Boolean(product.activeLotCode ?? product.activeLotId) && product.price > 0;
-      const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix a venir';
+      const priceLabel = hasPrice ? formatEurosFromCents(eurosToCents(product.price)) : 'Prix à venir';
       const unitLabel = hasPrice ? ` / ${product.unit}` : '';
       const safeContext: ProductShareContext = {
         product,

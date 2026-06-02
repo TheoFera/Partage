@@ -805,7 +805,7 @@ export function ShareOverlay({
                 <strong>{producerLabel}</strong> - {producerCity || 'Ville proche'}
               </p>
               <p className="share-overlay__price">
-                {product.price > 0 ? formatCurrency(product.price) : 'Prix a venir'}
+                {product.price > 0 ? formatCurrency(product.price) : 'Prix à venir'}
                 {product.price > 0 ? ` / ${product.unit}` : ''}
               </p>
               <p className="share-overlay__body-text">{detail?.longDescription || description || product.description}</p>

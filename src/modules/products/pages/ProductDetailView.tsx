@@ -563,7 +563,7 @@ const ValuePieChart = ({
 const lotStatusBadge = (lot: ProductionLot) => {
   if (lot.statut === 'en_cours') return { label: 'En cours', className: 'pd-lot-badge pd-lot-badge--active' };
   if (lot.statut === 'a_venir') return { label: 'A venir', className: 'pd-lot-badge pd-lot-badge--upcoming' };
-  return { label: 'Epuise', className: 'pd-lot-badge pd-lot-badge--closed' };
+  return { label: 'Épuisé', className: 'pd-lot-badge pd-lot-badge--closed' };
 };
 
 export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
