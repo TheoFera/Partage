@@ -950,7 +950,7 @@ async function createPaymentStub(
     raw: JsonRecord;
   },
 ) {
-  const breakdown = params.paymentBreakdown ?? emptyPaymentBreakdown();
+  const breakdown = parsePaymentBreakdown(params.paymentBreakdown ?? emptyPaymentBreakdown());
   const { data, error } = await serviceClient
     .from("payments")
     .insert({
@@ -1984,8 +1984,8 @@ async function computeRetainedBreakdownFromPlans(
     const paymentProviderValuePerUnit = paymentProviderValuePerUnitByLot.get(plan.lotId) ?? 0;
     const unitsForShare = isKgSaleUnit(plan.saleUnit) ? Number(plan.reservedKg ?? 0) : plan.storedQuantityUnits;
     const normalizedUnits = Math.max(0, Number(unitsForShare) || 0);
-    acc.platformServiceFeeCents += platformValuePerUnit * normalizedUnits;
-    acc.paymentProviderRetainedCents += paymentProviderValuePerUnit * normalizedUnits;
+    acc.platformServiceFeeCents += toNonNegativeInteger(platformValuePerUnit * normalizedUnits);
+    acc.paymentProviderRetainedCents += toNonNegativeInteger(paymentProviderValuePerUnit * normalizedUnits);
     return acc;
   }, {
     platformServiceFeeCents: 0,

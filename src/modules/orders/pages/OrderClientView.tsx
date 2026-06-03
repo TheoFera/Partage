@@ -2884,46 +2884,6 @@ const sharerAvatarUpdatedAt =
       printWindow.print();
     }, 250);
   }, []);
-  const canShowPreview = isAuthenticated && Boolean(myParticipant) && !isOwner && !isProducer;
-  const otherParticipants = React.useMemo(
-    () =>
-      orderFullValue.participants.filter(
-        (participant) =>
-          participant.role === 'participant' &&
-          participant.participationStatus === 'accepted' &&
-          participant.id !== myParticipant?.id
-      ),
-    [orderFullValue.participants, myParticipant?.id]
-  );
-  const otherParticipantIds = React.useMemo(
-    () => new Set(otherParticipants.map((participant) => participant.id)),
-    [otherParticipants]
-  );
-  const previewItems = React.useMemo(() => {
-    if (!canShowPreview || otherParticipantIds.size === 0) return [];
-    const totals = new Map<string, number>();
-    orderFullValue.items.forEach((item) => {
-      if (!otherParticipantIds.has(item.participantId)) return;
-      const code = productCodeByDbId.get(item.productId);
-      if (!code) return;
-      totals.set(code, (totals.get(code) ?? 0) + getOrderItemQuantity(item));
-    });
-    return products
-      .map((product) => {
-        const totalUnits = totals.get(product.id) ?? 0;
-        if (!totalUnits) return null;
-        const quantityLabel =
-          product.measurement === 'kg' ? `${totalUnits.toFixed(2)} kg` : formatUnitsTotal(totalUnits);
-        return { id: product.id, label: `${product.name} x ${quantityLabel}` };
-      })
-      .filter((entry): entry is { id: string; label: string } => Boolean(entry));
-  }, [canShowPreview, orderFullValue.items, otherParticipantIds, productCodeByDbId, products, formatUnitsTotal]);
-  const previewFallbackLabel = otherParticipants.length
-    ? `${otherParticipants.length} participant${otherParticipants.length > 1 ? 's' : ''} ${
-        otherParticipants.length > 1 ? 'ont' : 'a'
-      } déjà composé leur panier.`
-    : "Aucun autre participant n'a encore composé son panier.";
-
   const handleParticipantClick = (participant: OrderParticipant) => {
     const target = participant.handle ?? participant.name;
     if (!target) return;
@@ -4111,24 +4071,6 @@ const sharerAvatarUpdatedAt =
                 >
                   Imprimer le tableau
                 </button>
-              </div>
-            )}
-            {canShowPreview && (
-              <div className="order-client-view__participants-preview">
-                <p className="order-client-view__participants-preview-title">
-                  Ce que les autres ont pris (aperçu)
-                </p>
-                {previewItems.length > 0 ? (
-                  <ul className="order-client-view__participants-preview-list">
-                    {previewItems.map((item) => (
-                      <li key={item.id} className="order-client-view__participants-preview-item">
-                        {item.label}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="order-client-view__participants-preview-fallback">{previewFallbackLabel}</p>
-                )}
               </div>
             )}
             {isOwner && orderParticipantFeatures.participationApproval.enabled && pendingParticipants.length > 0 && (
