@@ -4,6 +4,7 @@ import {
   finalizeCheckoutPaymentSession,
   jsonResponse,
   requireAuthenticatedUser,
+  serializeUnknownError,
   verifySessionOwnership,
 } from "../_shared/checkout-payment.ts";
 
@@ -44,7 +45,7 @@ Deno.serve(async (req) => {
       ),
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = serializeUnknownError(error, "Impossible de finaliser le paiement pour le moment.");
     const status = message === "Unauthorized" ? 401 : message === "Forbidden" ? 403 : 400;
     return jsonResponse({ error: message }, status);
   }

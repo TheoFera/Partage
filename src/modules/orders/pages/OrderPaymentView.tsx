@@ -122,6 +122,10 @@ const extractEdgeInvokeErrorMessage = async (error: unknown, fallback: string) =
   return extractErrorText((error as { message?: unknown } | null)?.message) ?? fallback;
 };
 
+const isStripeCheckoutComplete = (stripeStatus?: string | null, paymentStatus?: string | null) =>
+  stripeStatus === 'complete' &&
+  (paymentStatus === 'paid' || paymentStatus === 'no_payment_required' || paymentStatus === 'unpaid');
+
 const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined): PaymentBreakdown => ({
   totalEconomicCents: Math.max(0, Math.round(Number(value?.total_economic_cents ?? 0) || 0)),
   coopCreditUsedCents: Math.max(0, Math.round(Number(value?.coop_credit_used_cents ?? 0) || 0)),
@@ -267,6 +271,8 @@ export function OrderPaymentView({
   const [paymentBreakdown, setPaymentBreakdown] = React.useState<PaymentBreakdown>(() =>
     mapPaymentBreakdown((initialSnapshot?.paymentBreakdown as Record<string, unknown> | null | undefined) ?? null)
   );
+  const [latestStripeStatus, setLatestStripeStatus] = React.useState<string | null>(null);
+  const [latestStripePaymentStatus, setLatestStripePaymentStatus] = React.useState<string | null>(null);
   const hasConfirmedRef = React.useRef(false);
   const checkoutRef = React.useRef<EmbeddedCheckoutInstance | null>(null);
   const checkoutContainerId = React.useMemo(() => `stripe-checkout-${order.id}`, [order.id]);
@@ -393,10 +399,12 @@ export function OrderPaymentView({
         }
         setStripeAccountId(data.stripe_account_id ?? null);
         setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
+        setLatestStripeStatus(data.stripe_status ?? null);
+        setLatestStripePaymentStatus(data.payment_status ?? null);
 
         if (data.status === 'succeeded') {
           setPaymentState('succeeded');
-          setPaymentStatusMessage('Paiement confirme. Finalisation terminee.');
+          setPaymentStatusMessage('Paiement confirmé. Finalisation terminée.');
           await onConfirmPayment({
             provider: 'stripe',
             providerPaymentId: data.provider_payment_id || sessionId || '',
@@ -416,34 +424,42 @@ export function OrderPaymentView({
         }
 
         if (data.status === 'processing') {
-          const isStripeCheckoutComplete =
-            data.stripe_status === 'complete' &&
-            (data.payment_status === 'paid' || data.payment_status === 'no_payment_required' || data.payment_status === 'unpaid');
-          if (!isStripeCheckoutComplete) {
+          if (!isStripeCheckoutComplete(data.stripe_status, data.payment_status)) {
             setPaymentState('idle');
-            setPaymentStatusMessage('Session Stripe prete. Vous pouvez reprendre le paiement.');
+            setPaymentStatusMessage('Session Stripe prête. Vous pouvez reprendre le paiement.');
             setPaymentError(null);
             return;
           }
           setPaymentState('processing');
-          setPaymentStatusMessage('Paiement valide. Finalisation serveur en cours...');
+          setPaymentStatusMessage('Paiement validé. Finalisation serveur en cours...');
           setPaymentError(null);
           return;
         }
 
         setPaymentState(data.status);
-        const message =
-          data.error_message ||
-          (data.status === 'retryable'
-            ? 'Le paiement n a pas pu etre finalise. Vous pouvez relancer une nouvelle session.'
-            : 'Le paiement a echoue. Merci de reessayer.');
+        const backendMessage = extractErrorText(data.error_message) ?? null;
+        const message = isStripeCheckoutComplete(data.stripe_status, data.payment_status)
+          ? backendMessage
+            ? `Paiement reçu par Stripe, mais la finalisation de votre commande a échoué : ${backendMessage} Aucun nouveau paiement ne sera débité si vous relancez la finalisation.`
+            : 'Paiement reçu par Stripe, mais la finalisation de votre commande a échoué. Aucun nouveau paiement ne sera débité si vous relancez la finalisation.'
+          : backendMessage ||
+            (data.status === 'retryable'
+              ? 'Le paiement n’a pas pu être finalisé. Vous pouvez relancer une nouvelle session.'
+              : 'Le paiement a échoué. Merci de réessayer.');
         setPaymentStatusMessage(message);
         setPaymentError(message);
       } catch (error) {
         console.error('Stripe payment confirm error:', error);
+        const detailedMessage = await extractEdgeInvokeErrorMessage(
+          error,
+          'Impossible de finaliser le paiement pour le moment.'
+        );
         setPaymentState('failed');
-        setPaymentStatusMessage('Impossible de verifier le paiement pour le moment.');
-        setPaymentError('Impossible de verifier le paiement. Merci de reessayer.');
+        const message = isStripeCheckoutComplete(latestStripeStatus, latestStripePaymentStatus)
+          ? `Paiement reçu par Stripe, mais la finalisation de votre commande reste incomplète : ${detailedMessage} Aucun nouveau paiement ne sera débité si vous relancez la finalisation.`
+          : detailedMessage;
+        setPaymentStatusMessage(message);
+        setPaymentError(message);
       } finally {
         setIsVerifying(false);
       }
@@ -453,6 +469,8 @@ export function OrderPaymentView({
       clearCheckoutQueryFromUrl,
       draft.checkoutPaymentSessionId,
       isVerifying,
+      latestStripePaymentStatus,
+      latestStripeStatus,
       onConfirmPayment,
       providerPaymentId,
     ]
@@ -837,6 +855,10 @@ export function OrderPaymentView({
     void createServerBackedCheckoutSession(true);
   }, [createServerBackedCheckoutSession, disposeCheckout, storageKey]);
 
+  const handleResumeFinalization = React.useCallback(() => {
+    void syncCheckoutPaymentStatus(providerPaymentId ?? undefined, checkoutPaymentSessionId);
+  }, [checkoutPaymentSessionId, providerPaymentId, syncCheckoutPaymentStatus]);
+
   const hasResolvedPaymentBreakdown = React.useMemo(
     () =>
       Object.values(paymentBreakdown).some(
@@ -855,6 +877,9 @@ export function OrderPaymentView({
     !isClosePayment && displayedCardAmountCents === 0 && (hasResolvedPaymentBreakdown || totalDueCents === 0);
   const isBusy = isCreatingPayment || isVerifying || isCheckoutMounting || isProducerStripeLoading;
   const hasCheckoutSession = Boolean(checkoutClientSecret && providerPaymentId);
+  const hasRemotePaymentCompletion = isStripeCheckoutComplete(latestStripeStatus, latestStripePaymentStatus);
+  const shouldOfferFinalizationResume =
+    hasRemotePaymentCompletion && (paymentState === 'retryable' || paymentState === 'failed');
   const shouldShowEmbeddedCheckout =
     hasCheckoutSession && paymentState !== 'processing' && paymentState !== 'succeeded';
 
@@ -961,7 +986,17 @@ export function OrderPaymentView({
               {paymentStatusMessage}
             </p>
           ) : null}
-          {paymentState === 'retryable' || paymentState === 'failed' ? (
+          {shouldOfferFinalizationResume ? (
+            <button
+              type="button"
+              onClick={handleResumeFinalization}
+              className="order-payment-view__confirm-button"
+              disabled={isBusy}
+            >
+              Relancer la finalisation de la commande
+            </button>
+          ) : null}
+          {(paymentState === 'retryable' || paymentState === 'failed') && !shouldOfferFinalizationResume ? (
             <button
               type="button"
               onClick={handleRetryPayment}

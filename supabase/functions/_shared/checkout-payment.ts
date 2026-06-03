@@ -106,6 +106,33 @@ type DbPaymentRow = {
   participant_id: string;
   provider_payment_id: string | null;
   status: string;
+  amount_cents: number;
+  total_economic_cents: number;
+  coop_credit_used_cents: number;
+  card_amount_cents: number;
+  producer_net_target_cents: number;
+  platform_retained_target_cents: number;
+  platform_service_fee_cents: number;
+  payment_provider_retained_cents: number;
+  sharer_value_cents: number;
+  platform_delivery_retained_cents: number;
+  producer_delivery_cents: number;
+  stripe_application_fee_amount_cents: number;
+  producer_card_net_cents: number;
+  producer_topup_due_cents: number;
+};
+
+type CheckoutWorkflowStage = {
+  code: string;
+  label: string;
+};
+
+type CheckoutWorkflowErrorShape = Error & {
+  checkoutErrorCode?: string | null;
+  checkoutStageCode?: string | null;
+  checkoutStageLabel?: string | null;
+  checkoutDetails?: string | null;
+  checkoutHint?: string | null;
 };
 
 type ProducerLegalEntityRow = {
@@ -258,6 +285,15 @@ export const parsePaymentBreakdown = (value: unknown): PaymentBreakdown => {
     return acc;
   }, emptyPaymentBreakdown());
 };
+
+const paymentBreakdownFromPaymentRow = (payment: Partial<DbPaymentRow>): PaymentBreakdown =>
+  PAYMENT_BREAKDOWN_KEYS.reduce((acc, key) => {
+    acc[key] = toNonNegativeInteger(payment[key]);
+    return acc;
+  }, emptyPaymentBreakdown());
+
+const hasPaymentBreakdownValues = (breakdown: PaymentBreakdown) =>
+  PAYMENT_BREAKDOWN_KEYS.some((key) => breakdown[key] > 0);
 
 const serializePaymentBreakdown = (value: PaymentBreakdown): JsonRecord => ({ ...value });
 
@@ -493,6 +529,62 @@ const isKgSaleUnit = (saleUnit?: string | null) => (saleUnit ?? "").trim().toLow
 const isKgUnitLabel = (unitLabel?: string | null) => (unitLabel ?? "").trim().toLowerCase() === "kg";
 const isPositiveNumber = (value: number | null | undefined): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
+
+const extractErrorText = (value: unknown) => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed && trimmed !== "[object Object]" ? trimmed : null;
+  }
+  if (value && typeof value === "object") {
+    const maybeMessage = "message" in value ? extractErrorText((value as { message?: unknown }).message) : null;
+    if (maybeMessage) return maybeMessage;
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized && serialized !== "{}" ? serialized : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const toCheckoutWorkflowError = (
+  stage: CheckoutWorkflowStage,
+  error: unknown,
+  fallbackCode = "checkout_workflow_error",
+  fallbackMessage = "Une erreur est survenue pendant la finalisation du paiement.",
+) => {
+  const message =
+    extractErrorText((error as { message?: unknown } | null)?.message) ??
+    extractErrorText(error) ??
+    fallbackMessage;
+  const code =
+    extractErrorText((error as { code?: unknown } | null)?.code) ??
+    extractErrorText((error as { error_code?: unknown } | null)?.error_code) ??
+    fallbackCode;
+  const details = extractErrorText((error as { details?: unknown } | null)?.details);
+  const hint = extractErrorText((error as { hint?: unknown } | null)?.hint);
+  const suffix = [
+    details ? `Détails : ${details}` : null,
+    hint ? `Conseil : ${hint}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const wrapped = new Error(
+    `Échec à l'étape « ${stage.label} » : ${message}${suffix ? ` ${suffix}` : ""}`,
+  ) as CheckoutWorkflowErrorShape;
+  wrapped.checkoutErrorCode = code;
+  wrapped.checkoutStageCode = stage.code;
+  wrapped.checkoutStageLabel = stage.label;
+  wrapped.checkoutDetails = details;
+  wrapped.checkoutHint = hint;
+  return wrapped;
+};
+
+export const serializeUnknownError = (
+  error: unknown,
+  fallback = "Une erreur est survenue.",
+) => extractErrorText((error as { message?: unknown } | null)?.message) ?? extractErrorText(error) ?? fallback;
 
 const resolveUnitWeightKg = (saleUnit: string | null, unitWeightKg: number | null, packaging?: string | null) => {
   if (isPositiveNumber(unitWeightKg)) return unitWeightKg;
@@ -816,7 +908,9 @@ async function findExistingPaymentByProviderPaymentId(
 ) {
   const { data, error } = await serviceClient
     .from("payments")
-    .select("id, participant_id, provider_payment_id, status")
+    .select(
+      "id, participant_id, provider_payment_id, status, amount_cents, total_economic_cents, coop_credit_used_cents, card_amount_cents, producer_net_target_cents, platform_retained_target_cents, platform_service_fee_cents, payment_provider_retained_cents, sharer_value_cents, platform_delivery_retained_cents, producer_delivery_cents, stripe_application_fee_amount_cents, producer_card_net_cents, producer_topup_due_cents",
+    )
     .eq("provider_payment_id", providerPaymentId)
     .limit(1)
     .maybeSingle();
@@ -2364,43 +2458,65 @@ async function finalizeParticipantCheckoutSession(
   checkoutPaymentSession: CheckoutPaymentSessionRow,
   stripeSession: StripeCheckoutSession,
 ) {
+  let currentStage: CheckoutWorkflowStage = {
+    code: "participant_finalize_init",
+    label: "initialisation de la finalisation participant",
+  };
+  let order: DbOrderRow | null = null;
+  let participant: DbParticipantRow | null = null;
+  let participantCreatedInFlow = false;
+  let createdPaymentId: string | null = null;
   const providerPaymentId = normalizeText(checkoutPaymentSession.provider_payment_id) || normalizeText(stripeSession.id);
   if (!providerPaymentId && checkoutPaymentSession.payment_mode !== "local_zero") {
     throw new Error("Missing provider_payment_id on checkout payment session");
   }
-  const existingPayment = providerPaymentId
-    ? await findExistingPaymentByProviderPaymentId(
-      serviceClient,
-      providerPaymentId,
-    )
-    : null;
-  if (existingPayment) {
-    if (existingPayment.status === "pending") {
-      await finalizePaymentSimulation(serviceClient, existingPayment.id);
-    } else if (existingPayment.status !== "paid" && existingPayment.status !== "authorized") {
-      throw new Error("Existing payment is not in a finalizable state");
-    }
-    return;
-  }
-
-  const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
-  const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
-  let participant = await getParticipantByProfile(
-    serviceClient,
-    checkoutPaymentSession.order_id,
-    checkoutPaymentSession.profile_id,
-  );
-  let participantCreatedInFlow = false;
-  if (!participant) {
-    participant = await createParticipant(serviceClient, order, checkoutPaymentSession.profile_id);
-    participantCreatedInFlow = true;
-  }
-
-  const draft = parseParticipantDraft(checkoutPaymentSession.draft_payload);
-  let createdPaymentId: string | null = null;
-  const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
 
   try {
+    currentStage = {
+      code: "participant_load_order",
+      label: "chargement de la commande",
+    };
+    order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
+    currentStage = {
+      code: "participant_load_producer_stripe",
+      label: "chargement du compte Stripe du producteur",
+    };
+    const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
+    currentStage = {
+      code: "participant_load_participant",
+      label: "chargement du participant",
+    };
+    participant = await getParticipantByProfile(
+      serviceClient,
+      checkoutPaymentSession.order_id,
+      checkoutPaymentSession.profile_id,
+    );
+    if (!participant) {
+      currentStage = {
+        code: "participant_create_participant",
+        label: "création du participant",
+      };
+      participant = await createParticipant(serviceClient, order, checkoutPaymentSession.profile_id);
+      participantCreatedInFlow = true;
+    }
+
+    const draft = parseParticipantDraft(checkoutPaymentSession.draft_payload);
+    currentStage = {
+      code: "participant_load_reservations",
+      label: "chargement des réservations de lot",
+    };
+    const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
+    const existingPayment = providerPaymentId
+      ? await findExistingPaymentByProviderPaymentId(
+        serviceClient,
+        providerPaymentId,
+      )
+      : null;
+
+    currentStage = {
+      code: "participant_apply_reservations",
+      label: "application des réservations à la commande",
+    };
     for (const reservation of sessionReservations) {
       if (reservation.status === "consumed" && reservation.order_item_id) {
         continue;
@@ -2425,47 +2541,71 @@ async function finalizeParticipantCheckoutSession(
         reservationKind: "participant_checkout",
       });
     }
+    currentStage = {
+      code: "participant_recompute_caches",
+      label: "recalcul des agrégats de la commande",
+    };
     await recomputeCaches(serviceClient, order.id, participant.id);
 
+    currentStage = {
+      code: "participant_reload_participant",
+      label: "rechargement du participant après recalcul",
+    };
     const refreshedParticipant = await getParticipantByProfile(serviceClient, order.id, checkoutPaymentSession.profile_id);
     if (!refreshedParticipant) {
       throw new Error("Participant not found after repricing");
     }
+    currentStage = {
+      code: "participant_load_items",
+      label: "chargement des lignes de commande du participant",
+    };
     const participantItems = await listParticipantOrderItems(serviceClient, order.id, refreshedParticipant.id);
 
-    const { data: participantPayments, error: participantPaymentsError } = await serviceClient
-      .from("payments")
-      .select("amount_cents, refunded_amount_cents, status")
-      .eq("order_id", order.id)
-      .eq("participant_id", refreshedParticipant.id);
-    if (participantPaymentsError) throw participantPaymentsError;
-    const alreadyPaidCents = ((participantPayments as Array<Record<string, unknown>> | null) ?? []).reduce(
-      (sum, payment) => {
-        const status = normalizeText(payment.status);
-        if (status !== "paid" && status !== "authorized") return sum;
-        return sum + Math.max(0, Number(payment.amount_cents ?? 0) - Number(payment.refunded_amount_cents ?? 0));
-      },
-      0,
-    );
-    const amountDueCents = Math.max(0, Number(refreshedParticipant.total_amount_cents ?? 0) - alreadyPaidCents);
-    const coopBalanceCents = draft.useCoopBalance
-      ? await fetchCoopBalance(serviceClient, checkoutPaymentSession.profile_id)
-      : 0;
-    const coopToConsumeCents = draft.useCoopBalance ? Math.min(coopBalanceCents, amountDueCents) : 0;
-    const paidAmountCents = Math.max(0, amountDueCents - coopToConsumeCents);
-    const paymentBreakdown = await computeParticipantPaymentBreakdownFromItems(serviceClient, {
-      order,
-      items: participantItems,
-      coopCreditUsedCents: coopToConsumeCents,
-      totalEconomicCents: amountDueCents,
-    });
+    let paymentBreakdown = existingPayment ? paymentBreakdownFromPaymentRow(existingPayment) : emptyPaymentBreakdown();
+    if (!existingPayment || !hasPaymentBreakdownValues(paymentBreakdown)) {
+      currentStage = {
+        code: "participant_compute_breakdown",
+        label: "calcul du détail du paiement participant",
+      };
+      const { data: participantPayments, error: participantPaymentsError } = await serviceClient
+        .from("payments")
+        .select("amount_cents, refunded_amount_cents, status, provider_payment_id")
+        .eq("order_id", order.id)
+        .eq("participant_id", refreshedParticipant.id);
+      if (participantPaymentsError) throw participantPaymentsError;
+      const alreadyPaidCents = ((participantPayments as Array<Record<string, unknown>> | null) ?? []).reduce(
+        (sum, payment) => {
+          const status = normalizeText(payment.status);
+          if (status !== "paid" && status !== "authorized") return sum;
+          if (normalizeText(payment.provider_payment_id) === providerPaymentId) return sum;
+          return sum + Math.max(0, Number(payment.amount_cents ?? 0) - Number(payment.refunded_amount_cents ?? 0));
+        },
+        0,
+      );
+      const amountDueCents = Math.max(0, Number(refreshedParticipant.total_amount_cents ?? 0) - alreadyPaidCents);
+      const coopBalanceCents = draft.useCoopBalance
+        ? await fetchCoopBalance(serviceClient, checkoutPaymentSession.profile_id)
+        : 0;
+      const coopToConsumeCents = draft.useCoopBalance ? Math.min(coopBalanceCents, amountDueCents) : 0;
+      const paidAmountCents = Math.max(0, amountDueCents - coopToConsumeCents);
+      paymentBreakdown = await computeParticipantPaymentBreakdownFromItems(serviceClient, {
+        order,
+        items: participantItems,
+        coopCreditUsedCents: coopToConsumeCents,
+        totalEconomicCents: amountDueCents,
+      });
 
-    if (paidAmountCents <= 0) {
-      if (coopToConsumeCents <= 0) {
-        throw new Error("No payable amount remains after repricing");
+      if (paidAmountCents <= 0) {
+        if (coopToConsumeCents <= 0) {
+          throw new Error("No payable amount remains after repricing");
+        }
       }
     }
 
+    currentStage = {
+      code: "participant_resolve_stripe_fees",
+      label: "récupération des frais Stripe",
+    };
     const stripeFeeDetails =
       paymentBreakdown.card_amount_cents > 0
         ? await resolveStripeFeeDetails({
@@ -2478,50 +2618,76 @@ async function finalizeParticipantCheckoutSession(
         })
         : null;
 
-    const payment = await createPaymentStub(serviceClient, {
-      orderId: order.id,
-      participantId: refreshedParticipant.id,
-      amountCents: paymentBreakdown.card_amount_cents,
-      provider: paymentBreakdown.card_amount_cents > 0 ? (checkoutPaymentSession.provider ?? "stripe_direct_connect") : "coop_topup_internal",
-      providerPaymentId: providerPaymentId || `local_zero_${checkoutPaymentSession.id}`,
-      idempotencyKey: checkoutPaymentSession.idempotency_key,
-      stripeAccountId: producerStripe.stripeAccountId,
-      stripeCheckoutSessionId: normalizeText(stripeSession.id) || null,
-      stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
-        ? stripeSession.payment_intent
-        : stripeSession.payment_intent?.id ?? null,
-      stripeChargeId: stripeFeeDetails?.stripeChargeId ?? null,
-      legalEntityId: producerStripe.legalEntityId,
-      paymentBreakdown,
-      feeCents: stripeFeeDetails?.feeCents ?? 0,
-      feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
-      raw: {
-        flow_kind: "participant",
-        checkout_payment_session_id: checkoutPaymentSession.id,
-        use_coop_balance: draft.useCoopBalance,
-        payment_mode: checkoutPaymentSession.payment_mode ?? (paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero"),
-        stripe_account_id: producerStripe.stripeAccountId,
-        payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
-        stripe_status: stripeSession.status ?? null,
-        payment_status: stripeSession.payment_status ?? null,
-        payment_intent_id: typeof stripeSession.payment_intent === "string"
+    let payment = existingPayment;
+    if (!payment) {
+      currentStage = {
+        code: "participant_create_payment",
+        label: "création du paiement local",
+      };
+      payment = await createPaymentStub(serviceClient, {
+        orderId: order.id,
+        participantId: refreshedParticipant.id,
+        amountCents: paymentBreakdown.card_amount_cents,
+        provider: paymentBreakdown.card_amount_cents > 0
+          ? (checkoutPaymentSession.provider ?? "stripe_direct_connect")
+          : "coop_topup_internal",
+        providerPaymentId: providerPaymentId || `local_zero_${checkoutPaymentSession.id}`,
+        idempotencyKey: checkoutPaymentSession.idempotency_key,
+        stripeAccountId: producerStripe.stripeAccountId,
+        stripeCheckoutSessionId: normalizeText(stripeSession.id) || null,
+        stripePaymentIntentId: typeof stripeSession.payment_intent === "string"
           ? stripeSession.payment_intent
           : stripeSession.payment_intent?.id ?? null,
-      },
-    });
-    createdPaymentId = payment.id;
+        stripeChargeId: stripeFeeDetails?.stripeChargeId ?? null,
+        legalEntityId: producerStripe.legalEntityId,
+        paymentBreakdown,
+        feeCents: stripeFeeDetails?.feeCents ?? 0,
+        feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
+        raw: {
+          flow_kind: "participant",
+          checkout_payment_session_id: checkoutPaymentSession.id,
+          use_coop_balance: draft.useCoopBalance,
+          payment_mode: checkoutPaymentSession.payment_mode ?? (paymentBreakdown.card_amount_cents > 0 ? "direct_charge" : "local_zero"),
+          stripe_account_id: producerStripe.stripeAccountId,
+          payment_breakdown: serializePaymentBreakdown(paymentBreakdown),
+          stripe_status: stripeSession.status ?? null,
+          payment_status: stripeSession.payment_status ?? null,
+          payment_intent_id: typeof stripeSession.payment_intent === "string"
+            ? stripeSession.payment_intent
+            : stripeSession.payment_intent?.id ?? null,
+        },
+      });
+      createdPaymentId = payment.id;
+    } else if (payment.status !== "pending" && payment.status !== "paid" && payment.status !== "authorized") {
+      throw new Error("Existing payment is not in a finalizable state");
+    }
+
     if (paymentBreakdown.card_amount_cents > 0 && !stripeFeeDetails) {
+      currentStage = {
+        code: "participant_sync_stripe_fees",
+        label: "synchronisation des frais Stripe",
+      };
       await syncStripeFeesOnPayment(serviceClient, {
         paymentId: payment.id,
         stripeAccountId: producerStripe.stripeAccountId,
         stripeSession,
         paymentIntentId:
           typeof stripeSession.payment_intent === "string"
-            ? stripeSession.payment_intent
-            : stripeSession.payment_intent?.id ?? null,
+          ? stripeSession.payment_intent
+          : stripeSession.payment_intent?.id ?? null,
       });
     }
-    await finalizePaymentSimulation(serviceClient, payment.id);
+    if (payment.status === "pending") {
+      currentStage = {
+        code: "participant_finalize_payment",
+        label: "finalisation du paiement local",
+      };
+      await finalizePaymentSimulation(serviceClient, payment.id);
+    }
+    currentStage = {
+      code: "participant_upsert_topup",
+      label: "enregistrement du complément producteur",
+    };
     const topup = await upsertProducerTopup(serviceClient, {
       orderId: order.id,
       participantId: refreshedParticipant.id,
@@ -2531,10 +2697,19 @@ async function finalizeParticipantCheckoutSession(
       amountCents: paymentBreakdown.producer_topup_due_cents,
     });
     if (topup && order.status === "confirmed") {
+      currentStage = {
+        code: "participant_process_topup",
+        label: "traitement du complément producteur",
+      };
       await processProducerTopupsForOrder(serviceClient, order.id);
     }
+    currentStage = {
+      code: "participant_trigger_emails",
+      label: "déclenchement des e-mails sortants",
+    };
+    await triggerOutgoingEmails(serviceClient);
   } catch (error) {
-    if (!createdPaymentId && participantCreatedInFlow) {
+    if (!createdPaymentId && participantCreatedInFlow && order && participant) {
       try {
         await deleteParticipantIfNoActivity(serviceClient, {
           orderId: order.id,
@@ -2544,7 +2719,7 @@ async function finalizeParticipantCheckoutSession(
         console.error("Participant rollback error:", rollbackError);
       }
     }
-    throw error;
+    throw toCheckoutWorkflowError(currentStage, error, `participant_${currentStage.code}_failed`);
   }
 }
 
@@ -2571,61 +2746,101 @@ async function finalizeCloseCheckoutSession(
   checkoutPaymentSession: CheckoutPaymentSessionRow,
   stripeSession: StripeCheckoutSession,
 ) {
+  let currentStage: CheckoutWorkflowStage = {
+    code: "close_finalize_init",
+    label: "initialisation de la finalisation de clôture",
+  };
   if (!checkoutPaymentSession.provider_payment_id) {
     throw new Error("Missing provider_payment_id on checkout payment session");
   }
-  const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
-  const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
-  if (order.sharer_profile_id !== checkoutPaymentSession.profile_id) {
-    throw new Error("Only the sharer can finalize close payment");
-  }
-  const draft = parseCloseDraft(checkoutPaymentSession.draft_payload);
-  const paymentBreakdownFromSession = parsePaymentBreakdown(checkoutPaymentSession.payment_breakdown);
-  const { data: sharerParticipantData, error: sharerParticipantError } = await serviceClient
-    .from("order_participants")
-    .select("id, order_id, profile_id, participation_status, role, total_amount_cents")
-    .eq("order_id", order.id)
-    .eq("role", "sharer")
-    .maybeSingle();
-  if (sharerParticipantError || !sharerParticipantData) {
-    throw sharerParticipantError ?? new Error("Sharer participant not found");
-  }
-  const sharerParticipant = sharerParticipantData as DbParticipantRow;
-  const existingPayment = await findExistingPaymentByProviderPaymentId(
-    serviceClient,
-    checkoutPaymentSession.provider_payment_id,
-  );
-
-  if (existingPayment) {
-    if (existingPayment.status === "pending") {
-      await finalizeClosePayment(serviceClient, existingPayment.id);
-    } else if (existingPayment.status !== "paid" && existingPayment.status !== "authorized") {
-      throw new Error("Existing close payment is not in a finalizable state");
-    }
-    if (order.status !== "locked") {
-      await createLockClosePackage(serviceClient, order.id, draft.useCoopBalance);
-    }
-    await ensureSharerInvoiceExists(serviceClient, order.id, checkoutPaymentSession.profile_id);
-    await triggerOutgoingEmails(serviceClient);
-    return;
-  }
-
-  const { data: sharerItemsData, error: sharerItemsError } = await serviceClient
-    .from("order_items")
-    .select("id, product_id, quantity_units, unit_label, line_weight_kg")
-    .eq("order_id", order.id)
-    .eq("participant_id", sharerParticipant.id);
-  if (sharerItemsError) throw sharerItemsError;
-
-  const sharerItems = (sharerItemsData as DbOrderItemRow[] | null) ?? [];
-  const currentSharerQuantities = sharerItems.reduce<Record<string, number>>((acc, item) => {
-    acc[item.product_id] = (acc[item.product_id] ?? 0) + getOrderItemQuantity(item);
-    return acc;
-  }, {});
-  let paymentId: string | null = null;
-  const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
-
   try {
+    currentStage = {
+      code: "close_load_order",
+      label: "chargement de la commande de clôture",
+    };
+    const order = await getOrderById(serviceClient, checkoutPaymentSession.order_id);
+    currentStage = {
+      code: "close_load_producer_stripe",
+      label: "chargement du compte Stripe du producteur",
+    };
+    const producerStripe = await getProducerLegalEntityForPayments(serviceClient, order.producer_profile_id);
+    if (order.sharer_profile_id !== checkoutPaymentSession.profile_id) {
+      throw new Error("Only the sharer can finalize close payment");
+    }
+    const draft = parseCloseDraft(checkoutPaymentSession.draft_payload);
+    const paymentBreakdownFromSession = parsePaymentBreakdown(checkoutPaymentSession.payment_breakdown);
+    currentStage = {
+      code: "close_load_sharer",
+      label: "chargement du partageur",
+    };
+    const { data: sharerParticipantData, error: sharerParticipantError } = await serviceClient
+      .from("order_participants")
+      .select("id, order_id, profile_id, participation_status, role, total_amount_cents")
+      .eq("order_id", order.id)
+      .eq("role", "sharer")
+      .maybeSingle();
+    if (sharerParticipantError || !sharerParticipantData) {
+      throw sharerParticipantError ?? new Error("Sharer participant not found");
+    }
+    const sharerParticipant = sharerParticipantData as DbParticipantRow;
+    const existingPayment = await findExistingPaymentByProviderPaymentId(
+      serviceClient,
+      checkoutPaymentSession.provider_payment_id,
+    );
+
+    if (existingPayment) {
+      if (existingPayment.status === "pending") {
+        currentStage = {
+          code: "close_finalize_existing_payment",
+          label: "finalisation du paiement local existant",
+        };
+        await finalizeClosePayment(serviceClient, existingPayment.id);
+      } else if (existingPayment.status !== "paid" && existingPayment.status !== "authorized") {
+        throw new Error("Existing close payment is not in a finalizable state");
+      }
+      if (order.status !== "locked") {
+        currentStage = {
+          code: "close_lock_order_existing_payment",
+          label: "clôture de la commande après paiement existant",
+        };
+        await createLockClosePackage(serviceClient, order.id, draft.useCoopBalance);
+      }
+      currentStage = {
+        code: "close_ensure_invoice_existing_payment",
+        label: "vérification de la facture partageur",
+      };
+      await ensureSharerInvoiceExists(serviceClient, order.id, checkoutPaymentSession.profile_id);
+      currentStage = {
+        code: "close_trigger_emails_existing_payment",
+        label: "déclenchement des e-mails sortants",
+      };
+      await triggerOutgoingEmails(serviceClient);
+      return;
+    }
+
+    currentStage = {
+      code: "close_load_sharer_items",
+      label: "chargement des lignes du partageur",
+    };
+    const { data: sharerItemsData, error: sharerItemsError } = await serviceClient
+      .from("order_items")
+      .select("id, product_id, quantity_units, unit_label, line_weight_kg")
+      .eq("order_id", order.id)
+      .eq("participant_id", sharerParticipant.id);
+    if (sharerItemsError) throw sharerItemsError;
+
+    const sharerItems = (sharerItemsData as DbOrderItemRow[] | null) ?? [];
+    const currentSharerQuantities = sharerItems.reduce<Record<string, number>>((acc, item) => {
+      acc[item.product_id] = (acc[item.product_id] ?? 0) + getOrderItemQuantity(item);
+      return acc;
+    }, {});
+    let paymentId: string | null = null;
+    currentStage = {
+      code: "close_load_reservations",
+      label: "chargement des réservations de clôture",
+    };
+    const sessionReservations = await listCheckoutSessionReservations(serviceClient, checkoutPaymentSession.id);
+
     for (const reservation of sessionReservations) {
       if (reservation.status === "consumed") {
         continue;
@@ -2674,8 +2889,16 @@ async function finalizeCloseCheckoutSession(
       }
       currentSharerQuantities[productId] = targetQty;
     }
+    currentStage = {
+      code: "close_recompute_caches",
+      label: "recalcul des agrégats de la commande",
+    };
     await recomputeCaches(serviceClient, order.id, sharerParticipant.id);
 
+    currentStage = {
+      code: "close_reload_order_items",
+      label: "rechargement des lignes de commande",
+    };
     const refreshedOrder = await getOrderById(serviceClient, order.id);
     const refreshedOrderItems = await listOrderItemsForOrder(serviceClient, order.id);
     const paymentBreakdown =
@@ -2692,6 +2915,10 @@ async function finalizeCloseCheckoutSession(
           useCoopBalance: false,
         });
 
+    currentStage = {
+      code: "close_resolve_stripe_fees",
+      label: "récupération des frais Stripe",
+    };
     const stripeFeeDetails = await resolveStripeFeeDetails({
       stripeSession,
       paymentIntentId:
@@ -2701,6 +2928,10 @@ async function finalizeCloseCheckoutSession(
       stripeAccountId: producerStripe.stripeAccountId,
     });
 
+    currentStage = {
+      code: "close_create_payment",
+      label: "création du paiement local de clôture",
+    };
     const payment = await createPaymentStub(serviceClient, {
       orderId: order.id,
       participantId: sharerParticipant.id,
@@ -2734,6 +2965,10 @@ async function finalizeCloseCheckoutSession(
     });
     paymentId = payment.id;
     if (!stripeFeeDetails) {
+      currentStage = {
+        code: "close_sync_stripe_fees",
+        label: "synchronisation des frais Stripe",
+      };
       await syncStripeFeesOnPayment(serviceClient, {
         paymentId: payment.id,
         stripeAccountId: producerStripe.stripeAccountId,
@@ -2745,6 +2980,10 @@ async function finalizeCloseCheckoutSession(
       });
     }
     if (paymentBreakdown.producer_topup_due_cents > 0) {
+      currentStage = {
+        code: "close_upsert_topup",
+        label: "enregistrement du complément producteur",
+      };
       await upsertProducerTopup(serviceClient, {
         orderId: order.id,
         participantId: sharerParticipant.id,
@@ -2754,12 +2993,28 @@ async function finalizeCloseCheckoutSession(
         amountCents: paymentBreakdown.producer_topup_due_cents,
       });
     }
+    currentStage = {
+      code: "close_finalize_payment",
+      label: "finalisation du paiement de clôture",
+    };
     await finalizeClosePayment(serviceClient, payment.id);
+    currentStage = {
+      code: "close_lock_order",
+      label: "clôture de la commande",
+    };
     await createLockClosePackage(serviceClient, order.id, draft.useCoopBalance);
+    currentStage = {
+      code: "close_ensure_invoice",
+      label: "vérification de la facture partageur",
+    };
     await ensureSharerInvoiceExists(serviceClient, order.id, checkoutPaymentSession.profile_id);
+    currentStage = {
+      code: "close_trigger_emails",
+      label: "déclenchement des e-mails sortants",
+    };
     await triggerOutgoingEmails(serviceClient);
   } catch (error) {
-    throw error;
+    throw toCheckoutWorkflowError(currentStage, error, `close_${currentStage.code}_failed`);
   }
 }
 
@@ -2911,7 +3166,21 @@ export async function finalizeCheckoutPaymentSession(params: {
     });
     return buildPublicStatus(updated, stripeSession);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const workflowError = error as CheckoutWorkflowErrorShape;
+    const message = serializeUnknownError(error, "Une erreur est survenue pendant la finalisation du paiement.");
+    const errorCode =
+      workflowError.checkoutErrorCode ??
+      (workflowError.checkoutStageCode ? `finalization_${workflowError.checkoutStageCode}` : "finalization_error");
+    console.error("Checkout finalization error:", {
+      checkout_payment_session_id: claimedRow.id,
+      flow_kind: claimedRow.flow_kind,
+      stage: workflowError.checkoutStageLabel ?? null,
+      stage_code: workflowError.checkoutStageCode ?? null,
+      error_code: errorCode,
+      error_message: message,
+      details: workflowError.checkoutDetails ?? null,
+      hint: workflowError.checkoutHint ?? null,
+    });
     const updated = await updateCheckoutPaymentSession(serviceClient, claimedRow.id, {
       status: "failed",
       checkout_session_id: stripeSession.id,
@@ -2919,7 +3188,7 @@ export async function finalizeCheckoutPaymentSession(params: {
       stripe_payment_intent_id: typeof stripeSession.payment_intent === "string"
         ? stripeSession.payment_intent
         : stripeSession.payment_intent?.id ?? null,
-      error_code: "finalization_error",
+      error_code: errorCode,
       error_message: message,
     });
     return buildPublicStatus(updated, stripeSession, message);
