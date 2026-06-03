@@ -300,8 +300,8 @@ export function ProductResultCard({
     minWidth: width,
     maxWidth: width,
     flex: compact ? '1 1 auto' : '0 0 auto',
-    minHeight: compact ? 'auto' : `${CARD_HEIGHT}px`,
-    height: compact ? 'auto' : `${CARD_HEIGHT}px`,
+    minHeight: `${CARD_HEIGHT}px`,
+    height: `${CARD_HEIGHT}px`,
   };
   const sanitizedUnitLabel = (product.unit || '').trim();
   const weightLabel =
@@ -419,7 +419,7 @@ export function ProductResultCard({
             {priceLabel}
           </span>
               {canShowPriceDetails ? (
-                <span className="text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
+                <span className="products-landing__product-measurement text-[10px] px-0 py-0.5 text-[#374151] bg-transparent">
                   {measurementInlineLabel}
                 </span>
               ) : null}
