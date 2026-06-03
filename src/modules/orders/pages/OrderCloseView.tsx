@@ -12,13 +12,7 @@ import {
   writeOrderPageSnapshot,
 } from '../utils/orderPageSnapshot';
 import {
-  addItem,
-  createLockClosePackage,
-  fetchParticipantInvoices,
-  issueSharerInvoiceAfterLock,
   getOrderFullByCode,
-  triggerOutgoingEmails,
-  updateOrderItemQuantity,
   fetchCoopBalance,
 } from '../api/orders';
 import { eurosToCents, formatEurosFromCents } from '../../../shared/lib/money';
@@ -63,7 +57,7 @@ export function OrderCloseView({
   onStartClosePayment,
 }: {
   currentUser: { id: string } | null;
-  onStartClosePayment?: (payload: ClosePaymentPayload) => void;
+  onStartClosePayment: (payload: ClosePaymentPayload) => void;
 }) {
   const navigate = useNavigate();
   const { orderCode } = useParams<{ orderCode: string }>();
@@ -381,30 +375,6 @@ export function OrderCloseView({
     });
   };
 
-  const applyExtraQuantities = async (activeOrder: Order, activeSharer: OrderParticipant) => {
-    for (const entry of productsOffered) {
-      const extra = extraQuantities[entry.productId] ?? 0;
-      if (extra <= 0) continue;
-      const existingQty = currentSharerQuantities[entry.productId] ?? 0;
-      const targetQty = existingQty + extra;
-      const existingItem = sharerItems.find((item) => item.productId === entry.productId);
-      if (existingItem) {
-        await updateOrderItemQuantity(existingItem.id, activeOrder.id, activeSharer.id, targetQty);
-      } else {
-        await addItem({
-          orderId: activeOrder.id,
-          participantId: activeSharer.id,
-          productId: entry.productId,
-          lotId: entry.product?.activeLotId ?? null,
-          quantityUnits: targetQty,
-          isSharerShare: true,
-          reservationStatus: 'consumed',
-          reservationKind: 'close_extra',
-        });
-      }
-    }
-  };
-
   const handlePrimaryAction = async () => {
     if (!order || !sharerParticipant || !currentUser?.id) return;
     if (!canSubmit || isWorking) return;
@@ -424,62 +394,22 @@ export function OrderCloseView({
     const freshSettlement = computeCloseSettlement(freshCoopBalanceCents);
 
     try {
-      if (freshSettlement.sharerRemainingToPayCents > 0) {
-        if (!onStartClosePayment) {
-          toast.error('Le paiement est requis avant la clôture.');
-          return;
-        }
-        if (
-          freshSettlement.sharerRemainingToPayCents !== sharerRemainingToPayCents ||
-          freshSettlement.coopAppliedCents !== coopAppliedCents
-        ) {
-          toast.info('Montants actualises avec votre solde de gains le plus recent.');
-        }
-        onStartClosePayment({
-          orderId: order.id,
-          orderCode: order.orderCode ?? order.id,
-          amountCents: freshSettlement.sharerRemainingToPayCents,
-          useCoopBalance,
-          extraQuantities: { ...extraQuantities },
-        });
-        return;
+      if (
+        freshSettlement.sharerRemainingToPayCents !== sharerRemainingToPayCents ||
+        freshSettlement.coopAppliedCents !== coopAppliedCents
+      ) {
+        toast.info('Montants actualises avec votre solde de gains le plus recent.');
       }
-
-      setIsWorking(true);
-      await applyExtraQuantities(order, sharerParticipant);
-      await createLockClosePackage(order.id, useCoopBalance);
-
-      clearOrderPageSnapshot(orderCloseSnapshotKey);
-      toast.success('Commande cloturee et recapitulatif genere.');
-      navigate(`/cmd/${order.orderCode ?? order.id}`, { replace: true });
+      onStartClosePayment({
+        orderId: order.id,
+        orderCode: order.orderCode ?? order.id,
+        amountCents: freshSettlement.sharerRemainingToPayCents,
+        useCoopBalance,
+        extraQuantities: { ...extraQuantities },
+      });
     } catch (error) {
-      console.error('Close order error:', error);
-      const message = (error as Error)?.message ?? 'Impossible de cloturer la commande.';
-      toast.error(message);
-      setIsWorking(false);
-      return;
-    }
-
-    // Post-close checks are best effort only and must not block UX.
-    try {
-      let sharerInvoices = await fetchParticipantInvoices(order.id, currentUser.id);
-      if (!sharerInvoices.length) {
-        await issueSharerInvoiceAfterLock(order.id);
-        sharerInvoices = await fetchParticipantInvoices(order.id, currentUser.id);
-      }
-      if (!sharerInvoices.length) {
-        toast.warning('Commande cloturee, mais facture partageur non confirmee immediatement.');
-      }
-    } catch (invoiceCheckError) {
-      console.error('Close order invoice check error:', invoiceCheckError);
-      toast.warning('Commande cloturee, mais verification facture indisponible.');
-    }
-
-    try {
-      await triggerOutgoingEmails();
-    } catch (emailError) {
-      console.error('Outgoing email trigger error:', emailError);
-      toast.warning('Facture generee, mais envoi email non declenche automatiquement.');
+      console.error('Close order payment start error:', error);
+      toast.error("Impossible de préparer la clôture de la commande.");
     }
   };
 

@@ -229,6 +229,120 @@ const parseStoredPurchaseDraft = () =>
 const parseStoredRecentPurchase = () =>
   parseStoredOrderPurchase(RECENT_PURCHASE_STORAGE_KEY, 'recent purchase');
 
+const normalizeOrderDraftFromServer = (
+  order: GroupOrder,
+  payload: Partial<OrderPurchaseDraft> | null | undefined
+): OrderPurchaseDraft => {
+  const raw = payload && typeof payload === 'object' ? payload : {};
+  const quantities: Record<string, number> = {};
+  if (raw.quantities && typeof raw.quantities === 'object') {
+    Object.entries(raw.quantities as Record<string, unknown>).forEach(([productCode, rawQty]) => {
+      const qty = Number(rawQty);
+      if (!Number.isFinite(qty) || qty <= 0) return;
+      quantities[productCode] = qty;
+    });
+  }
+
+  const lineItems = Array.isArray(raw.lineItems)
+    ? raw.lineItems
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const rawItem = item as Record<string, unknown>;
+          const productCode = typeof rawItem.productCode === 'string' ? rawItem.productCode.trim() : '';
+          const label = typeof rawItem.label === 'string' ? rawItem.label.trim() : '';
+          const quantity = Math.max(0, Number(rawItem.quantity ?? 0));
+          const unitPriceCents = Math.max(0, Math.round(Number(rawItem.unitPriceCents ?? 0)));
+          const lineTotalCents = Math.max(0, Math.round(Number(rawItem.lineTotalCents ?? 0)));
+          if (!productCode || !label || quantity <= 0) return null;
+          return { productCode, label, quantity, unitPriceCents, lineTotalCents };
+        })
+        .filter(Boolean) as Array<{
+        productCode: string;
+        label: string;
+        quantity: number;
+        unitPriceCents: number;
+        lineTotalCents: number;
+      }>
+    : [];
+
+  const nextDraft: OrderPurchaseDraft = {
+    orderId: order.id,
+    orderCode: order.orderCode,
+    quantities,
+    lineItems,
+    total: Math.max(0, Number(raw.total ?? 0) || 0),
+    weight: Math.max(0, Number(raw.weight ?? 0) || 0),
+    baseOrderedWeight: order.orderedWeight ?? 0,
+    kind: raw.kind === 'close' ? 'close' : 'participant',
+    checkoutPaymentSessionId:
+      typeof raw.checkoutPaymentSessionId === 'string' && raw.checkoutPaymentSessionId.trim()
+        ? raw.checkoutPaymentSessionId.trim()
+        : null,
+    useCoopBalance: raw.useCoopBalance !== false,
+  };
+  if (raw.closeData && typeof raw.closeData === 'object') {
+    const rawCloseData = raw.closeData as Record<string, unknown>;
+    const extraQuantities: Record<string, number> = {};
+    if (rawCloseData.extraQuantities && typeof rawCloseData.extraQuantities === 'object') {
+      Object.entries(rawCloseData.extraQuantities as Record<string, unknown>).forEach(([productId, rawQty]) => {
+        const qty = Number(rawQty);
+        if (!Number.isFinite(qty) || qty <= 0) return;
+        extraQuantities[productId] = qty;
+      });
+    }
+    nextDraft.closeData = {
+      useCoopBalance: Boolean(rawCloseData.useCoopBalance),
+      extraQuantities,
+    };
+  }
+  return nextDraft;
+};
+
+const buildParticipantFallbackDraft = (
+  order: GroupOrder,
+  payload: StartPaymentPayload
+): OrderPurchaseDraft => {
+  const lineItems = order.products
+    .map((product) => {
+      const quantity = Math.max(0, Number(payload.quantities[product.dbId ?? product.id] ?? 0));
+      if (quantity <= 0) return null;
+      const unitPriceCents = eurosToCents(product.price);
+      return {
+        productCode: product.dbId ?? product.id,
+        label: product.name,
+        quantity,
+        unitPriceCents,
+        lineTotalCents: unitPriceCents * quantity,
+      };
+    })
+    .filter(Boolean) as Array<{
+    productCode: string;
+    label: string;
+    quantity: number;
+    unitPriceCents: number;
+    lineTotalCents: number;
+  }>;
+
+  const totalCents = lineItems.reduce((sum, item) => sum + item.lineTotalCents, 0);
+  const totalWeight = order.products.reduce((sum, product) => {
+    const quantity = Math.max(0, Number(payload.quantities[product.dbId ?? product.id] ?? 0));
+    const unitWeightKg = Math.max(0, Number(product.weightKg ?? 0));
+    return sum + quantity * unitWeightKg;
+  }, 0);
+
+  return {
+    orderId: order.id,
+    orderCode: order.orderCode,
+    quantities: payload.quantities,
+    lineItems,
+    total: Math.max(0, centsToEuros(totalCents)),
+    weight: Math.max(0, totalWeight),
+    baseOrderedWeight: order.orderedWeight ?? 0,
+    kind: 'participant',
+    useCoopBalance: Boolean(payload.useCoopBalance),
+  };
+};
+
 const buildGroupOrderFromContext = (context: OrderFull | null): GroupOrder | null => {
   if (!context) return null;
 
@@ -451,16 +565,15 @@ const AuthWall = ({
 
 type StartPaymentPayload = {
   quantities: Record<string, number>;
-  lineItems: Array<{
-    productCode: string;
-    label: string;
-    quantity: number;
-    unitPriceCents: number;
-    lineTotalCents: number;
-  }>;
-  total: number;
-  weight: number;
   useCoopBalance: boolean;
+};
+
+type CreateCheckoutPaymentSessionDraftResponse = {
+  checkout_payment_session_id: string;
+  local_status: 'draft' | 'checkout_created' | 'checkout_completed' | 'fulfilling' | 'fulfilled' | 'failed' | 'expired';
+  normalized_draft?: Partial<OrderPurchaseDraft> | null;
+  payment_breakdown?: Record<string, unknown> | null;
+  amount_cents?: number;
 };
 
 type OrderRouteProps = {
@@ -3177,6 +3290,20 @@ export default function App() {
     },
     [groupOrders]
   );
+  const refreshGroupOrderFromBackend = React.useCallback(async (draft: OrderPurchaseDraft) => {
+    const lookupKey = draft.orderCode?.trim() || draft.orderId;
+    if (!lookupKey) return null;
+    const context = await getOrderFullByCode(lookupKey);
+    const refreshedOrder = buildGroupOrderFromContext(context);
+    if (refreshedOrder) {
+      setGroupOrders((prev) => {
+        const next = new Map(prev.map((entry) => [entry.id, entry]));
+        next.set(refreshedOrder.id, refreshedOrder);
+        return Array.from(next.values());
+      });
+    }
+    return refreshedOrder;
+  }, []);
 
   const openProductView = (
     productId: string,
@@ -3330,55 +3457,89 @@ export default function App() {
     );
   };
 
-  const handleStartPurchase = (
+  const handleStartPurchase = async (
     order: GroupOrder,
     payload: StartPaymentPayload
   ) => {
-    const total = Number(payload.total) || 0;
-    const weight = Number(payload.weight) || 0;
-    const draft: OrderPurchaseDraft = {
-      orderId: order.id,
-      orderCode: order.orderCode,
-      quantities: payload.quantities,
-      lineItems: payload.lineItems,
-      total,
-      weight,
-      baseOrderedWeight: order.orderedWeight ?? 0,
-      kind: 'participant',
-      useCoopBalance: Boolean(payload.useCoopBalance),
-    };
-    writeOrderPageSnapshot(
-      buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
-      {
-        order,
-        draft,
-        checkoutPaymentSessionId: null,
-        checkoutClientSecret: null,
-        providerPaymentId: null,
-        paymentState: 'idle',
-        paymentStatusMessage: null,
-        paymentError: null,
-      } satisfies OrderPaymentPageSnapshot
-    );
-    setPurchaseDraft(draft);
-    setRecentPurchase(null);
+    const fallbackDraft = buildParticipantFallbackDraft(order, payload);
+
     if (!isAuthenticated) {
+      writeOrderPageSnapshot(
+        buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+        {
+          order,
+          draft: fallbackDraft,
+          checkoutPaymentSessionId: null,
+          checkoutClientSecret: null,
+          providerPaymentId: null,
+          paymentState: 'idle',
+          paymentStatusMessage: null,
+          paymentError: null,
+        } satisfies OrderPaymentPageSnapshot
+      );
+      setPurchaseDraft(fallbackDraft);
+      setRecentPurchase(null);
       redirectToAuth(`/cmd/${resolveOrderCode(order.id)}/paiement`);
       return;
     }
-    navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
+
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase.functions.invoke<CreateCheckoutPaymentSessionDraftResponse>(
+        'create_checkout_payment_session',
+        {
+          body: {
+            order_id: order.id,
+            flow_kind: 'participant',
+            draft_payload: {
+              quantities: payload.quantities,
+              useCoopBalance: Boolean(payload.useCoopBalance),
+            },
+          },
+        }
+      );
+      if (error) throw error;
+      if (!data?.checkout_payment_session_id || !data.normalized_draft) {
+        throw new Error('Préparation du paiement indisponible.');
+      }
+
+      const draft = normalizeOrderDraftFromServer(order, {
+        ...data.normalized_draft,
+        checkoutPaymentSessionId: data.checkout_payment_session_id,
+      });
+
+      writeOrderPageSnapshot(
+        buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+        {
+          order,
+          draft,
+          checkoutPaymentSessionId: data.checkout_payment_session_id,
+          checkoutClientSecret: null,
+          providerPaymentId: null,
+          paymentBreakdown: data.payment_breakdown ?? null,
+          paymentState: 'idle',
+          paymentStatusMessage: null,
+          paymentError: null,
+        } satisfies OrderPaymentPageSnapshot
+      );
+      setPurchaseDraft(draft);
+      setRecentPurchase(null);
+      navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
+    } catch (error) {
+      console.error('Participant payment preparation error:', error);
+      toast.error("Impossible de préparer le paiement pour cette participation.");
+    }
   };
 
-  const handleStartClosePayment = (
+  const handleStartClosePayment = async (
     order: GroupOrder,
     payload: { amountCents: number; useCoopBalance: boolean; extraQuantities: Record<string, number> }
   ) => {
-    const total = centsToEuros(payload.amountCents);
-    const draft: OrderPurchaseDraft = {
+    const fallbackDraft: OrderPurchaseDraft = {
       orderId: order.id,
       orderCode: order.orderCode,
       quantities: {},
-      total,
+      total: centsToEuros(payload.amountCents),
       weight: 0,
       baseOrderedWeight: order.orderedWeight ?? 0,
       kind: 'close',
@@ -3387,46 +3548,75 @@ export default function App() {
         extraQuantities: payload.extraQuantities,
       },
     };
-    writeOrderPageSnapshot(
-      buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
-      {
-        order,
-        draft,
-        checkoutPaymentSessionId: null,
-        checkoutClientSecret: null,
-        providerPaymentId: null,
-        paymentState: 'idle',
-        paymentStatusMessage: null,
-        paymentError: null,
-      } satisfies OrderPaymentPageSnapshot
-    );
-    setPurchaseDraft(draft);
-    setRecentPurchase(null);
     if (!isAuthenticated) {
+      writeOrderPageSnapshot(
+        buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+        {
+          order,
+          draft: fallbackDraft,
+          checkoutPaymentSessionId: null,
+          checkoutClientSecret: null,
+          providerPaymentId: null,
+          paymentState: 'idle',
+          paymentStatusMessage: null,
+          paymentError: null,
+        } satisfies OrderPaymentPageSnapshot
+      );
+      setPurchaseDraft(fallbackDraft);
+      setRecentPurchase(null);
       redirectToAuth(`/cmd/${resolveOrderCode(order.id)}/paiement`);
       return;
     }
-    navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
-  };
 
-  const handlePurchaseOrder = (orderId: string, total?: number, weight?: number) => {
-    if (!isAuthenticated) {
-      redirectToAuth(location.pathname);
-      return;
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase.functions.invoke<CreateCheckoutPaymentSessionDraftResponse>(
+        'create_checkout_payment_session',
+        {
+          body: {
+            order_id: order.id,
+            flow_kind: 'close',
+            draft_payload: {
+              closeData: {
+                useCoopBalance: payload.useCoopBalance,
+                extraQuantities: payload.extraQuantities,
+              },
+            },
+          },
+        }
+      );
+      if (error) throw error;
+      if (!data?.checkout_payment_session_id || !data.normalized_draft) {
+        throw new Error('Préparation de la clôture indisponible.');
+      }
+
+      const draft = normalizeOrderDraftFromServer(order, {
+        ...data.normalized_draft,
+        kind: 'close',
+        checkoutPaymentSessionId: data.checkout_payment_session_id,
+      });
+
+      writeOrderPageSnapshot(
+        buildOrderPageSnapshotKey('payment', resolveOrderCode(order.id), user?.id ?? null),
+        {
+          order,
+          draft,
+          checkoutPaymentSessionId: data.checkout_payment_session_id,
+          checkoutClientSecret: null,
+          providerPaymentId: null,
+          paymentBreakdown: data.payment_breakdown ?? null,
+          paymentState: 'idle',
+          paymentStatusMessage: null,
+          paymentError: null,
+        } satisfies OrderPaymentPageSnapshot
+      );
+      setPurchaseDraft(draft);
+      setRecentPurchase(null);
+      navigate(`/cmd/${resolveOrderCode(order.id)}/paiement`);
+    } catch (error) {
+      console.error('Close payment preparation error:', error);
+      toast.error("Impossible de préparer la clôture.");
     }
-    const addedWeight = weight ?? 0;
-    setGroupOrders((prev) =>
-      prev.map((order) =>
-        order.id === orderId
-          ? {
-              ...order,
-              participants: order.participants + 1,
-              totalValue: order.totalValue + (total ?? 0),
-              orderedWeight: (order.orderedWeight ?? 0) + addedWeight,
-            }
-          : order
-      )
-    );
   };
 
   const handleConfirmPayment = async (
@@ -3458,7 +3648,11 @@ export default function App() {
       ...draft,
       checkoutPaymentSessionId: draft.checkoutPaymentSessionId ?? null,
     };
-    handlePurchaseOrder(draft.orderId, draft.total, draft.weight);
+    try {
+      await refreshGroupOrderFromBackend(draft);
+    } catch (error) {
+      console.warn('Unable to refresh order summary after payment confirmation:', error);
+    }
     clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
     clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
     setRecentPurchase(completedDraft);
@@ -3494,112 +3688,16 @@ export default function App() {
 
     clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
     clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
-    setGroupOrders((prev) =>
-      prev.map((entry) =>
-        entry.id === order.id
-          ? {
-              ...entry,
-              status: 'locked',
-            }
-          : entry
-      )
-    );
+    try {
+      await refreshGroupOrderFromBackend(draft);
+    } catch (error) {
+      console.warn('Unable to refresh order summary after close payment confirmation:', error);
+    }
     setPurchaseDraft(null);
     setRecentPurchase(null);
     navigate(`/cmd/${resolveOrderCode(order.id)}`);
     toast.success('Paiement confirme et commande cloturee.');
     return;
-    /*
-    const closeData = draft.closeData;
-    if (!closeData) {
-      toast.error('Paiement de clôture incomplet.');
-      return;
-    }
-
-    try {
-      const orderFull = await getOrderFullByCode(order.orderCode ?? order.id);
-      const sharerParticipant =
-        orderFull.participants.find((participant) => participant.role === 'sharer') ?? null;
-      if (!sharerParticipant) {
-        toast.error('Partageur introuvable.');
-        return;
-      }
-
-      const items = orderFull.items ?? [];
-      const sharerItems = items.filter((item) => item.participantId === sharerParticipant.id);
-      const currentSharerQuantities = sharerItems.reduce((acc, item) => {
-        acc[item.productId] = (acc[item.productId] ?? 0) + getOrderItemQuantity(item);
-        return acc;
-      }, {} as Record<string, number>);
-
-      for (const [productId, rawExtra] of Object.entries(closeData.extraQuantities ?? {})) {
-        const extraQty = Math.max(0, Number(rawExtra) || 0);
-        if (extraQty <= 0) continue;
-        const existingQty = currentSharerQuantities[productId] ?? 0;
-        const targetQty = existingQty + extraQty;
-        const existingItem = sharerItems.find((item) => item.productId === productId);
-        if (existingItem) {
-          await updateOrderItemQuantity(existingItem.id, order.id, sharerParticipant.id, targetQty);
-        } else {
-          await addItem({
-            orderId: order.id,
-            participantId: sharerParticipant.id,
-            productId,
-            quantityUnits: targetQty,
-          });
-        }
-      }
-
-      const payment = await createPaymentStub({
-        orderId: order.id,
-        participantId: sharerParticipant.id,
-        amountCents: eurosToCents(draft.total),
-        provider: providerContext?.provider ?? 'stripe',
-        providerPaymentId: providerContext?.providerPaymentId ?? null,
-        raw: {
-          flow_kind: 'close',
-          use_coop_balance: Boolean(closeData.useCoopBalance),
-          ...providerContext?.raw,
-        },
-      });
-      await finalizeClosePayment(payment.id);
-      await createLockClosePackage(order.id, Boolean(closeData.useCoopBalance));
-    } catch (error) {
-      console.error('Close payment finalize error:', error);
-      const message = (error as Error)?.message ?? 'Impossible de finaliser le paiement.';
-      toast.error(message);
-      return;
-    }
-
-    // Post-close checks are best effort only and must not block UX.
-    try {
-      let sharerInvoices = await fetchParticipantInvoices(order.id, user.id);
-      if (!sharerInvoices.length) {
-        await issueSharerInvoiceAfterLock(order.id);
-        sharerInvoices = await fetchParticipantInvoices(order.id, user.id);
-      }
-      if (!sharerInvoices.length) {
-        toast.warning('Commande clôturée, mais facture partageur non confirmée immédiatement.');
-      }
-    } catch (invoiceCheckError) {
-      console.error('Close payment invoice check error:', invoiceCheckError);
-      toast.warning('Commande clôturée, mais vérification facture indisponible.');
-    }
-
-    try {
-      await triggerOutgoingEmails();
-    } catch (emailError) {
-      console.error('Close payment email trigger error:', emailError);
-      toast.warning('Facture generee, mais envoi email non declenche automatiquement.');
-    }
-
-    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, user?.id ?? null));
-    clearOrderPageSnapshot(buildOrderPageSnapshotKey('payment', order.orderCode ?? order.id, null));
-    setPurchaseDraft(null);
-    setRecentPurchase(null);
-    navigate(`/cmd/${resolveOrderCode(order.id)}`);
-    */
-    toast.success('Paiement confirmé et commande clôturée.');
   };
 
   const handleAddProduct = async (payload: CreateProductPayload) => {

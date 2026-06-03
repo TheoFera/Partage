@@ -73,6 +73,7 @@ type StripeCheckoutSession = {
   id: string;
   status?: string | null;
   payment_status?: string | null;
+  client_secret?: string | null;
   amount_total?: number | null;
   customer_email?: string | null;
   customer_details?: { email?: string | null; phone?: string | null } | null;
@@ -225,11 +226,86 @@ type DbLotRow = {
   product_id: string;
 };
 
+type OrderCreationProductListingRow = {
+  product_id: string;
+  product_code: string;
+  sale_unit: string | null;
+  packaging: string | null;
+  unit_weight_kg: number | null;
+  default_price_cents: number | null;
+  active_lot_price_cents: number | null;
+  producer_profile_id: string | null;
+};
+
+type OrderCreationPayload = {
+  productCodes: string[];
+  title: string;
+  visibility: "public" | "private";
+  status: string;
+  deadline: string | null;
+  message: string | null;
+  autoApproveParticipationRequests: boolean;
+  allowSharerMessages: boolean;
+  autoApprovePickupSlots: boolean;
+  minWeightKg: number;
+  maxWeightKg: number | null;
+  orderedWeightKg: number;
+  deliveryOption: "chronofresh" | "producer_delivery" | "producer_pickup";
+  deliveryStreet: string | null;
+  deliveryInfo: string | null;
+  deliveryCity: string | null;
+  deliveryPostcode: string | null;
+  deliveryAddress: string | null;
+  deliveryPhone: string | null;
+  deliveryEmail: string | null;
+  deliveryLat: number | null;
+  deliveryLng: number | null;
+  estimatedDeliveryDate: string | null;
+  pickupStreet: string | null;
+  pickupInfo: string | null;
+  pickupCity: string | null;
+  pickupPostcode: string | null;
+  pickupAddress: string | null;
+  pickupLat: number | null;
+  pickupLng: number | null;
+  usePickupDate: boolean;
+  pickupDate: string | null;
+  pickupWindowWeeks: number | null;
+  pickupDeliveryFeeCents: number;
+  sharerPercentage: number;
+  shareMode: "products" | "cash";
+  sharerQuantities: Record<string, number>;
+  currency: string;
+  baseTotalCents: number;
+  deliveryFeeCents: number;
+  participantTotalCents: number;
+  sharerShareCents: number;
+  effectiveWeightKg: number;
+  participantsVisibility: Record<string, unknown>;
+  slots: Array<{
+    slotType: "weekday" | "date";
+    day: string | null;
+    slotDate: string | null;
+    label: string;
+    enabled: boolean;
+    startTime: string;
+    endTime: string;
+  }>;
+};
+
 type FinalizeResult = {
   checkoutPaymentSession: CheckoutPaymentSessionRow;
   stripeSession: StripeCheckoutSession | null;
   status: "processing" | "succeeded" | "failed" | "retryable";
   errorMessage: string | null;
+};
+
+type ParticipantCheckoutDraftLineItem = {
+  productCode: string;
+  label: string;
+  quantity: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
 };
 
 export function jsonResponse(body: unknown, status = 200) {
@@ -243,6 +319,82 @@ const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const normalizeText = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+const toNullableFiniteNumber = (value: unknown) => {
+  const numeric = Number(value ?? NaN);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const ORDER_LOCATION_OBFUSCATION_MIN_M = 200;
+const ORDER_LOCATION_OBFUSCATION_MAX_M = 500;
+const ORDER_LOCATION_DISPLAY_RADIUS_M = 550;
+const EARTH_RADIUS_METERS = 6371000;
+
+type Coordinates = { lat: number; lng: number };
+type ObfuscationOffset = { distanceMeters: number; bearingRad: number };
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+const toDegrees = (value: number) => (value * 180) / Math.PI;
+const normalizeLongitude = (lng: number) => ((lng + 540) % 360) - 180;
+const toCoordinate = (lat?: number | null, lng?: number | null): Coordinates | null => {
+  if (!Number.isFinite(lat ?? NaN) || !Number.isFinite(lng ?? NaN)) return null;
+  const safeLat = Number(lat);
+  const safeLng = Number(lng);
+  if (safeLat < -90 || safeLat > 90 || safeLng < -180 || safeLng > 180) return null;
+  return { lat: safeLat, lng: safeLng };
+};
+const areCoordinatesEquivalent = (left: Coordinates, right: Coordinates) =>
+  Math.abs(left.lat - right.lat) <= 1e-9 && Math.abs(left.lng - right.lng) <= 1e-9;
+const sampleObfuscationOffset = (): ObfuscationOffset => {
+  const minDistance = Math.max(0, ORDER_LOCATION_OBFUSCATION_MIN_M);
+  const cappedMaxDistance = Math.max(0, ORDER_LOCATION_DISPLAY_RADIUS_M - 20);
+  const maxDistance = Math.max(minDistance, Math.min(ORDER_LOCATION_OBFUSCATION_MAX_M, cappedMaxDistance));
+  const minSquared = minDistance * minDistance;
+  const maxSquared = maxDistance * maxDistance;
+  return {
+    distanceMeters: Math.sqrt(Math.random() * (maxSquared - minSquared) + minSquared),
+    bearingRad: Math.random() * Math.PI * 2,
+  };
+};
+const projectCoordinate = (origin: Coordinates, distanceMeters: number, bearingRad: number): Coordinates => {
+  const angularDistance = distanceMeters / EARTH_RADIUS_METERS;
+  const lat1 = toRadians(origin.lat);
+  const lng1 = toRadians(origin.lng);
+  const sinLat1 = Math.sin(lat1);
+  const cosLat1 = Math.cos(lat1);
+  const sinAngularDistance = Math.sin(angularDistance);
+  const cosAngularDistance = Math.cos(angularDistance);
+  const sinLat2 = sinLat1 * cosAngularDistance + cosLat1 * sinAngularDistance * Math.cos(bearingRad);
+  const lat2 = Math.asin(Math.min(1, Math.max(-1, sinLat2)));
+  const y = Math.sin(bearingRad) * sinAngularDistance * cosLat1;
+  const x = cosAngularDistance - sinLat1 * Math.sin(lat2);
+  const lng2 = lng1 + Math.atan2(y, x);
+  return {
+    lat: toDegrees(lat2),
+    lng: normalizeLongitude(toDegrees(lng2)),
+  };
+};
+const obfuscateCoordinate = (origin: Coordinates, forcedOffset?: ObfuscationOffset) => {
+  const offset = forcedOffset ?? sampleObfuscationOffset();
+  return projectCoordinate(origin, offset.distanceMeters, offset.bearingRad);
+};
+const buildObfuscatedOrderCoordinates = (params: {
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+}) => {
+  const delivery = toCoordinate(params.deliveryLat, params.deliveryLng);
+  const pickup = toCoordinate(params.pickupLat, params.pickupLng);
+  const sharedOffset = delivery && pickup && areCoordinatesEquivalent(delivery, pickup) ? sampleObfuscationOffset() : undefined;
+  const obfuscatedDelivery = delivery ? obfuscateCoordinate(delivery, sharedOffset) : null;
+  const obfuscatedPickup = pickup ? obfuscateCoordinate(pickup, sharedOffset) : null;
+  return {
+    deliveryLat: obfuscatedDelivery?.lat ?? null,
+    deliveryLng: obfuscatedDelivery?.lng ?? null,
+    pickupLat: obfuscatedPickup?.lat ?? null,
+    pickupLng: obfuscatedPickup?.lng ?? null,
+  };
+};
 
 const PAYMENT_BREAKDOWN_KEYS = [
   "total_economic_cents",
@@ -708,6 +860,21 @@ const fetchLatestActiveLotsByProductId = async (serviceClient: ReturnType<typeof
   return result;
 };
 
+const fetchProductsByCodesForOrderCreation = async (
+  serviceClient: ReturnType<typeof createServiceClient>,
+  productCodes: string[],
+) => {
+  if (!productCodes.length) return [] as OrderCreationProductListingRow[];
+  const { data, error } = await serviceClient
+    .from("v_products_listing")
+    .select(
+      "product_id, product_code, sale_unit, packaging, unit_weight_kg, default_price_cents, active_lot_price_cents, producer_profile_id",
+    )
+    .in("product_code", productCodes);
+  if (error) throw error;
+  return ((data as OrderCreationProductListingRow[] | null) ?? []).filter((row) => normalizeText(row.product_code));
+};
+
 async function getCheckoutPaymentSession(
   serviceClient: ReturnType<typeof createServiceClient>,
   params: { id?: string | null; providerPaymentId?: string | null; checkoutSessionId?: string | null },
@@ -887,7 +1054,7 @@ async function listCheckoutSessionReservations(
     .filter(Boolean) as Array<DbLotReservationRow & { product_id: string }>;
 }
 
-async function retrieveStripeCheckoutSession(checkoutSessionId: string, stripeAccountId?: string | null) {
+export async function retrieveStripeCheckoutSession(checkoutSessionId: string, stripeAccountId?: string | null) {
   assertServerEnv();
   const response = await fetch(
     `${getStripeApiBase()}/checkout/sessions/${encodeURIComponent(checkoutSessionId)}?expand[]=payment_intent.latest_charge.balance_transaction`,
@@ -1576,6 +1743,28 @@ async function getProductListingRow(
   return data as ProductListingRow;
 }
 
+async function listProductNamesByIds(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  productIds: string[],
+) {
+  const uniqueProductIds = Array.from(new Set(productIds.filter(Boolean)));
+  const namesById = new Map<string, string>();
+  if (!uniqueProductIds.length) return namesById;
+  const { data, error } = await serviceClient
+    .from("products")
+    .select("id, name")
+    .in("id", uniqueProductIds);
+  if (error) throw error;
+  for (const row of (data as Array<Record<string, unknown>> | null) ?? []) {
+    const productId = normalizeText(row.id);
+    const name = normalizeText(row.name);
+    if (productId && name) {
+      namesById.set(productId, name);
+    }
+  }
+  return namesById;
+}
+
 async function insertOrderItem(
   serviceClient: ReturnType<typeof createServiceClient>,
   params: {
@@ -1817,6 +2006,338 @@ async function deleteOrderItem(
   await recomputeCaches(serviceClient, params.orderId, params.participantId);
 }
 
+const normalizeDateOnlyInput = (value: unknown) => {
+  const text = normalizeText(value);
+  if (!text) return null;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+};
+
+const normalizeCreateOrderPayload = (rawPayload: unknown): OrderCreationPayload => {
+  const source = isRecord(rawPayload) ? rawPayload : {};
+  const productCodes = Array.isArray(source.productCodes)
+    ? source.productCodes.map((value) => normalizeText(value)).filter(Boolean)
+    : [];
+  const shareMode = source.shareMode === "cash" ? "cash" : "products";
+  const sharerQuantitiesSource =
+    isRecord(source.sharerQuantities) ? source.sharerQuantities as Record<string, unknown> : {};
+  const sharerQuantities = Object.entries(sharerQuantitiesSource).reduce((acc, [productCode, rawQty]) => {
+    const normalizedCode = normalizeText(productCode);
+    const quantity = Math.max(0, Number(rawQty ?? 0) || 0);
+    if (!normalizedCode || quantity <= 0) return acc;
+    acc[normalizedCode] = quantity;
+    return acc;
+  }, {} as Record<string, number>);
+  const slots = Array.isArray(source.slots)
+    ? source.slots
+      .filter((value) => isRecord(value))
+      .map((value) => ({
+        slotType: value.slotType === "date" ? "date" : "weekday",
+        day: normalizeText(value.day) || null,
+        slotDate: normalizeDateOnlyInput(value.slotDate),
+        label: normalizeText(value.label),
+        enabled: value.enabled === true,
+        startTime: normalizeText(value.startTime),
+        endTime: normalizeText(value.endTime),
+      }))
+    : [];
+
+  return {
+    productCodes,
+    title: normalizeText(source.title),
+    visibility: source.visibility === "private" ? "private" : "public",
+    status: normalizeText(source.status) || "open",
+    deadline: normalizeDateOnlyInput(source.deadline),
+    message: normalizeText(source.message) || null,
+    autoApproveParticipationRequests: source.autoApproveParticipationRequests === true,
+    allowSharerMessages: source.allowSharerMessages !== false,
+    autoApprovePickupSlots: source.autoApprovePickupSlots === true,
+    minWeightKg: Math.max(0, Number(source.minWeightKg ?? 0) || 0),
+    maxWeightKg: toNullableFiniteNumber(source.maxWeightKg),
+    orderedWeightKg: Math.max(0, Number(source.orderedWeightKg ?? 0) || 0),
+    deliveryOption:
+      source.deliveryOption === "chronofresh" || source.deliveryOption === "producer_delivery"
+        ? source.deliveryOption
+        : "producer_pickup",
+    deliveryStreet: normalizeText(source.deliveryStreet) || null,
+    deliveryInfo: normalizeText(source.deliveryInfo) || null,
+    deliveryCity: normalizeText(source.deliveryCity) || null,
+    deliveryPostcode: normalizeText(source.deliveryPostcode) || null,
+    deliveryAddress: normalizeText(source.deliveryAddress) || null,
+    deliveryPhone: normalizeText(source.deliveryPhone) || null,
+    deliveryEmail: normalizeText(source.deliveryEmail) || null,
+    deliveryLat: toNullableFiniteNumber(source.deliveryLat),
+    deliveryLng: toNullableFiniteNumber(source.deliveryLng),
+    estimatedDeliveryDate: normalizeDateOnlyInput(source.estimatedDeliveryDate),
+    pickupStreet: normalizeText(source.pickupStreet) || null,
+    pickupInfo: normalizeText(source.pickupInfo) || null,
+    pickupCity: normalizeText(source.pickupCity) || null,
+    pickupPostcode: normalizeText(source.pickupPostcode) || null,
+    pickupAddress: normalizeText(source.pickupAddress) || null,
+    pickupLat: toNullableFiniteNumber(source.pickupLat),
+    pickupLng: toNullableFiniteNumber(source.pickupLng),
+    usePickupDate: source.usePickupDate === true,
+    pickupDate: normalizeDateOnlyInput(source.pickupDate),
+    pickupWindowWeeks: toNullableFiniteNumber(source.pickupWindowWeeks),
+    pickupDeliveryFeeCents: toNonNegativeInteger(source.pickupDeliveryFeeCents),
+    sharerPercentage: Math.max(0, Number(source.sharerPercentage ?? 0) || 0),
+    shareMode,
+    sharerQuantities,
+    currency: normalizeText(source.currency) || "EUR",
+    baseTotalCents: toNonNegativeInteger(source.baseTotalCents),
+    deliveryFeeCents: toNonNegativeInteger(source.deliveryFeeCents),
+    participantTotalCents: toNonNegativeInteger(source.participantTotalCents),
+    sharerShareCents: toNonNegativeInteger(source.sharerShareCents),
+    effectiveWeightKg: Math.max(0, Number(source.effectiveWeightKg ?? 0) || 0),
+    participantsVisibility: isRecord(source.participantsVisibility)
+      ? source.participantsVisibility as Record<string, unknown>
+      : {},
+    slots,
+  };
+};
+
+export async function createOrderWithSetup(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: { authUserId: string; rawPayload: unknown },
+) {
+  const payload = normalizeCreateOrderPayload(params.rawPayload);
+  if (!params.authUserId) throw new Error("Utilisateur requis pour créer une commande.");
+  if (!payload.productCodes.length) throw new Error("Sélection de produits requise.");
+  if (!payload.title) throw new Error("Titre de commande requis.");
+
+  const productRows = await fetchProductsByCodesForOrderCreation(serviceClient, payload.productCodes);
+  if (productRows.length !== payload.productCodes.length) {
+    throw new Error("Impossible de charger tous les produits sélectionnés.");
+  }
+
+  const producerProfileIds = Array.from(
+    new Set(productRows.map((row) => normalizeText(row.producer_profile_id)).filter(Boolean)),
+  );
+  if (producerProfileIds.length !== 1) {
+    throw new Error("Tous les produits d'une commande doivent appartenir au même producteur.");
+  }
+  const producerProfileId = producerProfileIds[0];
+  const { data: producerStripeRow, error: producerStripeError } = await serviceClient
+    .from("legal_entities_public")
+    .select("stripe_ready_for_orders")
+    .eq("profile_id", producerProfileId)
+    .maybeSingle();
+  if (producerStripeError) throw producerStripeError;
+  if (!producerStripeRow?.stripe_ready_for_orders) {
+    throw new Error("Le producteur n'a pas encore terminé sa configuration Stripe Connect. Impossible de créer une commande avec cette structure.");
+  }
+
+  const orderPricingSeed = {
+    id: "",
+    order_code: null,
+    auto_approve_participation_requests: payload.autoApproveParticipationRequests,
+    sharer_profile_id: params.authUserId,
+    producer_profile_id: producerProfileId,
+    status: payload.status,
+    min_weight_kg: payload.minWeightKg,
+    max_weight_kg: payload.maxWeightKg,
+    sharer_share_cents: payload.sharerShareCents,
+    effective_weight_kg: 0,
+    delivery_fee_cents: 0,
+    pickup_delivery_fee_cents: payload.pickupDeliveryFeeCents,
+    delivery_option: payload.deliveryOption,
+    sharer_percentage: payload.sharerPercentage,
+    ordered_weight_kg: payload.orderedWeightKg,
+  } as DbOrderRow;
+  const resolvedEffectiveWeightKg = resolveEffectiveWeightKgForOrder(orderPricingSeed, payload.orderedWeightKg);
+  const resolvedDeliveryFeeCents = resolveDeliveryFeeTotalCentsForOrder(orderPricingSeed, resolvedEffectiveWeightKg);
+
+  const activeLotsByProductId = await fetchLatestActiveLotsByProductId(
+    serviceClient,
+    productRows.map((row) => row.product_id),
+  );
+  const obfuscatedCoords = buildObfuscatedOrderCoordinates({
+    deliveryLat: payload.deliveryLat,
+    deliveryLng: payload.deliveryLng,
+    pickupLat: payload.pickupLat,
+    pickupLng: payload.pickupLng,
+  });
+  const { data: insertedOrder, error: insertError } = await serviceClient
+    .from("orders")
+    .insert({
+      created_by: params.authUserId,
+      sharer_profile_id: params.authUserId,
+      producer_profile_id: producerProfileId,
+      title: payload.title,
+      visibility: payload.visibility,
+      status: payload.status,
+      deadline: payload.deadline,
+      message: payload.message,
+      auto_approve_participation_requests: payload.autoApproveParticipationRequests,
+      allow_sharer_messages: payload.allowSharerMessages,
+      auto_approve_pickup_slots: payload.autoApprovePickupSlots,
+      min_weight_kg: payload.minWeightKg,
+      max_weight_kg: payload.maxWeightKg,
+      ordered_weight_kg: payload.orderedWeightKg,
+      delivery_option: payload.deliveryOption,
+      delivery_street: payload.deliveryStreet,
+      delivery_info: payload.deliveryInfo,
+      delivery_city: payload.deliveryCity,
+      delivery_postcode: payload.deliveryPostcode,
+      delivery_address: payload.deliveryAddress,
+      delivery_phone: payload.deliveryPhone,
+      delivery_email: payload.deliveryEmail,
+      delivery_lat: obfuscatedCoords.deliveryLat,
+      delivery_lng: obfuscatedCoords.deliveryLng,
+      estimated_delivery_date: payload.estimatedDeliveryDate,
+      pickup_street: payload.pickupStreet,
+      pickup_info: payload.pickupInfo,
+      pickup_city: payload.pickupCity,
+      pickup_postcode: payload.pickupPostcode,
+      pickup_address: payload.pickupAddress,
+      pickup_lat: obfuscatedCoords.pickupLat,
+      pickup_lng: obfuscatedCoords.pickupLng,
+      use_pickup_date: payload.usePickupDate,
+      pickup_date: payload.pickupDate,
+      pickup_window_weeks: payload.pickupWindowWeeks,
+      pickup_delivery_fee_cents: payload.pickupDeliveryFeeCents,
+      sharer_percentage: payload.sharerPercentage,
+      share_mode: payload.shareMode,
+      sharer_quantities: payload.sharerQuantities,
+      currency: payload.currency,
+      base_total_cents: payload.baseTotalCents,
+      delivery_fee_cents: resolvedDeliveryFeeCents,
+      participant_total_cents: payload.participantTotalCents,
+      sharer_share_cents: payload.sharerShareCents,
+      effective_weight_kg: resolvedEffectiveWeightKg,
+      participants_visibility: payload.participantsVisibility,
+    })
+    .select("*")
+    .single();
+  if (insertError || !insertedOrder) throw insertError ?? new Error("Création commande impossible.");
+
+  const order = insertedOrder as DbOrderRow;
+  const createdSharerItemIds: string[] = [];
+  try {
+    const orderProductsPayload = productRows.map((productRow, index) => {
+      const unitWeightKg = resolveUnitWeightKg(
+        productRow.sale_unit,
+        productRow.unit_weight_kg,
+        productRow.packaging,
+      );
+      const fallbackLot = activeLotsByProductId.get(productRow.product_id);
+      const basePriceCents = Math.max(
+        0,
+        Number(productRow.active_lot_price_cents ?? fallbackLot?.price_cents ?? productRow.default_price_cents ?? 0),
+      );
+      const pricing = calculateOrderItemPricing({
+        order,
+        basePriceCents,
+        unitWeightKg,
+        quantityUnits: 1,
+      });
+      return {
+        order_id: order.id,
+        product_id: productRow.product_id,
+        sort_order: index,
+        is_enabled: true,
+        unit_label: productRow.sale_unit === "kg" ? "kg" : productRow.packaging,
+        unit_weight_kg: unitWeightKg,
+        unit_base_price_cents: basePriceCents,
+        unit_delivery_cents: pricing.unitDeliveryCents,
+        unit_sharer_fee_cents: pricing.unitSharerFeeCents,
+        unit_final_price_cents: pricing.unitFinalPriceCents,
+        price_breakdown_snapshot: {
+          base_cents: basePriceCents,
+          delivery_cents: pricing.unitDeliveryCents,
+          sharer_cents: pricing.unitSharerFeeCents,
+          final_cents: pricing.unitFinalPriceCents,
+        },
+      };
+    });
+    if (orderProductsPayload.length > 0) {
+      const { error: orderProductsError } = await serviceClient.from("order_products").insert(orderProductsPayload);
+      if (orderProductsError) throw orderProductsError;
+    }
+
+    if (payload.slots.length > 0) {
+      const slotRows = payload.slots.map((slot, index) => ({
+        order_id: order.id,
+        slot_type: slot.slotType,
+        day: slot.slotType === "weekday" ? slot.day : null,
+        slot_date: slot.slotType === "date" ? slot.slotDate : null,
+        label: slot.label,
+        enabled: slot.enabled,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
+        sort_order: index,
+      }));
+      const { error: slotError } = await serviceClient.from("order_pickup_slots").insert(slotRows);
+      if (slotError) throw slotError;
+    }
+
+    const { data: sharerParticipant, error: sharerError } = await serviceClient
+      .from("order_participants")
+      .insert({
+        order_id: order.id,
+        profile_id: params.authUserId,
+        role: "sharer",
+        participation_status: "accepted",
+      })
+      .select("id")
+      .single();
+    if (sharerError || !sharerParticipant) throw sharerError ?? new Error("Participant partageur manquant.");
+    const sharerParticipantId = normalizeText((sharerParticipant as Record<string, unknown>).id);
+    if (!sharerParticipantId) {
+      throw new Error("Participant partageur manquant.");
+    }
+
+    if (payload.shareMode === "products") {
+      const positiveSharerSelections = Object.entries(payload.sharerQuantities).filter(([, quantity]) => quantity > 0);
+      for (const [productCode, quantity] of positiveSharerSelections) {
+        const productRow = productRows.find((row) => row.product_code === productCode);
+        if (!productRow) {
+          throw new Error(`Produit introuvable pour le code ${productCode}.`);
+        }
+        const orderItemId = await insertOrderItem(serviceClient, {
+          order,
+          participantId: sharerParticipantId,
+          productId: productRow.product_id,
+          lotId: activeLotsByProductId.get(productRow.product_id)?.id ?? null,
+          quantityUnits: quantity,
+          isSharerShare: true,
+          reservationStatus: "consumed",
+          reservationKind: "sharer_initial",
+          skipRecompute: true,
+        });
+        createdSharerItemIds.push(orderItemId);
+      }
+      if (createdSharerItemIds.length > 0) {
+        await recomputeCaches(serviceClient, order.id, sharerParticipantId);
+      }
+    }
+
+    return {
+      orderId: order.id,
+      orderCode: normalizeText((order as Record<string, unknown>).order_code) || order.id,
+    };
+  } catch (error) {
+    for (const orderItemId of createdSharerItemIds.slice().reverse()) {
+      try {
+        await deleteOrderItem(serviceClient, {
+          orderItemId,
+          orderId: order.id,
+          participantId: params.authUserId,
+        });
+      } catch (rollbackError) {
+        console.error("Rollback sharer item error:", rollbackError);
+      }
+    }
+    try {
+      await serviceClient.from("orders").delete().eq("id", order.id);
+    } catch (deleteError) {
+      console.error("Rollback order delete error:", deleteError);
+    }
+    throw error;
+  }
+}
+
 function parseParticipantDraft(draftPayload: JsonRecord | null) {
   const draft = isRecord(draftPayload) ? draftPayload : {};
   const quantitiesSource = isRecord(draft.quantities) ? draft.quantities : {};
@@ -1850,6 +2371,193 @@ function parseCloseDraft(draftPayload: JsonRecord | null) {
   };
 }
 
+function buildParticipantDraftReuseKey(draftPayload: JsonRecord | null) {
+  const draft = parseParticipantDraft(draftPayload);
+  const sortedQuantities = Object.entries(draft.quantities)
+    .sort(([leftProductId], [rightProductId]) => leftProductId.localeCompare(rightProductId))
+    .reduce((acc, [productId, quantity]) => {
+      acc[productId] = quantity;
+      return acc;
+    }, {} as Record<string, number>);
+  return JSON.stringify({
+    useCoopBalance: draft.useCoopBalance,
+    quantities: sortedQuantities,
+  });
+}
+
+function buildCloseDraftReuseKey(draftPayload: JsonRecord | null) {
+  const draft = parseCloseDraft(draftPayload);
+  const sortedExtraQuantities = Object.entries(draft.extraQuantities)
+    .sort(([leftProductId], [rightProductId]) => leftProductId.localeCompare(rightProductId))
+    .reduce((acc, [productId, quantity]) => {
+      acc[productId] = quantity;
+      return acc;
+    }, {} as Record<string, number>);
+  return JSON.stringify({
+    useCoopBalance: draft.useCoopBalance,
+    extraQuantities: sortedExtraQuantities,
+  });
+}
+
+function buildCheckoutDraftReuseKey(flowKind: CheckoutFlowKind, draftPayload: JsonRecord | null) {
+  return flowKind === "close"
+    ? buildCloseDraftReuseKey(draftPayload)
+    : buildParticipantDraftReuseKey(draftPayload);
+}
+
+async function findReusableCheckoutPaymentSessionDraft(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  params: {
+    authUserId: string;
+    orderId: string;
+    flowKind: CheckoutFlowKind;
+    draftPayload: JsonRecord;
+  },
+) {
+  const expectedReuseKey = buildCheckoutDraftReuseKey(params.flowKind, params.draftPayload);
+  const { data, error } = await serviceClient
+    .from("checkout_payment_sessions")
+    .select("*")
+    .eq("order_id", params.orderId)
+    .eq("profile_id", params.authUserId)
+    .eq("flow_kind", params.flowKind)
+    .in("status", ["draft", "checkout_created", "checkout_completed", "failed", "expired"])
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  if (error) throw error;
+  const rows = (data as CheckoutPaymentSessionRow[] | null) ?? [];
+  return rows.find((row) => buildCheckoutDraftReuseKey(params.flowKind, row.draft_payload) === expectedReuseKey) ?? null;
+}
+
+export async function buildParticipantCheckoutDraft(params: {
+  authUserId: string;
+  orderId: string;
+  draftPayload: JsonRecord | null;
+}) {
+  assertServerEnv();
+  const serviceClient = createServiceClient();
+  const order = await getOrderById(serviceClient, params.orderId);
+  if (order.status !== "open") {
+    throw new Error("La commande n'est pas ouverte.");
+  }
+
+  const existingParticipant = await getParticipantByProfile(serviceClient, params.orderId, params.authUserId);
+  if (!existingParticipant && !order.auto_approve_participation_requests) {
+    throw new Error("Votre participation doit être acceptée avant de payer.");
+  }
+  if (
+    existingParticipant &&
+    normalizeText(existingParticipant.participation_status) !== "accepted" &&
+    !order.auto_approve_participation_requests
+  ) {
+    throw new Error("Votre participation doit être acceptée avant de payer.");
+  }
+
+  const participantDraft = parseParticipantDraft(params.draftPayload);
+  if (Object.keys(participantDraft.quantities).length === 0) {
+    throw new Error("Aucun produit sélectionné.");
+  }
+
+  const plans = await buildReservationPlansFromQuantities(serviceClient, order, participantDraft.quantities);
+  if (!plans.length) {
+    throw new Error("Aucun produit sélectionné.");
+  }
+
+  const coopBalanceCents = participantDraft.useCoopBalance
+    ? await fetchCoopBalance(serviceClient, params.authUserId)
+    : 0;
+  const paymentBreakdown = await computeParticipantPaymentBreakdownFromPlans(serviceClient, {
+    order,
+    profileId: params.authUserId,
+    plans,
+    coopBalanceCents,
+    useCoopBalance: participantDraft.useCoopBalance,
+  });
+  const productNamesById = await listProductNamesByIds(
+    serviceClient,
+    plans.map((plan) => plan.productId),
+  );
+  const totalWeightKg = plans.reduce((sum, plan) => sum + Math.max(0, Number(plan.lineWeightKg ?? 0)), 0);
+  const lineItems: ParticipantCheckoutDraftLineItem[] = plans.map((plan) => ({
+    productCode: plan.productId,
+    label: productNamesById.get(plan.productId) ?? plan.productId,
+    quantity: Math.max(0, Number(plan.quantityUnits) || 0),
+    unitPriceCents: toNonNegativeInteger(plan.unitFinalPriceCents),
+    lineTotalCents: toNonNegativeInteger(plan.lineTotalCents),
+  }));
+
+  return {
+    amountCents: paymentBreakdown.card_amount_cents,
+    paymentBreakdown,
+    totalWeightKg,
+    draftPayload: {
+      quantities: participantDraft.quantities,
+      lineItems,
+      total: paymentBreakdown.card_amount_cents / 100,
+      weight: Math.round(totalWeightKg * 1000) / 1000,
+      useCoopBalance: participantDraft.useCoopBalance,
+    } satisfies JsonRecord,
+  };
+}
+
+export async function buildCloseCheckoutDraft(params: {
+  authUserId: string;
+  orderId: string;
+  draftPayload: JsonRecord | null;
+}) {
+  assertServerEnv();
+  const serviceClient = createServiceClient();
+  const order = await getOrderById(serviceClient, params.orderId);
+  if (order.sharer_profile_id !== params.authUserId) {
+    throw new Error("Seul le partageur peut clôturer cette commande.");
+  }
+  if (order.status !== "open") {
+    throw new Error("La commande n'est pas ouverte.");
+  }
+
+  const sharerParticipant = await getParticipantByProfile(serviceClient, order.id, params.authUserId);
+  if (!sharerParticipant || normalizeText(sharerParticipant.role) !== "sharer") {
+    throw new Error("Participant partageur introuvable pour la clôture.");
+  }
+
+  const closeDraft = parseCloseDraft(params.draftPayload);
+  const plans = await buildReservationPlansFromQuantities(serviceClient, order, closeDraft.extraQuantities);
+  const allOrderItems = await listOrderItemsForOrder(serviceClient, order.id);
+  const coopBalanceCents = closeDraft.useCoopBalance
+    ? await fetchCoopBalance(serviceClient, params.authUserId)
+    : 0;
+  const paymentBreakdown = await computeClosePaymentBreakdown(serviceClient, {
+    order,
+    sharerParticipantId: sharerParticipant.id,
+    allOrderItems,
+    extraPlans: plans.map((plan) => ({
+      productId: plan.productId,
+      lotId: plan.lotId,
+      saleUnit: plan.saleUnit,
+      quantityUnits: plan.quantityUnits,
+      storedQuantityUnits: plan.storedQuantityUnits,
+      reservedKg: plan.reservedKg,
+      unitWeightKg: plan.unitWeightKg,
+      unitBasePriceCents: plan.unitBasePriceCents,
+    })),
+    coopBalanceCents,
+    useCoopBalance: closeDraft.useCoopBalance,
+  });
+
+  return {
+    amountCents: paymentBreakdown.card_amount_cents,
+    paymentBreakdown,
+    draftPayload: {
+      total: paymentBreakdown.card_amount_cents / 100,
+      weight: 0,
+      closeData: {
+        useCoopBalance: closeDraft.useCoopBalance,
+        extraQuantities: closeDraft.extraQuantities,
+      },
+    } satisfies JsonRecord,
+  };
+}
+
 async function buildCheckoutReservationPlans(
   serviceClient: ReturnType<typeof createServiceClient>,
   checkoutPaymentSession: CheckoutPaymentSessionRow,
@@ -1859,7 +2567,14 @@ async function buildCheckoutReservationPlans(
     checkoutPaymentSession.flow_kind === "close"
       ? parseCloseDraft(checkoutPaymentSession.draft_payload).extraQuantities
       : parseParticipantDraft(checkoutPaymentSession.draft_payload).quantities;
+  return buildReservationPlansFromQuantities(serviceClient, order, quantities);
+}
 
+async function buildReservationPlansFromQuantities(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  order: DbOrderRow,
+  quantities: Record<string, number>,
+) {
   const productIds = Object.entries(quantities)
     .filter(([, quantity]) => quantity > 0)
     .map(([productId]) => productId);
@@ -1884,7 +2599,7 @@ async function buildCheckoutReservationPlans(
   for (const [productId, quantityUnits] of Object.entries(quantities)) {
     if (quantityUnits <= 0) continue;
     const [orderProduct, productListing] = await Promise.all([
-      getOrderProductRow(serviceClient, checkoutPaymentSession.order_id, productId),
+      getOrderProductRow(serviceClient, order.id, productId),
       getProductListingRow(serviceClient, productId),
     ]);
     const fallbackLot = activeLotsByProductId.get(productId) ?? null;
@@ -3245,12 +3960,24 @@ export async function createCheckoutPaymentSessionDraft(params: {
   flowKind: CheckoutFlowKind;
   amountCents: number;
   draftPayload: JsonRecord;
+  forceNew?: boolean;
 }) {
   assertServerEnv();
   const serviceClient = createServiceClient();
   const order = await getOrderById(serviceClient, params.orderId);
   if (params.flowKind === "close" && order.sharer_profile_id !== params.authUserId) {
     throw new Error("Only the sharer can create a close payment session");
+  }
+  if (!params.forceNew) {
+    const reusableDraft = await findReusableCheckoutPaymentSessionDraft(serviceClient, {
+      authUserId: params.authUserId,
+      orderId: params.orderId,
+      flowKind: params.flowKind,
+      draftPayload: params.draftPayload,
+    });
+    if (reusableDraft) {
+      return reusableDraft;
+    }
   }
   const payload = {
     order_id: params.orderId,

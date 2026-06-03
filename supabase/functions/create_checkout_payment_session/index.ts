@@ -1,4 +1,6 @@
 import {
+  buildCloseCheckoutDraft,
+  buildParticipantCheckoutDraft,
   corsHeaders,
   createCheckoutPaymentSessionDraft,
   jsonResponse,
@@ -40,7 +42,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const orderId = typeof body?.order_id === "string" ? body.order_id.trim() : "";
     const flowKind = body?.flow_kind === "close" ? "close" : "participant";
-    const amountCents = Math.max(0, Math.round(Number(body?.amount_cents ?? 0)));
+    const forceNew = body?.force_new === true;
     const draftPayload =
       body?.draft_payload && typeof body.draft_payload === "object" && !Array.isArray(body.draft_payload)
         ? (body.draft_payload as Record<string, unknown>)
@@ -49,8 +51,28 @@ Deno.serve(async (req) => {
     if (!orderId) {
       return jsonResponse({ error: "Missing order_id" }, 400);
     }
-    if (amountCents < 0) {
-      return jsonResponse({ error: "Invalid amount_cents" }, 400);
+    let amountCents = 0;
+    let normalizedDraftPayload = draftPayload;
+    let paymentBreakdown: Record<string, unknown> | null = null;
+
+    if (flowKind === "participant") {
+      const participantDraft = await buildParticipantCheckoutDraft({
+        authUserId: user.id,
+        orderId,
+        draftPayload,
+      });
+      amountCents = participantDraft.amountCents;
+      normalizedDraftPayload = participantDraft.draftPayload;
+      paymentBreakdown = participantDraft.paymentBreakdown;
+    } else {
+      const closeDraft = await buildCloseCheckoutDraft({
+        authUserId: user.id,
+        orderId,
+        draftPayload,
+      });
+      amountCents = closeDraft.amountCents;
+      normalizedDraftPayload = closeDraft.draftPayload;
+      paymentBreakdown = closeDraft.paymentBreakdown;
     }
 
     const draft = await createCheckoutPaymentSessionDraft({
@@ -58,12 +80,16 @@ Deno.serve(async (req) => {
       orderId,
       flowKind,
       amountCents,
-      draftPayload,
+      draftPayload: normalizedDraftPayload,
+      forceNew,
     });
 
     return jsonResponse({
       checkout_payment_session_id: draft.id,
       local_status: draft.status,
+      normalized_draft: normalizedDraftPayload,
+      payment_breakdown: paymentBreakdown,
+      amount_cents: amountCents,
     });
   } catch (error) {
     const message = serializeUnknownError(error);

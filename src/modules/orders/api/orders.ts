@@ -777,214 +777,20 @@ export type CreateOrderPayload = {
 
 export const createOrder = async (payload: CreateOrderPayload): Promise<string> => {
   const client = getClient();
-  if (!payload.userId) throw new Error('Utilisateur requis pour creer une commande.');
-  if (!payload.productCodes.length) throw new Error('Selection de produits requise.');
-
-  const productRows = await fetchProductsByCodes(client, payload.productCodes);
-  if (productRows.length !== payload.productCodes.length) {
-    throw new Error('Impossible de charger tous les produits selectionnes.');
-  }
-  const activeLotsByProductId = await fetchLatestActiveLotsByProductId(
-    client,
-    productRows.map((row) => row.product_id as string)
-  );
-
-  const producerProfileId = (productRows[0]?.producer_profile_id as string | null) ?? payload.userId;
-  const { data: producerStripeRow, error: producerStripeError } = await client
-    .from('legal_entities_public')
-    .select('stripe_ready_for_orders')
-    .eq('profile_id', producerProfileId)
-    .maybeSingle();
-  if (producerStripeError) throw producerStripeError;
-  if (!producerStripeRow?.stripe_ready_for_orders) {
-    throw new Error(
-      "Le producteur n'a pas encore terminé sa configuration Stripe Connect. Impossible de créer une commande avec cette structure."
-    );
-  }
-  const obfuscatedCoords = buildObfuscatedOrderCoordinates({
-    deliveryLat: payload.deliveryLat,
-    deliveryLng: payload.deliveryLng,
-    pickupLat: payload.pickupLat,
-    pickupLng: payload.pickupLng,
+  const { data, error } = await client.functions.invoke<{ order_code?: string | null }>('create_order_with_setup', {
+    body: {
+      ...payload,
+      deadline: payload.deadline ? payload.deadline.toISOString() : null,
+      estimatedDeliveryDate: payload.estimatedDeliveryDate ? payload.estimatedDeliveryDate.toISOString() : null,
+      pickupDate: payload.pickupDate ? payload.pickupDate.toISOString() : null,
+    },
   });
-  const orderInsert = {
-    created_by: payload.userId,
-    sharer_profile_id: payload.userId,
-    producer_profile_id: producerProfileId,
-    title: payload.title,
-    visibility: payload.visibility,
-    status: payload.status ?? 'open',
-    deadline: payload.deadline ? payload.deadline.toISOString().slice(0, 10) : null,
-    message: payload.message ?? null,
-    auto_approve_participation_requests: payload.autoApproveParticipationRequests,
-    allow_sharer_messages: payload.allowSharerMessages,
-    auto_approve_pickup_slots: payload.autoApprovePickupSlots,
-    min_weight_kg: payload.minWeightKg,
-    max_weight_kg: payload.maxWeightKg,
-    ordered_weight_kg: payload.orderedWeightKg ?? 0,
-    delivery_option: payload.deliveryOption,
-    delivery_street: payload.deliveryStreet ?? null,
-    delivery_info: payload.deliveryInfo ?? null,
-    delivery_city: payload.deliveryCity ?? null,
-    delivery_postcode: payload.deliveryPostcode ?? null,
-    delivery_address: payload.deliveryAddress ?? null,
-    delivery_phone: payload.deliveryPhone ?? null,
-    delivery_email: payload.deliveryEmail ?? null,
-    delivery_lat: obfuscatedCoords.deliveryLat,
-    delivery_lng: obfuscatedCoords.deliveryLng,
-    estimated_delivery_date: payload.estimatedDeliveryDate
-      ? payload.estimatedDeliveryDate.toISOString().slice(0, 10)
-      : null,
-    pickup_street: payload.pickupStreet ?? null,
-    pickup_info: payload.pickupInfo ?? null,
-    pickup_city: payload.pickupCity ?? null,
-    pickup_postcode: payload.pickupPostcode ?? null,
-    pickup_address: payload.pickupAddress ?? null,
-    pickup_lat: obfuscatedCoords.pickupLat,
-    pickup_lng: obfuscatedCoords.pickupLng,
-    use_pickup_date: payload.usePickupDate,
-    pickup_date: payload.pickupDate ? payload.pickupDate.toISOString().slice(0, 10) : null,
-    pickup_window_weeks: payload.pickupWindowWeeks ?? null,
-    pickup_delivery_fee_cents: payload.pickupDeliveryFeeCents,
-    sharer_percentage: payload.sharerPercentage,
-    share_mode: payload.shareMode,
-    sharer_quantities: payload.sharerQuantities,
-    currency: payload.currency ?? 'EUR',
-    base_total_cents: payload.baseTotalCents,
-    delivery_fee_cents: payload.deliveryFeeCents,
-    participant_total_cents: payload.participantTotalCents,
-    sharer_share_cents: payload.sharerShareCents,
-    effective_weight_kg: payload.effectiveWeightKg,
-    participants_visibility: payload.participantsVisibility,
-  };
-
-  const { data: insertedOrder, error: insertError } = await client
-    .from('orders')
-    .insert(orderInsert)
-    .select('*')
-    .single();
-  if (insertError || !insertedOrder) throw insertError ?? new Error('Creation commande impossible.');
-
-  const order = mapOrderRow(insertedOrder as DbOrder);
-  const createdSharerItemIds: string[] = [];
-
-  try {
-    const orderProductsPayload = productRows.map((productRow, index) => {
-      const unitWeightKg = resolveUnitWeightKg(
-        productRow.sale_unit,
-        productRow.unit_weight_kg,
-        productRow.packaging
-      );
-      const fallbackLot = activeLotsByProductId.get(productRow.product_id as string);
-      const basePriceCents = Number(
-        productRow.active_lot_price_cents ?? fallbackLot?.priceCents ?? productRow.default_price_cents ?? 0
-      );
-      const pricing = calculateOrderItemPricing({
-        order,
-        basePriceCents,
-        unitWeightKg,
-        quantityUnits: 1,
-      });
-      return {
-        order_id: order.id,
-        product_id: productRow.product_id,
-        sort_order: index,
-        is_enabled: true,
-        unit_label: productRow.sale_unit === 'kg' ? 'kg' : productRow.packaging,
-        unit_weight_kg: unitWeightKg,
-        unit_base_price_cents: basePriceCents,
-        unit_delivery_cents: pricing.unitDeliveryCents,
-        unit_sharer_fee_cents: pricing.unitSharerFeeCents,
-        unit_final_price_cents: pricing.unitFinalPriceCents,
-        price_breakdown_snapshot: {
-          base_cents: basePriceCents,
-          delivery_cents: pricing.unitDeliveryCents,
-          sharer_cents: pricing.unitSharerFeeCents,
-          final_cents: pricing.unitFinalPriceCents,
-        },
-      };
-    });
-    if (orderProductsPayload.length) {
-      const { error: orderProductsError } = await client.from('order_products').insert(orderProductsPayload);
-      if (orderProductsError) throw orderProductsError;
-    }
-
-    if (payload.slots.length) {
-      const slotRows = payload.slots.map((slot, index) => ({
-        order_id: order.id,
-        slot_type: slot.slotType,
-        day: slot.slotType === 'weekday' ? slot.day ?? null : null,
-        slot_date: slot.slotType === 'date' ? slot.slotDate ?? null : null,
-        label: slot.label,
-        enabled: slot.enabled,
-        start_time: slot.startTime,
-        end_time: slot.endTime,
-        sort_order: index,
-      }));
-      const { error: slotError } = await client.from('order_pickup_slots').insert(slotRows);
-      if (slotError) throw slotError;
-    }
-
-    const { data: sharerParticipant, error: sharerError } = await client
-      .from('order_participants')
-      .insert({
-        order_id: order.id,
-        profile_id: payload.userId,
-        role: 'sharer',
-        participation_status: 'accepted',
-      })
-      .select('*')
-      .single();
-    if (sharerError || !sharerParticipant) throw sharerError ?? new Error('Participant partageur manquant.');
-
-    if (payload.shareMode === 'products') {
-      const sharerItems = payload.productCodes
-        .map((code) => ({
-          code,
-          quantity: Math.max(0, Number(payload.sharerQuantities[code] ?? 0)),
-        }))
-        .filter((entry) => entry.quantity > 0);
-
-      for (const entry of sharerItems) {
-        const productRow = productRows.find((row) => row.product_code === entry.code);
-        if (!productRow) {
-          throw new Error(`Produit introuvable pour le code ${entry.code}.`);
-        }
-        const item = await addItem({
-          orderId: order.id,
-          participantId: (sharerParticipant as DbOrderParticipant).id,
-          productId: productRow.product_id,
-          lotId: activeLotsByProductId.get(productRow.product_id as string)?.id ?? null,
-          quantityUnits: entry.quantity,
-          isSharerShare: true,
-          reservationStatus: 'consumed',
-          reservationKind: 'sharer_initial',
-          skipRecompute: true,
-        });
-        createdSharerItemIds.push(item.id);
-      }
-
-      if (createdSharerItemIds.length > 0) {
-        await recomputeCaches(order.id, (sharerParticipant as DbOrderParticipant).id);
-      }
-    }
-
-    return order.orderCode;
-  } catch (error) {
-    for (const orderItemId of createdSharerItemIds.slice().reverse()) {
-      try {
-        await removeItem(orderItemId, order.id);
-      } catch (rollbackError) {
-        console.error('Rollback sharer item error:', rollbackError);
-      }
-    }
-    try {
-      await client.from('orders').delete().eq('id', order.id);
-    } catch (deleteError) {
-      console.error('Rollback order delete error:', deleteError);
-    }
-    throw error;
+  if (error) throw error;
+  const orderCode = typeof data?.order_code === 'string' ? data.order_code.trim() : '';
+  if (!orderCode) {
+    throw new Error('Création commande impossible.');
   }
+  return orderCode;
 };
 
 export const getOrderByCode = async (orderCode: string): Promise<Order> => {
@@ -2221,106 +2027,53 @@ export const deleteParticipantIfNoActivity = async (params: {
   if (deleteError) throw deleteError;
 };
 
-export const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<OrderStatus> => {
+export type UpdateOrderStatusResult = {
+  status: OrderStatus;
+  warningMessage?: string | null;
+  warningCode?: string | null;
+};
+
+export const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<UpdateOrderStatusResult> => {
   const client = getClient();
   logDistributedTrace('updateOrderStatus.start', { orderId, status });
-  const { error: rpcError } = await client.rpc('set_order_status', {
-    p_order_id: orderId,
-    p_status: status,
+  const { data, error } = await client.functions.invoke('update_order_status_with_effects', {
+    body: {
+      order_id: orderId,
+      status,
+    },
   });
-  if (rpcError) {
-    logDistributedTrace('updateOrderStatus.rpcError', {
+  if (error) {
+    logDistributedTrace('updateOrderStatus.edgeError', {
       orderId,
       status,
-      code: rpcError.code ?? null,
-      message: rpcError.message ?? 'unknown error',
-      details: rpcError.details ?? null,
-      hint: rpcError.hint ?? null,
+      message: error.message ?? 'unknown error',
+      context: (error as { context?: unknown } | null)?.context ?? null,
     });
-    const isStatusDatesConstraint =
-      rpcError.code === '23514' &&
-      typeof rpcError.message === 'string' &&
-      rpcError.message.includes('orders_status_dates_consistency_check');
-    if (!isStatusDatesConstraint) throw rpcError;
-
-    // Fallback when the RPC does not populate status date columns expected by the constraint.
-    const { data: orderRow, error: orderError } = await client
-      .from('orders')
-      .select('*')
-      .eq('id', orderId)
-      .maybeSingle();
-    if (orderError || !orderRow) throw orderError ?? rpcError;
-
-    const statusDateColumns: Partial<Record<OrderStatus, string>> = {
-      locked: 'locked_at',
-      confirmed: 'confirmed_at',
-      preparing: 'preparing_at',
-      prepared: 'prepared_at',
-      delivered: 'delivered_at',
-      distributed: 'distributed_at',
-      finished: 'finished_at',
-      cancelled: 'cancelled_at',
-    };
-    const statusOrder: OrderStatus[] = [
-      'locked',
-      'confirmed',
-      'preparing',
-      'prepared',
-      'delivered',
-      'distributed',
-      'finished',
-    ];
-    const now = new Date().toISOString();
-    const updates: Record<string, unknown> = { status };
-    if ('updated_at' in orderRow) {
-      updates.updated_at = now;
-    }
-    const statusIndex = statusOrder.indexOf(status);
-    if (status === 'cancelled') {
-      const column = statusDateColumns.cancelled;
-      if (column && column in orderRow && (orderRow as Record<string, unknown>)[column] == null) {
-        updates[column] = now;
-      }
-    } else if (statusIndex >= 0) {
-      for (let i = 0; i <= statusIndex; i += 1) {
-        const step = statusOrder[i];
-        const column = statusDateColumns[step];
-        if (!column) continue;
-        if (!(column in orderRow)) continue;
-        if ((orderRow as Record<string, unknown>)[column] == null) {
-          updates[column] = now;
-        }
-      }
-    }
-    const { data, error } = await client
-      .from('orders')
-      .update(updates)
-      .eq('id', orderId)
-      .select('status')
-      .maybeSingle();
-    if (error) throw error;
-    logDistributedTrace('updateOrderStatus.fallbackUpdate', {
-      orderId,
-      status,
-      updates,
-      resultStatus: data?.status ?? null,
-    });
-    if (data?.status) {
-      return data.status as OrderStatus;
-    }
+    throw error;
   }
-
-  const { data, error } = await client.from('orders').select('status').eq('id', orderId).maybeSingle();
-  if (error) throw error;
-  if (!data?.status) {
+  const updatedStatus = typeof (data as { status?: unknown } | null)?.status === 'string' ? (data as { status: OrderStatus }).status : null;
+  if (!updatedStatus) {
     throw new Error("Aucune ligne mise a jour. Verifiez les droits d'acces sur la commande.");
   }
+  const warningMessage =
+    typeof (data as { warning_message?: unknown } | null)?.warning_message === 'string'
+      ? ((data as { warning_message: string }).warning_message ?? null)
+      : null;
+  const warningCode =
+    typeof (data as { warning_code?: unknown } | null)?.warning_code === 'string'
+      ? ((data as { warning_code: string }).warning_code ?? null)
+      : null;
   logDistributedTrace('updateOrderStatus.success', {
     orderId,
     status,
-    resultStatus: data.status,
+    resultStatus: updatedStatus,
+    data: (data as Record<string, unknown> | null) ?? null,
   });
-  return data.status as OrderStatus;
+  return {
+    status: updatedStatus,
+    warningMessage,
+    warningCode,
+  };
 };
 
 export const updateOrderVisibility = async (orderId: string, visibility: 'public' | 'private') => {

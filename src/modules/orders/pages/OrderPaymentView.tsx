@@ -27,16 +27,20 @@ export type OrderPaymentConfirmationPayload = {
 type StripeCreateCheckoutSessionResponse = {
   checkout_payment_session_id: string;
   provider_payment_id: string;
-  client_secret: string;
+  client_secret: string | null;
   payment_mode?: 'stripe_checkout' | 'direct_charge' | 'local_zero';
   payment_breakdown?: Record<string, unknown> | null;
   stripe_account_id?: string | null;
+  local_status?: 'draft' | 'checkout_created' | 'checkout_completed' | 'fulfilling' | 'fulfilled' | 'failed' | 'expired';
   status?: 'processing' | 'succeeded' | 'failed' | 'retryable';
 };
 
 type CreateCheckoutPaymentSessionResponse = {
   checkout_payment_session_id: string;
   local_status: 'draft' | 'checkout_created' | 'checkout_completed' | 'fulfilling' | 'fulfilled' | 'failed' | 'expired';
+  normalized_draft?: Partial<OrderPurchaseDraft> | null;
+  payment_breakdown?: Record<string, unknown> | null;
+  amount_cents?: number;
 };
 
 type EdgeInvokeErrorLike = {
@@ -151,6 +155,88 @@ const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined):
   producerTopupDueCents: Math.max(0, Math.round(Number(value?.producer_topup_due_cents ?? 0) || 0)),
 });
 
+const normalizeOrderPurchaseDraft = (
+  order: GroupOrder,
+  fallbackDraft: OrderPurchaseDraft,
+  value: Partial<OrderPurchaseDraft> | null | undefined
+): OrderPurchaseDraft => {
+  const raw = value && typeof value === 'object' ? value : {};
+  const quantities: Record<string, number> = {};
+  if (raw.quantities && typeof raw.quantities === 'object') {
+    Object.entries(raw.quantities as Record<string, unknown>).forEach(([productCode, rawQty]) => {
+      const qty = Number(rawQty);
+      if (!Number.isFinite(qty) || qty <= 0) return;
+      quantities[productCode] = qty;
+    });
+  }
+
+  const lineItems = Array.isArray(raw.lineItems)
+    ? raw.lineItems
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null;
+          const rawItem = item as Record<string, unknown>;
+          const productCode = typeof rawItem.productCode === 'string' ? rawItem.productCode.trim() : '';
+          const label = typeof rawItem.label === 'string' ? rawItem.label.trim() : '';
+          const quantity = Math.max(0, Number(rawItem.quantity ?? 0));
+          const unitPriceCents = Math.max(0, Math.round(Number(rawItem.unitPriceCents ?? 0)));
+          const lineTotalCents = Math.max(0, Math.round(Number(rawItem.lineTotalCents ?? 0)));
+          if (!productCode || !label || quantity <= 0) return null;
+          return { productCode, label, quantity, unitPriceCents, lineTotalCents };
+        })
+        .filter(Boolean) as Array<{
+        productCode: string;
+        label: string;
+        quantity: number;
+        unitPriceCents: number;
+        lineTotalCents: number;
+      }>
+    : fallbackDraft.lineItems ?? [];
+
+  const closeData =
+    raw.closeData && typeof raw.closeData === 'object'
+      ? (() => {
+          const rawCloseData = raw.closeData as Record<string, unknown>;
+          const extraQuantities: Record<string, number> = {};
+          if (rawCloseData.extraQuantities && typeof rawCloseData.extraQuantities === 'object') {
+            Object.entries(rawCloseData.extraQuantities as Record<string, unknown>).forEach(([productId, rawQty]) => {
+              const qty = Number(rawQty);
+              if (!Number.isFinite(qty) || qty <= 0) return;
+              extraQuantities[productId] = qty;
+            });
+          }
+          return {
+            useCoopBalance:
+              typeof rawCloseData.useCoopBalance === 'boolean'
+                ? rawCloseData.useCoopBalance
+                : Boolean(fallbackDraft.closeData?.useCoopBalance),
+            extraQuantities,
+          };
+        })()
+      : fallbackDraft.closeData;
+
+  return {
+    ...fallbackDraft,
+    orderId: typeof raw.orderId === 'string' && raw.orderId.trim() ? raw.orderId.trim() : fallbackDraft.orderId,
+    orderCode:
+      typeof raw.orderCode === 'string' && raw.orderCode.trim() ? raw.orderCode.trim() : order.orderCode ?? fallbackDraft.orderCode,
+    quantities: Object.keys(quantities).length > 0 ? quantities : fallbackDraft.quantities,
+    lineItems,
+    total: Number.isFinite(Number(raw.total)) ? Math.max(0, Number(raw.total)) : fallbackDraft.total,
+    weight: Number.isFinite(Number(raw.weight)) ? Math.max(0, Number(raw.weight)) : fallbackDraft.weight,
+    baseOrderedWeight: Number.isFinite(Number(raw.baseOrderedWeight))
+      ? Math.max(0, Number(raw.baseOrderedWeight))
+      : fallbackDraft.baseOrderedWeight,
+    checkoutPaymentSessionId:
+      typeof raw.checkoutPaymentSessionId === 'string' && raw.checkoutPaymentSessionId.trim()
+        ? raw.checkoutPaymentSessionId.trim()
+        : fallbackDraft.checkoutPaymentSessionId ?? null,
+    kind: raw.kind === 'close' ? 'close' : fallbackDraft.kind,
+    useCoopBalance:
+      typeof raw.useCoopBalance === 'boolean' ? raw.useCoopBalance : Boolean(fallbackDraft.useCoopBalance),
+    closeData,
+  };
+};
+
 type EmbeddedCheckoutInstance = {
   mount: (selector: string) => void;
   unmount?: () => void;
@@ -214,10 +300,14 @@ export function OrderPaymentView({
   snapshotKey = null,
   initialSnapshot = null,
 }: OrderPaymentViewProps) {
-  const isClosePayment = draft.kind === 'close';
+  const [resolvedDraft, setResolvedDraft] = React.useState<OrderPurchaseDraft>(draft);
+  React.useEffect(() => {
+    setResolvedDraft(draft);
+  }, [draft]);
+  const isClosePayment = resolvedDraft.kind === 'close';
   const selectedItems = React.useMemo(() => {
-    if (Array.isArray(draft.lineItems) && draft.lineItems.length > 0) {
-      return draft.lineItems
+    if (Array.isArray(resolvedDraft.lineItems) && resolvedDraft.lineItems.length > 0) {
+      return resolvedDraft.lineItems
         .map((item) => {
           const quantity = Math.max(0, Number(item.quantity) || 0);
           if (!item.productCode || quantity <= 0) return null;
@@ -232,12 +322,12 @@ export function OrderPaymentView({
         .filter(Boolean) as Array<{ key: string; label: string; quantity: number; lineTotalCents: number }>;
     }
     return [] as Array<{ key: string; label: string; quantity: number; lineTotalCents: number }>;
-  }, [draft.lineItems]);
+  }, [resolvedDraft.lineItems]);
   const selectedItemsSubtotalCents = React.useMemo(
     () => selectedItems.reduce((sum, item) => sum + item.lineTotalCents, 0),
     [selectedItems]
   );
-  const totalDueCents = React.useMemo(() => eurosToCents(draft.total), [draft.total]);
+  const totalDueCents = React.useMemo(() => eurosToCents(resolvedDraft.total), [resolvedDraft.total]);
   const coopAppliedCents = React.useMemo(
     () => Math.max(0, selectedItemsSubtotalCents - totalDueCents),
     [selectedItemsSubtotalCents, totalDueCents]
@@ -368,7 +458,7 @@ export function OrderPaymentView({
       if (hasConfirmedRef.current || isVerifying) return;
       const sessionId = forcedSessionId ?? providerPaymentId;
       const currentCheckoutPaymentSessionId =
-        forcedCheckoutPaymentSessionId ?? checkoutPaymentSessionId ?? draft.checkoutPaymentSessionId ?? null;
+        forcedCheckoutPaymentSessionId ?? checkoutPaymentSessionId ?? resolvedDraft.checkoutPaymentSessionId ?? null;
       if (!sessionId && !currentCheckoutPaymentSessionId) {
         setPaymentError('Session de paiement introuvable. Merci de relancer.');
         setPaymentState('failed');
@@ -467,7 +557,7 @@ export function OrderPaymentView({
     [
       checkoutPaymentSessionId,
       clearCheckoutQueryFromUrl,
-      draft.checkoutPaymentSessionId,
+      resolvedDraft.checkoutPaymentSessionId,
       isVerifying,
       latestStripePaymentStatus,
       latestStripeStatus,
@@ -480,15 +570,24 @@ export function OrderPaymentView({
     async (forceNew = false) => {
       if (checkoutPaymentSessionId && !forceNew) return checkoutPaymentSessionId;
       const supabase = getSupabaseClient();
-      const amountCents = eurosToCents(draft.total);
       const { data, error } = await supabase.functions.invoke<CreateCheckoutPaymentSessionResponse>(
         'create_checkout_payment_session',
         {
           body: {
             order_id: order.id,
             flow_kind: isClosePayment ? 'close' : 'participant',
-            amount_cents: amountCents,
-            draft_payload: draft,
+            force_new: forceNew,
+            draft_payload: isClosePayment
+              ? {
+                  closeData: {
+                    useCoopBalance: Boolean(resolvedDraft.closeData?.useCoopBalance ?? resolvedDraft.useCoopBalance),
+                    extraQuantities: resolvedDraft.closeData?.extraQuantities ?? {},
+                  },
+                }
+              : {
+                  quantities: resolvedDraft.quantities,
+                  useCoopBalance: Boolean(resolvedDraft.useCoopBalance),
+                },
           },
         }
       );
@@ -496,10 +595,21 @@ export function OrderPaymentView({
       if (!data?.checkout_payment_session_id) {
         throw new Error('Brouillon de paiement indisponible.');
       }
+      if (data.normalized_draft) {
+        setResolvedDraft((previousDraft) =>
+          normalizeOrderPurchaseDraft(order, previousDraft, {
+            ...data.normalized_draft,
+            checkoutPaymentSessionId: data.checkout_payment_session_id,
+          })
+        );
+      }
+      if (data.payment_breakdown) {
+        setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown));
+      }
       setCheckoutPaymentSessionId(data.checkout_payment_session_id);
       return data.checkout_payment_session_id;
     },
-    [checkoutPaymentSessionId, draft, isClosePayment, order.id]
+    [checkoutPaymentSessionId, isClosePayment, order, resolvedDraft]
   );
 
   const createServerBackedCheckoutSession = React.useCallback(
@@ -560,6 +670,27 @@ export function OrderPaymentView({
               providerPaymentId: data.provider_payment_id || data.checkout_payment_session_id,
               raw: {
                 payment_mode: 'local_zero',
+              },
+            });
+            hasConfirmedRef.current = true;
+            return;
+          }
+          if (data?.status === 'succeeded' && data?.checkout_payment_session_id && data?.provider_payment_id) {
+            disposeCheckout();
+            setCheckoutPaymentSessionId(data.checkout_payment_session_id);
+            setProviderPaymentId(data.provider_payment_id);
+            setCheckoutClientSecret(null);
+            setStripeAccountId(data.stripe_account_id ?? null);
+            setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
+            setPaymentState('succeeded');
+            setPaymentStatusMessage('Paiement déjà reçu. Finalisation de votre commande effectuée.');
+            await onConfirmPayment({
+              provider: 'stripe',
+              providerPaymentId: data.provider_payment_id,
+              raw: {
+                payment_mode: data.payment_mode ?? 'stripe_checkout',
+                local_status: data.local_status ?? null,
+                status: data.status,
               },
             });
             hasConfirmedRef.current = true;
@@ -659,66 +790,6 @@ export function OrderPaymentView({
     [clearCheckoutQueryFromUrl, isVerifying, onConfirmPayment, providerPaymentId, storageKey]
   );
 
-  const createStripeCheckoutSession = React.useCallback(
-    async (forceNew = false) => {
-      if (isCreatingPayment || isVerifying) return;
-      if (checkoutClientSecret && providerPaymentId && !forceNew) {
-        return;
-      }
-
-      setIsCreatingPayment(true);
-      setPaymentError(null);
-      try {
-        const supabase = getSupabaseClient();
-        const idempotencyKey = null;
-        const amountCents = eurosToCents(draft.total);
-        const returnUrl =
-          typeof window !== 'undefined'
-            ? `${window.location.origin}/cmd/${order.orderCode ?? order.id}/paiement?session_id={CHECKOUT_SESSION_ID}`
-            : undefined;
-
-        const { data, error } = await supabase.functions.invoke<StripeCreateCheckoutSessionResponse>(
-          'stripe_create_checkout_session',
-          {
-            body: {
-              order_id: order.id,
-              amount_cents: amountCents,
-              idempotency_key: idempotencyKey,
-              return_url: returnUrl,
-            },
-          }
-        );
-        if (error) throw error;
-        if (!data?.client_secret || !data?.provider_payment_id) {
-          throw new Error('Reponse de paiement incomplete.');
-        }
-
-        disposeCheckout();
-        setProviderPaymentId(data.provider_payment_id);
-        setCheckoutClientSecret(data.client_secret);
-      } catch (error) {
-        console.error('Stripe checkout session error:', error);
-        const detailedMessage = await extractEdgeInvokeErrorMessage(
-          error,
-          'Merci de reessayer.'
-        );
-        setPaymentError(`Impossible d initier le paiement. ${detailedMessage}`);
-      } finally {
-        setIsCreatingPayment(false);
-      }
-    },
-    [
-      checkoutClientSecret,
-      disposeCheckout,
-      draft.total,
-      isCreatingPayment,
-      isVerifying,
-      order.id,
-      order.orderCode,
-      providerPaymentId,
-    ]
-  );
-
   React.useEffect(() => {
     if (!checkoutClientSecret || !providerPaymentId) return;
     if (paymentState === 'processing' || paymentState === 'succeeded') return;
@@ -784,7 +855,7 @@ export function OrderPaymentView({
     if (!snapshotKey) return;
     writeOrderPageSnapshot(snapshotKey, {
       order,
-      draft,
+      draft: resolvedDraft,
       checkoutPaymentSessionId,
       checkoutClientSecret,
       providerPaymentId,
@@ -797,7 +868,7 @@ export function OrderPaymentView({
   }, [
     checkoutClientSecret,
     checkoutPaymentSessionId,
-    draft,
+    resolvedDraft,
     order,
     paymentBreakdown,
     paymentError,
@@ -946,7 +1017,7 @@ export function OrderPaymentView({
             {!isClosePayment ? (
               <div className="order-payment-view__summary-row">
                 <span>Poids de votre commande</span>
-                <span className="order-payment-view__summary-value">{draft.weight.toFixed(2)} kg</span>
+                <span className="order-payment-view__summary-value">{resolvedDraft.weight.toFixed(2)} kg</span>
               </div>
             ) : null}
           </div>

@@ -2,10 +2,12 @@ import {
   corsHeaders,
   createServiceClient,
   deleteParticipantIfNoActivity,
+  finalizeCheckoutPaymentSession,
   finalizeLocalZeroCheckoutPaymentSession,
   jsonResponse,
   parsePaymentBreakdown,
   prepareCheckoutPaymentSessionForStripe,
+  retrieveStripeCheckoutSession,
   requireAuthenticatedUser,
   STRIPE_API_BASE,
   STRIPE_SECRET_KEY,
@@ -100,6 +102,54 @@ Deno.serve(async (req) => {
 
     preparedCheckoutPaymentSession = await prepareCheckoutPaymentSessionForStripe(checkoutPaymentSession.id);
     const paymentBreakdown = parsePaymentBreakdown(preparedCheckoutPaymentSession.payment_breakdown);
+
+    if (
+      preparedCheckoutPaymentSession.status === "checkout_created" &&
+      preparedCheckoutPaymentSession.provider_payment_id
+    ) {
+      const stripeAccountIdForLookup =
+        preparedCheckoutPaymentSession.payment_mode === "direct_charge"
+          ? preparedCheckoutPaymentSession.stripe_account_id ?? null
+          : null;
+      const existingStripeSession = await retrieveStripeCheckoutSession(
+        preparedCheckoutPaymentSession.provider_payment_id,
+        stripeAccountIdForLookup,
+      );
+      const existingClientSecret =
+        typeof existingStripeSession.client_secret === "string" ? existingStripeSession.client_secret.trim() : "";
+      if (existingStripeSession.payment_status === "paid" || existingStripeSession.status === "complete") {
+        const finalized = await finalizeCheckoutPaymentSession({
+          checkoutPaymentSessionId: preparedCheckoutPaymentSession.id,
+          stripeAccountId: stripeAccountIdForLookup,
+          stripeSessionOverride: existingStripeSession,
+        });
+        return jsonResponse({
+          checkout_payment_session_id: finalized.checkoutPaymentSession.id,
+          provider_payment_id:
+            finalized.checkoutPaymentSession.provider_payment_id ?? preparedCheckoutPaymentSession.provider_payment_id,
+          client_secret: "",
+          payment_mode: preparedCheckoutPaymentSession.payment_mode ?? "stripe_checkout",
+          payment_breakdown: parsePaymentBreakdown(finalized.checkoutPaymentSession.payment_breakdown),
+          stripe_account_id: finalized.checkoutPaymentSession.stripe_account_id ?? null,
+          status: finalized.status,
+          local_status: finalized.checkoutPaymentSession.status,
+        });
+      }
+      if (
+        existingStripeSession.status !== "expired" &&
+        existingStripeSession.payment_status !== "paid" &&
+        existingClientSecret
+      ) {
+        return jsonResponse({
+          checkout_payment_session_id: preparedCheckoutPaymentSession.id,
+          provider_payment_id: preparedCheckoutPaymentSession.provider_payment_id,
+          client_secret: existingClientSecret,
+          payment_mode: preparedCheckoutPaymentSession.payment_mode ?? "stripe_checkout",
+          payment_breakdown: paymentBreakdown,
+          stripe_account_id: preparedCheckoutPaymentSession.stripe_account_id ?? null,
+        });
+      }
+    }
 
     if (preparedCheckoutPaymentSession.payment_mode === "local_zero") {
       const finalized = await finalizeLocalZeroCheckoutPaymentSession(preparedCheckoutPaymentSession.id);

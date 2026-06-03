@@ -38,29 +38,19 @@ import {
 } from '../utils/orderPageSnapshot';
 import { orderParticipantFeatures, resolveOrderParticipantFeatureValue } from '../participantFeatures';
 import {
-  addItem,
   approveParticipation,
-  createPlatformInvoiceAndSendForOrder,
-  createPaymentStub,
-  deleteParticipantIfNoActivity,
-  finalizePaymentSimulation,
   fetchCoopBalance,
   fetchParticipantInvoices,
   fetchProducerStatementSources,
   fetchProducerInvoices,
-  processProducerTopups,
   getInvoiceDownloadUrl,
   getOrderFullByCode,
-  issueParticipantInvoiceWithCoop,
   logDistributedTrace,
-  removeItem,
   rejectParticipation,
   reviewParticipantPickupSlot,
   requestParticipation,
   setParticipantPickupSlot,
-  updatePaymentStatus,
   updateParticipantsVisibility,
-  updateOrderItemQuantity,
   updateOrderParticipantSettings,
   updateOrderStatus,
   updateOrderVisibility,
@@ -79,17 +69,8 @@ interface OrderClientViewProps {
   onClose: () => void;
   currentUser?: User | null;
   onOpenParticipantProfile?: (participantName: string) => void;
-  onStartPayment?: (payload: {
+  onStartPayment: (payload: {
     quantities: Record<string, number>;
-    lineItems: Array<{
-      productCode: string;
-      label: string;
-      quantity: number;
-      unitPriceCents: number;
-      lineTotalCents: number;
-    }>;
-    total: number;
-    weight: number;
     useCoopBalance: boolean;
   }) => void;
   supabaseClient?: SupabaseClient | null;
@@ -1310,31 +1291,6 @@ const sharerAvatarUpdatedAt =
       }, 0),
     [products, quantities, unitPriceCentsById]
   );
-  const paymentLineItems = React.useMemo(
-    () =>
-      products
-        .map((product) => {
-          const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
-          if (quantity <= 0) return null;
-          const unitPriceCents = unitPriceCentsById[product.id] ?? eurosToCents(product.price);
-          const paymentProductId = product.dbId ?? product.id;
-          return {
-            productCode: paymentProductId,
-            label: product.name,
-            quantity,
-            unitPriceCents,
-            lineTotalCents: unitPriceCents * quantity,
-          };
-        })
-        .filter(Boolean) as Array<{
-        productCode: string;
-        label: string;
-        quantity: number;
-        unitPriceCents: number;
-        lineTotalCents: number;
-      }>,
-    [products, quantities, unitPriceCentsById]
-  );
   const totalPrice = centsToEuros(totalPriceCents);
   const coopAppliedCents = useCoopBalance ? Math.min(coopBalanceCents, totalPriceCents) : 0;
   const remainingToPayCents = Math.max(0, totalPriceCents - coopAppliedCents);
@@ -1634,40 +1590,30 @@ const sharerAvatarUpdatedAt =
       nextStatus,
     });
     updateOrderStatus(order.id, nextStatus)
-      .then(async (updatedStatus) => {
+      .then(async ({ status: updatedStatus, warningMessage, warningCode }) => {
         logDistributedTrace('OrderClientView.handleStatusUpdate.statusUpdated', {
           orderId: order.id,
           previousStatus: order.status,
           nextStatus,
           updatedStatus,
+          warningCode: warningCode ?? null,
         });
         updateOrderLocal({ status: updatedStatus });
-        if (nextStatus === 'confirmed') {
-          try {
-            await processProducerTopups(order.id);
-          } catch (error) {
-            console.error('Producer topups process error:', error);
-            toast.error("La commande est confirmée, mais l'envoi des compléments producteur doit être relancé.");
-          }
-        }
         if (nextStatus === 'distributed') {
           try {
-            const invoiceResult = await createPlatformInvoiceAndSendForOrder(order.id);
-            logDistributedTrace('OrderClientView.handleStatusUpdate.invoiceRpcResult', {
-              orderId: order.id,
-              invoiceResult: (invoiceResult as Record<string, unknown> | null) ?? null,
-            });
             await loadInvoices(order.id, order.producerProfileId);
           } catch (error) {
-            console.error('Platform invoice error:', error);
-            logDistributedTrace('OrderClientView.handleStatusUpdate.invoiceRpcError', {
+            console.warn('Platform invoice refresh error:', error);
+            logDistributedTrace('OrderClientView.handleStatusUpdate.invoiceRefreshError', {
               orderId: order.id,
               errorMessage: error instanceof Error ? error.message : String(error),
             });
-            toast.error("Impossible d'emettre la facture plateforme.");
           }
         }
         toast.success(successMessage);
+        if (warningMessage) {
+          toast.warning(warningMessage);
+        }
       })
       .catch((error) => {
         console.error('Order status update error:', error);
@@ -1748,164 +1694,20 @@ const sharerAvatarUpdatedAt =
       toast.info('Ajoutez au moins une carte avant de valider.');
       return;
     }
-    if (remainingToPayCents > 0 && onStartPayment) {
-      const paymentQuantities = products.reduce(
-        (acc, product) => {
-          const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
-          const paymentProductId = product.dbId ?? product.id;
-          if (!paymentProductId || quantity <= 0) return acc;
-          acc[paymentProductId] = quantity;
-          return acc;
-        },
-        {} as Record<string, number>
-      );
-      onStartPayment({
-        quantities: paymentQuantities,
-        lineItems: paymentLineItems,
-        total: centsToEuros(remainingToPayCents),
-        weight: selectedWeight,
-        useCoopBalance,
-      });
-      return;
-    }
-    if (!isAuthenticated || !currentUser) {
-      toast.info('Connectez-vous pour participer.');
-      return;
-    }
-
-    setIsWorking(true);
-    let createdPaymentId: string | null = null;
-    let participantCreatedInFlow = false;
-    let participantIdForRollback: string | null = null;
-    const createdOrderItems: Array<{ id: string }> = [];
-    try {
-      let participant = myParticipant;
-      if (!participant) {
-        if (!autoApproveParticipationRequests) {
-          toast.info('Votre participation doit etre acceptee avant de payer.');
-          return;
-        }
-        const createdParticipant = await requestParticipation(order.orderCode, currentUser.id);
-        participantCreatedInFlow = true;
-        const enrichedParticipant = {
-          ...createdParticipant,
-          profileName: currentUser.name ?? null,
-          profileHandle: currentUser.handle ?? null,
-        };
-        participant = enrichedParticipant;
-        setOrderFull((prev) => {
-          if (!prev) return prev;
-          const others = prev.participants.filter((p) => p.profileId !== currentUser.id);
-          return { ...prev, participants: [...others, enrichedParticipant] };
-        });
-      }
-
-      if (!participant) {
-        toast.info('Votre participation doit etre acceptee avant de payer.');
-        return;
-      }
-
-      if (participant.participationStatus !== 'accepted') {
-        toast.info('Votre participation doit etre acceptee avant de payer.');
-        return;
-      }
-      participantIdForRollback = participant.id;
-
-      for (const product of products) {
-        const qty = quantities[product.id] ?? 0;
-        if (qty <= 0 || !product.dbId) continue;
-        const item = await addItem({
-          orderId: order.id,
-          participantId: participant.id,
-          productId: product.dbId,
-          lotId: product.activeLotId ?? null,
-          quantityUnits: qty,
-          reservationStatus: 'consumed',
-          reservationKind: 'participant_direct',
-        });
-        createdOrderItems.push({ id: item.id });
-      }
-
-      const withItems = await getOrderFullByCode(order.orderCode);
-      const participantItems = withItems.items.filter((item) => item.participantId === participant.id);
-      for (const item of participantItems) {
-        await updateOrderItemQuantity(item.id, order.id, participant.id, getOrderItemQuantity(item));
-      }
-
-      const refreshed = await getOrderFullByCode(order.orderCode);
-      setOrderFull(refreshed);
-      const refreshedParticipant = refreshed.participants.find((p) => p.id === participant.id);
-      if (refreshedParticipant) {
-        const refreshedPaidCents = sumPaidCentsForParticipant(refreshed.payments, refreshedParticipant.id);
-        const coopToConsumeCents =
-          useCoopBalance && coopBalanceCents > 0
-            ? Math.min(coopBalanceCents, refreshedParticipant.totalAmountCents)
-            : 0;
-        const amountCentsToPay = Math.max(
-          0,
-          refreshedParticipant.totalAmountCents - refreshedPaidCents - coopToConsumeCents
-        );
-        if (amountCentsToPay > 0) {
-          const payment = await createPaymentStub({
-            orderId: order.id,
-            participantId: refreshedParticipant.id,
-            amountCents: amountCentsToPay,
-            raw: {
-              flow_kind: 'participant',
-              use_coop_balance: Boolean(useCoopBalance),
-            },
-          });
-          createdPaymentId = payment.id;
-          await finalizePaymentSimulation(payment.id);
-        } else if (coopToConsumeCents > 0 && currentUser?.id) {
-          await issueParticipantInvoiceWithCoop({
-            orderId: order.id,
-            profileId: currentUser.id,
-            coopAppliedCents: coopToConsumeCents,
-          });
-          const updatedBalance = await fetchCoopBalance(currentUser.id);
-          setCoopBalanceCents(updatedBalance);
-        }
-        const updated = await getOrderFullByCode(order.orderCode);
-        setOrderFull(updated);
-        await loadInvoices(updated.order.id, updated.order.producerProfileId);
-      }
-      toast.success('Paiement initie (stub).');
-    } catch (error) {
-      if (createdPaymentId) {
-        try {
-          await updatePaymentStatus(createdPaymentId, 'failed');
-        } catch (markFailedError) {
-          console.error('Purchase mark failed error:', markFailedError);
-        }
-      }
-
-      if (!createdPaymentId && createdOrderItems.length > 0 && participantIdForRollback) {
-        for (const created of createdOrderItems.slice().reverse()) {
-          try {
-            await removeItem(created.id, order.id, participantIdForRollback);
-          } catch (rollbackItemError) {
-            console.error('Purchase rollback item error:', rollbackItemError);
-          }
-        }
-      }
-
-      if (!createdPaymentId && participantCreatedInFlow && participantIdForRollback && currentUser?.id) {
-        try {
-          await deleteParticipantIfNoActivity({
-            orderId: order.id,
-            participantId: participantIdForRollback,
-            profileId: currentUser.id,
-          });
-        } catch (rollbackParticipantError) {
-          console.error('Purchase rollback participant error:', rollbackParticipantError);
-        }
-      }
-      console.error('Purchase error:', error);
-      toast.error('Impossible de finaliser la participation.');
-    } finally {
-      setIsWorking(false);
-    }
+    const paymentQuantities = products.reduce(
+      (acc, product) => {
+        const quantity = Math.max(0, Number(quantities[product.id] ?? 0));
+        const paymentProductId = product.dbId ?? product.id;
+        if (!paymentProductId || quantity <= 0) return acc;
+        acc[paymentProductId] = quantity;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
+    onStartPayment({
+      quantities: paymentQuantities,
+      useCoopBalance,
+    });
   };
 
   const handleRequestParticipation = async () => {
