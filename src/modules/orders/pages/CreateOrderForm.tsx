@@ -1446,7 +1446,6 @@ export function CreateOrderForm({
 
     setIsSubmitting(true);
     createOrder({
-      userId: user.id,
       productCodes: selectedProductsData.map((product) => product.id),
       title,
       visibility,
@@ -1458,7 +1457,6 @@ export function CreateOrderForm({
       autoApprovePickupSlots: effectiveAutoApprovePickupSlots,
       minWeightKg: normalizedMinWeight,
       maxWeightKg: normalizedMaxWeight,
-      orderedWeightKg: shareMode === 'products' ? sharerSelectionWeight : 0,
       deliveryOption,
       deliveryStreet,
       deliveryInfo,
@@ -1484,11 +1482,6 @@ export function CreateOrderForm({
       sharerPercentage,
       shareMode,
       sharerQuantities: shareQuantities,
-      baseTotalCents,
-      deliveryFeeCents: logTotalCents,
-      participantTotalCents,
-      sharerShareCents: totalShareEffectiveCents,
-      effectiveWeightKg: effectiveWeight,
       participantsVisibility: participantVisibility,
       slots: activeSlots.map((slot) => ({
         slotType: slot.date ? 'date' : 'weekday',

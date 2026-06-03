@@ -719,7 +719,6 @@ const fetchPrimaryReservationForOrderItem = async (client: SupabaseClient, order
 };
 
 export type CreateOrderPayload = {
-  userId: string;
   productCodes: string[];
   title: string;
   visibility: 'public' | 'private';
@@ -731,7 +730,6 @@ export type CreateOrderPayload = {
   autoApprovePickupSlots: boolean;
   minWeightKg: number;
   maxWeightKg: number | null;
-  orderedWeightKg?: number;
   deliveryOption: DeliveryOption;
   deliveryStreet?: string;
   deliveryInfo?: string;
@@ -758,11 +756,6 @@ export type CreateOrderPayload = {
   shareMode: ShareMode;
   sharerQuantities: Record<string, number>;
   currency?: string;
-  baseTotalCents: number;
-  deliveryFeeCents: number;
-  participantTotalCents: number;
-  sharerShareCents: number;
-  effectiveWeightKg: number;
   participantsVisibility: ParticipantVisibility;
   slots: Array<{
     slotType: 'weekday' | 'date';
@@ -779,10 +772,45 @@ export const createOrder = async (payload: CreateOrderPayload): Promise<string> 
   const client = getClient();
   const { data, error } = await client.functions.invoke<{ order_code?: string | null }>('create_order_with_setup', {
     body: {
-      ...payload,
+      productCodes: payload.productCodes,
+      title: payload.title,
+      visibility: payload.visibility,
+      status: payload.status ?? 'open',
       deadline: payload.deadline ? payload.deadline.toISOString() : null,
+      message: payload.message ?? null,
+      autoApproveParticipationRequests: payload.autoApproveParticipationRequests,
+      allowSharerMessages: payload.allowSharerMessages,
+      autoApprovePickupSlots: payload.autoApprovePickupSlots,
+      minWeightKg: payload.minWeightKg,
+      maxWeightKg: payload.maxWeightKg,
+      deliveryOption: payload.deliveryOption,
+      deliveryStreet: payload.deliveryStreet ?? null,
+      deliveryInfo: payload.deliveryInfo ?? null,
+      deliveryCity: payload.deliveryCity ?? null,
+      deliveryPostcode: payload.deliveryPostcode ?? null,
+      deliveryAddress: payload.deliveryAddress ?? null,
+      deliveryPhone: payload.deliveryPhone ?? null,
+      deliveryEmail: payload.deliveryEmail ?? null,
+      deliveryLat: payload.deliveryLat ?? null,
+      deliveryLng: payload.deliveryLng ?? null,
       estimatedDeliveryDate: payload.estimatedDeliveryDate ? payload.estimatedDeliveryDate.toISOString() : null,
+      pickupStreet: payload.pickupStreet ?? null,
+      pickupInfo: payload.pickupInfo ?? null,
+      pickupCity: payload.pickupCity ?? null,
+      pickupPostcode: payload.pickupPostcode ?? null,
+      pickupAddress: payload.pickupAddress ?? null,
+      pickupLat: payload.pickupLat ?? null,
+      pickupLng: payload.pickupLng ?? null,
+      usePickupDate: payload.usePickupDate,
       pickupDate: payload.pickupDate ? payload.pickupDate.toISOString() : null,
+      pickupWindowWeeks: payload.pickupWindowWeeks ?? null,
+      pickupDeliveryFeeCents: payload.pickupDeliveryFeeCents,
+      sharerPercentage: payload.sharerPercentage,
+      shareMode: payload.shareMode,
+      sharerQuantities: payload.sharerQuantities,
+      currency: payload.currency ?? 'EUR',
+      participantsVisibility: payload.participantsVisibility,
+      slots: payload.slots,
     },
   });
   if (error) throw error;

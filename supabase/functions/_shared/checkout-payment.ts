@@ -249,7 +249,6 @@ type OrderCreationPayload = {
   autoApprovePickupSlots: boolean;
   minWeightKg: number;
   maxWeightKg: number | null;
-  orderedWeightKg: number;
   deliveryOption: "chronofresh" | "producer_delivery" | "producer_pickup";
   deliveryStreet: string | null;
   deliveryInfo: string | null;
@@ -276,11 +275,6 @@ type OrderCreationPayload = {
   shareMode: "products" | "cash";
   sharerQuantities: Record<string, number>;
   currency: string;
-  baseTotalCents: number;
-  deliveryFeeCents: number;
-  participantTotalCents: number;
-  sharerShareCents: number;
-  effectiveWeightKg: number;
   participantsVisibility: Record<string, unknown>;
   slots: Array<{
     slotType: "weekday" | "date";
@@ -2042,6 +2036,9 @@ const normalizeCreateOrderPayload = (rawPayload: unknown): OrderCreationPayload 
         endTime: normalizeText(value.endTime),
       }))
     : [];
+  const participantsVisibilitySource = isRecord(source.participantsVisibility)
+    ? source.participantsVisibility as Record<string, unknown>
+    : {};
 
   return {
     productCodes,
@@ -2055,7 +2052,6 @@ const normalizeCreateOrderPayload = (rawPayload: unknown): OrderCreationPayload 
     autoApprovePickupSlots: source.autoApprovePickupSlots === true,
     minWeightKg: Math.max(0, Number(source.minWeightKg ?? 0) || 0),
     maxWeightKg: toNullableFiniteNumber(source.maxWeightKg),
-    orderedWeightKg: Math.max(0, Number(source.orderedWeightKg ?? 0) || 0),
     deliveryOption:
       source.deliveryOption === "chronofresh" || source.deliveryOption === "producer_delivery"
         ? source.deliveryOption
@@ -2085,16 +2081,63 @@ const normalizeCreateOrderPayload = (rawPayload: unknown): OrderCreationPayload 
     shareMode,
     sharerQuantities,
     currency: normalizeText(source.currency) || "EUR",
-    baseTotalCents: toNonNegativeInteger(source.baseTotalCents),
-    deliveryFeeCents: toNonNegativeInteger(source.deliveryFeeCents),
-    participantTotalCents: toNonNegativeInteger(source.participantTotalCents),
-    sharerShareCents: toNonNegativeInteger(source.sharerShareCents),
-    effectiveWeightKg: Math.max(0, Number(source.effectiveWeightKg ?? 0) || 0),
-    participantsVisibility: isRecord(source.participantsVisibility)
-      ? source.participantsVisibility as Record<string, unknown>
-      : {},
+    participantsVisibility: {
+      profile: participantsVisibilitySource.profile === true,
+      content: participantsVisibilitySource.content === true,
+      weight: participantsVisibilitySource.weight === true,
+      amount: participantsVisibilitySource.amount === true,
+    },
     slots,
   };
+};
+
+const validateOrderCreationPayload = (payload: OrderCreationPayload) => {
+  if (!payload.productCodes.length) {
+    throw new Error("Sélection de produits requise.");
+  }
+  if (new Set(payload.productCodes).size !== payload.productCodes.length) {
+    throw new Error("La sélection de produits contient des doublons.");
+  }
+  if (!payload.title) {
+    throw new Error("Titre de commande requis.");
+  }
+  if (payload.status !== "open") {
+    throw new Error("Le statut initial de la commande doit être « open ».");
+  }
+  if (payload.minWeightKg < 0) {
+    throw new Error("Le poids minimum ne peut pas être négatif.");
+  }
+  if (payload.maxWeightKg !== null && payload.maxWeightKg < payload.minWeightKg) {
+    throw new Error("Le poids maximum doit être supérieur ou égal au poids minimum.");
+  }
+  if (payload.sharerPercentage < 0 || payload.sharerPercentage >= 100) {
+    throw new Error("Le pourcentage partageur doit être compris entre 0 et 99.");
+  }
+  if (payload.usePickupDate && !payload.pickupDate) {
+    throw new Error("Une date de retrait est requise.");
+  }
+  if (!payload.usePickupDate && payload.pickupWindowWeeks !== null && payload.pickupWindowWeeks <= 0) {
+    throw new Error("La fenêtre de retrait doit être positive.");
+  }
+  for (const [productCode] of Object.entries(payload.sharerQuantities)) {
+    if (!payload.productCodes.includes(productCode)) {
+      throw new Error(`Quantité partageur invalide pour le produit ${productCode}.`);
+    }
+  }
+  for (const slot of payload.slots) {
+    if (!slot.label) {
+      throw new Error("Chaque créneau doit avoir un libellé.");
+    }
+    if (slot.enabled && (!slot.startTime || !slot.endTime)) {
+      throw new Error("Chaque créneau activé doit avoir un horaire de début et de fin.");
+    }
+    if (slot.slotType === "date" && !slot.slotDate) {
+      throw new Error("Chaque créneau daté doit avoir une date.");
+    }
+    if (slot.slotType === "weekday" && !slot.day) {
+      throw new Error("Chaque créneau hebdomadaire doit avoir un jour.");
+    }
+  }
 };
 
 export async function createOrderWithSetup(
@@ -2103,8 +2146,7 @@ export async function createOrderWithSetup(
 ) {
   const payload = normalizeCreateOrderPayload(params.rawPayload);
   if (!params.authUserId) throw new Error("Utilisateur requis pour créer une commande.");
-  if (!payload.productCodes.length) throw new Error("Sélection de produits requise.");
-  if (!payload.title) throw new Error("Titre de commande requis.");
+  validateOrderCreationPayload(payload);
 
   const productRows = await fetchProductsByCodesForOrderCreation(serviceClient, payload.productCodes);
   if (productRows.length !== payload.productCodes.length) {
@@ -2128,6 +2170,25 @@ export async function createOrderWithSetup(
     throw new Error("Le producteur n'a pas encore terminé sa configuration Stripe Connect. Impossible de créer une commande avec cette structure.");
   }
 
+  const positiveSharerSelections =
+    payload.shareMode === "products"
+      ? Object.entries(payload.sharerQuantities).filter(([, quantity]) => quantity > 0)
+      : [];
+  const computedOrderedWeightKg = positiveSharerSelections.reduce((sum, [productCode, quantity]) => {
+    const productRow = productRows.find((row) => row.product_code === productCode);
+    if (!productRow) {
+      throw new Error(`Produit introuvable pour le code ${productCode}.`);
+    }
+    const fallbackUnitWeightKg = resolveUnitWeightKg(
+      productRow.sale_unit,
+      productRow.unit_weight_kg,
+      productRow.packaging,
+    );
+    const unitWeightKg = resolveStoredUnitWeightKg(productRow.sale_unit, fallbackUnitWeightKg, quantity);
+    const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, quantity);
+    return sum + unitWeightKg * storedQuantityUnits;
+  }, 0);
+
   const orderPricingSeed = {
     id: "",
     order_code: null,
@@ -2137,20 +2198,61 @@ export async function createOrderWithSetup(
     status: payload.status,
     min_weight_kg: payload.minWeightKg,
     max_weight_kg: payload.maxWeightKg,
-    sharer_share_cents: payload.sharerShareCents,
+    sharer_share_cents: 0,
     effective_weight_kg: 0,
     delivery_fee_cents: 0,
     pickup_delivery_fee_cents: payload.pickupDeliveryFeeCents,
     delivery_option: payload.deliveryOption,
     sharer_percentage: payload.sharerPercentage,
-    ordered_weight_kg: payload.orderedWeightKg,
+    ordered_weight_kg: computedOrderedWeightKg,
   } as DbOrderRow;
-  const resolvedEffectiveWeightKg = resolveEffectiveWeightKgForOrder(orderPricingSeed, payload.orderedWeightKg);
+  const resolvedEffectiveWeightKg = resolveEffectiveWeightKgForOrder(orderPricingSeed, computedOrderedWeightKg);
   const resolvedDeliveryFeeCents = resolveDeliveryFeeTotalCentsForOrder(orderPricingSeed, resolvedEffectiveWeightKg);
 
   const activeLotsByProductId = await fetchLatestActiveLotsByProductId(
     serviceClient,
     productRows.map((row) => row.product_id),
+  );
+  const pricingContext = {
+    ...orderPricingSeed,
+    effective_weight_kg: resolvedEffectiveWeightKg,
+    delivery_fee_cents: resolvedDeliveryFeeCents,
+  } as DbOrderRow;
+  const computedTotals = positiveSharerSelections.reduce(
+    (acc, [productCode, quantity]) => {
+      const productRow = productRows.find((row) => row.product_code === productCode);
+      if (!productRow) {
+        throw new Error(`Produit introuvable pour le code ${productCode}.`);
+      }
+      const fallbackLot = activeLotsByProductId.get(productRow.product_id);
+      const fallbackUnitWeightKg = resolveUnitWeightKg(
+        productRow.sale_unit,
+        productRow.unit_weight_kg,
+        productRow.packaging,
+      );
+      const unitWeightKg = resolveStoredUnitWeightKg(productRow.sale_unit, fallbackUnitWeightKg, quantity);
+      const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, quantity);
+      const fallbackBasePriceCents = Math.max(
+        0,
+        Number(productRow.active_lot_price_cents ?? fallbackLot?.price_cents ?? productRow.default_price_cents ?? 0),
+      );
+      const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+        productRow.sale_unit,
+        fallbackBasePriceCents,
+        quantity,
+      );
+      const pricing = calculateOrderItemPricing({
+        order: pricingContext,
+        basePriceCents: unitBasePriceCents,
+        unitWeightKg,
+        quantityUnits: storedQuantityUnits,
+      });
+      acc.baseTotalCents += unitBasePriceCents * storedQuantityUnits;
+      acc.participantTotalCents += pricing.lineTotalCents;
+      acc.sharerShareCents += pricing.unitSharerFeeCents * storedQuantityUnits;
+      return acc;
+    },
+    { baseTotalCents: 0, participantTotalCents: 0, sharerShareCents: 0 },
   );
   const obfuscatedCoords = buildObfuscatedOrderCoordinates({
     deliveryLat: payload.deliveryLat,
@@ -2174,7 +2276,7 @@ export async function createOrderWithSetup(
       auto_approve_pickup_slots: payload.autoApprovePickupSlots,
       min_weight_kg: payload.minWeightKg,
       max_weight_kg: payload.maxWeightKg,
-      ordered_weight_kg: payload.orderedWeightKg,
+      ordered_weight_kg: computedOrderedWeightKg,
       delivery_option: payload.deliveryOption,
       delivery_street: payload.deliveryStreet,
       delivery_info: payload.deliveryInfo,
@@ -2201,10 +2303,10 @@ export async function createOrderWithSetup(
       share_mode: payload.shareMode,
       sharer_quantities: payload.sharerQuantities,
       currency: payload.currency,
-      base_total_cents: payload.baseTotalCents,
+      base_total_cents: computedTotals.baseTotalCents,
       delivery_fee_cents: resolvedDeliveryFeeCents,
-      participant_total_cents: payload.participantTotalCents,
-      sharer_share_cents: payload.sharerShareCents,
+      participant_total_cents: computedTotals.participantTotalCents,
+      sharer_share_cents: computedTotals.sharerShareCents,
       effective_weight_kg: resolvedEffectiveWeightKg,
       participants_visibility: payload.participantsVisibility,
     })
@@ -2251,6 +2353,16 @@ export async function createOrderWithSetup(
         },
       };
     });
+    const orderProductsConfigByProductId = new Map(
+      orderProductsPayload.map((entry) => [
+        normalizeText(entry.product_id),
+        {
+          unitLabel: entry.unit_label,
+          unitWeightKg: entry.unit_weight_kg,
+          unitBasePriceCents: entry.unit_base_price_cents,
+        },
+      ]),
+    );
     if (orderProductsPayload.length > 0) {
       const { error: orderProductsError } = await serviceClient.from("order_products").insert(orderProductsPayload);
       if (orderProductsError) throw orderProductsError;
@@ -2289,22 +2401,78 @@ export async function createOrderWithSetup(
     }
 
     if (payload.shareMode === "products") {
-      const positiveSharerSelections = Object.entries(payload.sharerQuantities).filter(([, quantity]) => quantity > 0);
       for (const [productCode, quantity] of positiveSharerSelections) {
         const productRow = productRows.find((row) => row.product_code === productCode);
         if (!productRow) {
           throw new Error(`Produit introuvable pour le code ${productCode}.`);
         }
-        const orderItemId = await insertOrderItem(serviceClient, {
+        const orderProductConfig = orderProductsConfigByProductId.get(productRow.product_id);
+        if (!orderProductConfig) {
+          throw new Error(`Produit introuvable pour le code ${productCode}.`);
+        }
+        const fallbackLot = activeLotsByProductId.get(productRow.product_id);
+        if (!fallbackLot?.id) {
+          throw new Error("Lot actif introuvable pour ce produit.");
+        }
+        const fallbackUnitWeightKg = resolveUnitWeightKg(
+          productRow.sale_unit,
+          productRow.unit_weight_kg,
+          productRow.packaging,
+        );
+        const unitWeightKg = resolveStoredUnitWeightKg(
+          productRow.sale_unit,
+          orderProductConfig.unitWeightKg ?? fallbackUnitWeightKg,
+          quantity,
+        );
+        const unitBasePriceCents = resolveStoredUnitBasePriceCents(
+          productRow.sale_unit,
+          orderProductConfig.unitBasePriceCents ?? Math.max(0, Number(productRow.default_price_cents ?? 0)),
+          quantity,
+        );
+        const storedQuantityUnits = normalizeQuantityUnitsForStorage(productRow.sale_unit, quantity);
+        const pricing = calculateOrderItemPricing({
           order,
+          basePriceCents: unitBasePriceCents,
+          unitWeightKg,
+          quantityUnits: storedQuantityUnits,
+        });
+        const { data: createdItem, error: createdItemError } = await serviceClient
+          .from("order_items")
+          .insert({
+            order_id: order.id,
+            participant_id: sharerParticipantId,
+            product_id: productRow.product_id,
+            lot_id: fallbackLot.id,
+            quantity_units: storedQuantityUnits,
+            unit_label: orderProductConfig.unitLabel,
+            unit_weight_kg: unitWeightKg,
+            unit_base_price_cents: unitBasePriceCents,
+            unit_delivery_cents: pricing.unitDeliveryCents,
+            unit_sharer_fee_cents: pricing.unitSharerFeeCents,
+            unit_final_price_cents: pricing.unitFinalPriceCents,
+            line_total_cents: pricing.lineTotalCents,
+            line_weight_kg: pricing.lineWeightKg,
+            is_sharer_share: true,
+          })
+          .select("id")
+          .single();
+        if (createdItemError || !createdItem) {
+          throw createdItemError ?? new Error("Impossible de créer la ligne de commande partageur.");
+        }
+        const orderItemId = normalizeText((createdItem as Record<string, unknown>).id);
+        if (!orderItemId) {
+          throw new Error("Impossible de créer la ligne de commande partageur.");
+        }
+        await reserveLotStock(serviceClient, {
+          lotId: fallbackLot.id,
+          orderId: order.id,
+          orderItemId,
           participantId: sharerParticipantId,
-          productId: productRow.product_id,
-          lotId: activeLotsByProductId.get(productRow.product_id)?.id ?? null,
-          quantityUnits: quantity,
-          isSharerShare: true,
-          reservationStatus: "consumed",
+          reservedUnits: isKgSaleUnit(productRow.sale_unit) ? null : storedQuantityUnits,
+          reservedKg: isKgSaleUnit(productRow.sale_unit) ? pricing.lineWeightKg : null,
+          status: "consumed",
           reservationKind: "sharer_initial",
-          skipRecompute: true,
+          expiresAt: null,
         });
         createdSharerItemIds.push(orderItemId);
       }
@@ -2521,6 +2689,9 @@ export async function buildCloseCheckoutDraft(params: {
   }
 
   const closeDraft = parseCloseDraft(params.draftPayload);
+  if (!closeDraft.useCoopBalance && Object.keys(closeDraft.extraQuantities).length === 0) {
+    throw new Error("Aucune action de clôture à préparer.");
+  }
   const plans = await buildReservationPlansFromQuantities(serviceClient, order, closeDraft.extraQuantities);
   const allOrderItems = await listOrderItemsForOrder(serviceClient, order.id);
   const coopBalanceCents = closeDraft.useCoopBalance
