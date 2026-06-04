@@ -1150,6 +1150,12 @@ const sharerAvatarUpdatedAt =
   ].includes(order.status);
   const isLockedOrAfter = order.status === 'locked' || isAfterLocked;
   const shouldRestrictAccess = isVisitor && isAfterLocked;
+  const isSharerSelectionOnlyMode = isOwner && isOrderOpen;
+
+  React.useEffect(() => {
+    if (!isSharerSelectionOnlyMode) return;
+    setQuantities((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+  }, [isSharerSelectionOnlyMode]);
 
   React.useEffect(() => {
     if (!isProducer || !isLockedOrAfter || !order.id || !order.producerProfileId || !order.sharerProfileId) {
@@ -1296,9 +1302,51 @@ const sharerAvatarUpdatedAt =
   const remainingToPayCents = Math.max(0, totalPriceCents - coopAppliedCents);
   const shouldShowCoopToggle = coopBalanceCents > 0 && totalCards > 0;
 
-  const basePercent = order.minWeightKg > 0 ? (alreadyOrderedWeight / order.minWeightKg) * 100 : 0;
-  const selectionPercent = order.minWeightKg > 0 ? (selectedWeight / order.minWeightKg) * 100 : 0;
-  const progressPercent = basePercent + selectionPercent;
+  const isTrackingMaxProgress =
+    order.minWeightKg > 0 &&
+    maxOrderWeightKg !== null &&
+    maxOrderWeightKg > order.minWeightKg &&
+    totalWeightTowardsGoal > order.minWeightKg;
+  const maxProgressRangeKg = isTrackingMaxProgress ? maxOrderWeightKg - order.minWeightKg : 0;
+  const progressTowardMaxWeightKg = isTrackingMaxProgress
+    ? Math.max(Math.min(totalWeightTowardsGoal, maxOrderWeightKg) - order.minWeightKg, 0)
+    : 0;
+  const visualBaseWeightKg = isTrackingMaxProgress
+    ? Math.max(Math.min(alreadyOrderedWeight, maxOrderWeightKg) - order.minWeightKg, 0)
+    : alreadyOrderedWeight;
+  const visualSelectionWeightKg = isTrackingMaxProgress
+    ? Math.max(
+        Math.min(totalWeightTowardsGoal, maxOrderWeightKg) -
+          Math.max(Math.min(alreadyOrderedWeight, maxOrderWeightKg), order.minWeightKg),
+        0
+      )
+    : selectedWeight;
+  const basePercent =
+    (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg) > 0
+      ? (visualBaseWeightKg / (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg)) * 100
+      : 0;
+  const selectionPercent =
+    (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg) > 0
+      ? (visualSelectionWeightKg / (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg)) * 100
+      : 0;
+  const progressPercent = order.minWeightKg > 0 ? (totalWeightTowardsGoal / order.minWeightKg) * 100 : 0;
+  const progressScalePercent = isTrackingMaxProgress
+    ? maxProgressRangeKg > 0
+      ? (progressTowardMaxWeightKg / maxProgressRangeKg) * 100
+      : 0
+    : progressPercent;
+  const progressBadgeLabel = isTrackingMaxProgress
+    ? `${progressScalePercent.toFixed(0)}% max`
+    : `${progressPercent.toFixed(0)}%`;
+  const progressPrimaryLabel = isTrackingMaxProgress
+    ? `Seuil minimum atteint : ${order.minWeightKg.toFixed(2)} kg`
+    : `Déjà achetés : ${alreadyOrderedWeight.toFixed(2)} kg`;
+  const progressSecondaryLabel = isTrackingMaxProgress
+    ? `Progression vers le maximum : ${progressTowardMaxWeightKg.toFixed(2)} / ${maxProgressRangeKg.toFixed(2)} kg`
+    : `Votre sélection : ${selectedWeight.toFixed(2)} kg`;
+  const progressTertiaryLabel = isTrackingMaxProgress
+    ? `Seuil maximum : ${maxOrderWeightKg.toFixed(2)} kg`
+    : `Objectif : ${order.minWeightKg} kg`;
   const cappedBase = Math.min(basePercent, 100);
   const cappedSelection = Math.max(Math.min(basePercent + selectionPercent, 100) - cappedBase, 0);
   const extraPercent = Math.max(0, progressPercent - 100);
@@ -1478,7 +1526,7 @@ const sharerAvatarUpdatedAt =
   };
 
   const handleQuantityChange = (productId: string, delta: number) => {
-    if (!isOrderOpen) return;
+    if (!isOrderOpen || isSharerSelectionOnlyMode) return;
     setQuantities((prev) => {
       const current = prev[productId] ?? 0;
       const candidate = current + delta;
@@ -1686,6 +1734,10 @@ const sharerAvatarUpdatedAt =
   }, [isOwner, isProducer, order.status]);
 
   const handlePurchase = async () => {
+    if (isSharerSelectionOnlyMode) {
+      toast.info('Le partageur ajoute ses produits au moment de la clôture.');
+      return;
+    }
     if (!isOrderOpen) {
       toast.info("La commande n'est pas ouverte.");
       return;
@@ -3346,8 +3398,15 @@ const sharerAvatarUpdatedAt =
               <div className="order-client-view__products-header">
                 <div>
                   <h3 className="order-client-view__products-title">
-                    {isOrderOpen ? 'Choisissez vos produits' : 'Les produits de la commande'}
+                    {isOrderOpen && !isSharerSelectionOnlyMode
+                      ? 'Choisissez vos produits'
+                      : 'Les produits de la commande'}
                   </h3>
+                  {isSharerSelectionOnlyMode && (
+                    <p className="mt-2 text-sm text-[#6B7280]">
+                      En tant que partageur, vous ajouterez vos produits au moment de la clôture.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -3362,14 +3421,14 @@ const sharerAvatarUpdatedAt =
                   onDeltaQuantity={handleQuantityChange}
                   onDirectQuantity={(productId, value) =>
                     setQuantities((prev) => {
-                      if (!isOrderOpen) return prev;
+                      if (!isOrderOpen || isSharerSelectionOnlyMode) return prev;
                       const next = clampQuantityForMax(productId, Math.max(0, value), prev);
                       if (next === (prev[productId] ?? 0)) return prev;
                       return { ...prev, [productId]: next };
                     })
                   }
                   unitPriceLabelsById={unitPriceLabelsById}
-                  isSelectionLocked={!isOrderOpen}
+                  isSelectionLocked={!isOrderOpen || isSharerSelectionOnlyMode}
                   onOpenProduct={handleOpenProduct}
                   onOpenProducer={handleOpenProducerFromProduct}
                 />
@@ -3391,7 +3450,7 @@ const sharerAvatarUpdatedAt =
                 </p>
               </div>
               <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white text-[#B45309] border border-[#FFDCC4] font-semibold text-sm shadow-sm">
-                {showStatusProgress ? `${statusProgressPercent}%` : `${progressPercent.toFixed(0)}%`}
+                {showStatusProgress ? `${statusProgressPercent}%` : progressBadgeLabel}
               </span>
             </div>
 
@@ -3428,9 +3487,9 @@ const sharerAvatarUpdatedAt =
             {!showStatusProgress && (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#6B7280] font-medium">
-                  <span className="text-[#15803d] font-semibold">Déjà achetés : {alreadyOrderedWeight.toFixed(2)} kg</span>
-                  <span className="text-[#d97706] font-semibold">Votre sélection : {selectedWeight.toFixed(2)} kg</span>
-                  <span className="text-[#FF6B4A] font-semibold">Objectif : {order.minWeightKg} kg</span>
+                  <span className="text-[#15803d] font-semibold">{progressPrimaryLabel}</span>
+                  <span className="text-[#d97706] font-semibold">{progressSecondaryLabel}</span>
+                  <span className="text-[#FF6B4A] font-semibold">{progressTertiaryLabel}</span>
                 </div>
                 <div className="order-client-view__progress-track">
                   <div
@@ -3492,7 +3551,7 @@ const sharerAvatarUpdatedAt =
             )}
           </div>
 
-            {!isProducer && (
+            {!isProducer && !isSharerSelectionOnlyMode && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
             <div className="order-client-view__payment-summary">
               <div className="order-client-view__payment-row">
