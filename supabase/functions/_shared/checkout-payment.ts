@@ -3950,9 +3950,6 @@ export async function finalizeCheckoutPaymentSession(params: {
   const normalizedStripeAccountId = normalizeText(params.stripeAccountId) ||
     normalizeText(checkoutPaymentSession.stripe_account_id);
   let stripeSession = params.stripeSessionOverride ?? null;
-  if (!stripeSession && stripeSessionId) {
-    stripeSession = await retrieveStripeCheckoutSession(stripeSessionId, normalizedStripeAccountId || null);
-  }
   if (!stripeSession && checkoutPaymentSession.payment_mode === "local_zero") {
     stripeSession = {
       id: `local_zero_${checkoutPaymentSession.id}`,
@@ -3963,6 +3960,8 @@ export async function finalizeCheckoutPaymentSession(params: {
       },
       payment_intent: null,
     };
+  } else if (!stripeSession && stripeSessionId) {
+    stripeSession = await retrieveStripeCheckoutSession(stripeSessionId, normalizedStripeAccountId || null);
   }
   if (!stripeSession) {
     return buildPublicStatus(checkoutPaymentSession, null, "Checkout session not initialized");

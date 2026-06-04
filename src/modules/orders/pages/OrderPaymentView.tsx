@@ -364,6 +364,7 @@ export function OrderPaymentView({
   const [latestStripeStatus, setLatestStripeStatus] = React.useState<string | null>(null);
   const [latestStripePaymentStatus, setLatestStripePaymentStatus] = React.useState<string | null>(null);
   const hasConfirmedRef = React.useRef(false);
+  const hasAutoStartedZeroCloseRef = React.useRef(false);
   const checkoutRef = React.useRef<EmbeddedCheckoutInstance | null>(null);
   const checkoutContainerId = React.useMemo(() => `stripe-checkout-${order.id}`, [order.id]);
   const initialSessionId = React.useMemo(() => {
@@ -654,12 +655,19 @@ export function OrderPaymentView({
         if (!data?.client_secret || !data?.provider_payment_id || !data?.checkout_payment_session_id) {
           if (data?.payment_mode === 'local_zero' && data?.checkout_payment_session_id) {
             disposeCheckout();
+            const resolvedProviderPaymentId =
+              data.provider_payment_id || `local_zero_${data.checkout_payment_session_id}`;
             setCheckoutPaymentSessionId(data.checkout_payment_session_id);
-            setProviderPaymentId(data.provider_payment_id || data.checkout_payment_session_id);
+            setProviderPaymentId(resolvedProviderPaymentId);
             setCheckoutClientSecret(null);
             setStripeAccountId(data.stripe_account_id ?? null);
             setPaymentBreakdown(mapPaymentBreakdown(data.payment_breakdown ?? null));
-            setPaymentState(data.status === 'succeeded' ? 'succeeded' : 'processing');
+            setPaymentState('processing');
+            setPaymentStatusMessage(
+              'Aucun paiement carte n’est nécessaire. Vérification de la finalisation en cours...'
+            );
+            await syncCheckoutPaymentStatus(resolvedProviderPaymentId, data.checkout_payment_session_id);
+            return;
             setPaymentStatusMessage(
               data.status === 'succeeded'
                 ? 'Aucun paiement carte n’est nécessaire. Finalisation de votre commande effectuée.'
@@ -727,6 +735,7 @@ export function OrderPaymentView({
       isProducerStripeLoading,
       isCreatingPayment,
       isVerifying,
+      syncCheckoutPaymentStatus,
       order.id,
       order.orderCode,
       producerStripeBlockingReason,
@@ -907,6 +916,15 @@ export function OrderPaymentView({
     return () => window.clearTimeout(timeout);
   }, [checkoutPaymentSessionId, paymentState, providerPaymentId, syncCheckoutPaymentStatus]);
 
+  React.useEffect(() => {
+    if (!isClosePayment || displayedCardAmountCents !== 0) return;
+    if (hasAutoStartedZeroCloseRef.current) return;
+    if (paymentState !== 'idle') return;
+    if (isBusy) return;
+    hasAutoStartedZeroCloseRef.current = true;
+    void createServerBackedCheckoutSession(false);
+  }, [createServerBackedCheckoutSession, displayedCardAmountCents, isBusy, isClosePayment, paymentState]);
+
   const handleRetryPayment = React.useCallback(() => {
     try {
       sessionStorage.removeItem(storageKey);
@@ -1036,8 +1054,10 @@ export function OrderPaymentView({
               : canSubmitWithoutCardPayment
                   ? 'Valider sans paiement carte'
                   : isClosePayment
-                  ? 'Payer et clôturer'
-                  : 'Payer avec votre carte bancaire'}
+                    ? displayedCardAmountCents === 0
+                      ? 'Clôturer la commande'
+                      : 'Payer et clôturer'
+                    : 'Payer avec votre carte bancaire'}
             </button>
           ) : null}
           {producerStripeBlockingReason ? (

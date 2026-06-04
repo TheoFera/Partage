@@ -1307,32 +1307,24 @@ const sharerAvatarUpdatedAt =
     maxOrderWeightKg !== null &&
     maxOrderWeightKg > order.minWeightKg &&
     totalWeightTowardsGoal > order.minWeightKg;
-  const maxProgressRangeKg = isTrackingMaxProgress ? maxOrderWeightKg - order.minWeightKg : 0;
-  const progressTowardMaxWeightKg = isTrackingMaxProgress
-    ? Math.max(Math.min(totalWeightTowardsGoal, maxOrderWeightKg) - order.minWeightKg, 0)
-    : 0;
-  const visualBaseWeightKg = isTrackingMaxProgress
-    ? Math.max(Math.min(alreadyOrderedWeight, maxOrderWeightKg) - order.minWeightKg, 0)
-    : alreadyOrderedWeight;
+  const maxProgressTotalKg = isTrackingMaxProgress ? maxOrderWeightKg : 0;
+  const progressTowardMaxWeightKg = isTrackingMaxProgress ? Math.min(totalWeightTowardsGoal, maxOrderWeightKg) : 0;
+  const visualBaseWeightKg = isTrackingMaxProgress ? Math.min(alreadyOrderedWeight, maxOrderWeightKg) : alreadyOrderedWeight;
   const visualSelectionWeightKg = isTrackingMaxProgress
-    ? Math.max(
-        Math.min(totalWeightTowardsGoal, maxOrderWeightKg) -
-          Math.max(Math.min(alreadyOrderedWeight, maxOrderWeightKg), order.minWeightKg),
-        0
-      )
+    ? Math.max(Math.min(totalWeightTowardsGoal, maxOrderWeightKg) - Math.min(alreadyOrderedWeight, maxOrderWeightKg), 0)
     : selectedWeight;
   const basePercent =
-    (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg) > 0
-      ? (visualBaseWeightKg / (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg)) * 100
+    (isTrackingMaxProgress ? maxProgressTotalKg : order.minWeightKg) > 0
+      ? (visualBaseWeightKg / (isTrackingMaxProgress ? maxProgressTotalKg : order.minWeightKg)) * 100
       : 0;
   const selectionPercent =
-    (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg) > 0
-      ? (visualSelectionWeightKg / (isTrackingMaxProgress ? maxProgressRangeKg : order.minWeightKg)) * 100
+    (isTrackingMaxProgress ? maxProgressTotalKg : order.minWeightKg) > 0
+      ? (visualSelectionWeightKg / (isTrackingMaxProgress ? maxProgressTotalKg : order.minWeightKg)) * 100
       : 0;
   const progressPercent = order.minWeightKg > 0 ? (totalWeightTowardsGoal / order.minWeightKg) * 100 : 0;
   const progressScalePercent = isTrackingMaxProgress
-    ? maxProgressRangeKg > 0
-      ? (progressTowardMaxWeightKg / maxProgressRangeKg) * 100
+    ? maxProgressTotalKg > 0
+      ? (progressTowardMaxWeightKg / maxProgressTotalKg) * 100
       : 0
     : progressPercent;
   const progressBadgeLabel = isTrackingMaxProgress
@@ -1342,7 +1334,7 @@ const sharerAvatarUpdatedAt =
     ? `Seuil minimum atteint : ${order.minWeightKg.toFixed(2)} kg`
     : `Déjà achetés : ${alreadyOrderedWeight.toFixed(2)} kg`;
   const progressSecondaryLabel = isTrackingMaxProgress
-    ? `Progression vers le maximum : ${progressTowardMaxWeightKg.toFixed(2)} / ${maxProgressRangeKg.toFixed(2)} kg`
+    ? `Progression vers le maximum : ${progressTowardMaxWeightKg.toFixed(2)} / ${maxProgressTotalKg.toFixed(2)} kg`
     : `Votre sélection : ${selectedWeight.toFixed(2)} kg`;
   const progressTertiaryLabel = isTrackingMaxProgress
     ? `Seuil maximum : ${maxOrderWeightKg.toFixed(2)} kg`
