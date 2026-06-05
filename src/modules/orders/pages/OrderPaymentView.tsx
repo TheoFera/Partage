@@ -916,15 +916,6 @@ export function OrderPaymentView({
     return () => window.clearTimeout(timeout);
   }, [checkoutPaymentSessionId, paymentState, providerPaymentId, syncCheckoutPaymentStatus]);
 
-  React.useEffect(() => {
-    if (!isClosePayment || displayedCardAmountCents !== 0) return;
-    if (hasAutoStartedZeroCloseRef.current) return;
-    if (paymentState !== 'idle') return;
-    if (isBusy) return;
-    hasAutoStartedZeroCloseRef.current = true;
-    void createServerBackedCheckoutSession(false);
-  }, [createServerBackedCheckoutSession, displayedCardAmountCents, isBusy, isClosePayment, paymentState]);
-
   const handleRetryPayment = React.useCallback(() => {
     try {
       sessionStorage.removeItem(storageKey);
@@ -971,6 +962,15 @@ export function OrderPaymentView({
     hasRemotePaymentCompletion && (paymentState === 'retryable' || paymentState === 'failed');
   const shouldShowEmbeddedCheckout =
     hasCheckoutSession && paymentState !== 'processing' && paymentState !== 'succeeded';
+
+  React.useEffect(() => {
+    if (!isClosePayment || displayedCardAmountCents !== 0) return;
+    if (hasAutoStartedZeroCloseRef.current) return;
+    if (paymentState !== 'idle') return;
+    if (isBusy) return;
+    hasAutoStartedZeroCloseRef.current = true;
+    void createServerBackedCheckoutSession(false);
+  }, [createServerBackedCheckoutSession, displayedCardAmountCents, isBusy, isClosePayment, paymentState]);
 
   return (
     <div className="order-payment-view">
