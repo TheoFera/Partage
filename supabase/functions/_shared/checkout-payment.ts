@@ -2841,37 +2841,26 @@ async function computeRetainedBreakdownFromPlans(
     .from("lot_price_breakdown")
     .select("lot_id, source, value_type, value_cents")
     .in("lot_id", lotIds)
-    .in("source", ["platform", "payment_provider"]);
+    .eq("source", "platform");
   if (error) throw error;
 
   const platformValuePerUnitByLot = new Map<string, number>();
-  const paymentProviderValuePerUnitByLot = new Map<string, number>();
   for (const row of (data as Array<Record<string, unknown>> | null) ?? []) {
     const lotId = normalizeText(row.lot_id);
     if (!lotId) continue;
-    const source = normalizeText(row.source).toLowerCase();
     const valueType = normalizeText(row.value_type).toLowerCase();
     if (valueType && valueType !== "cents") {
       throw new Error(`Répartition lot invalide sur le lot ${lotId}.`);
     }
     const rowValueCents = toNonNegativeInteger(row.value_cents);
-    if (source === "payment_provider") {
-      paymentProviderValuePerUnitByLot.set(
-        lotId,
-        (paymentProviderValuePerUnitByLot.get(lotId) ?? 0) + rowValueCents,
-      );
-      continue;
-    }
     platformValuePerUnitByLot.set(lotId, (platformValuePerUnitByLot.get(lotId) ?? 0) + rowValueCents);
   }
 
   return plans.reduce((acc, plan) => {
     const platformValuePerUnit = platformValuePerUnitByLot.get(plan.lotId) ?? 0;
-    const paymentProviderValuePerUnit = paymentProviderValuePerUnitByLot.get(plan.lotId) ?? 0;
     const unitsForShare = isKgSaleUnit(plan.saleUnit) ? Number(plan.reservedKg ?? 0) : plan.storedQuantityUnits;
     const normalizedUnits = Math.max(0, Number(unitsForShare) || 0);
     acc.platformServiceFeeCents += toNonNegativeInteger(platformValuePerUnit * normalizedUnits);
-    acc.paymentProviderRetainedCents += toNonNegativeInteger(paymentProviderValuePerUnit * normalizedUnits);
     return acc;
   }, {
     platformServiceFeeCents: 0,
@@ -3014,6 +3003,7 @@ async function computeClosePaymentBreakdown(
 
   let sharerProductsValueCents = 0;
   let sharerOwnShareCents = 0;
+  let deliveryAllocatedCents = 0;
   for (const state of sharerProductStates.values()) {
     if (state.displayQuantity <= 0) continue;
     if (state.saleUnit === "kg") {
@@ -3022,6 +3012,7 @@ async function computeClosePaymentBreakdown(
       const lineSharerFeeCents = Math.round((lineBaseCents + lineDeliveryCents) * shareFraction);
       sharerProductsValueCents += lineBaseCents + lineDeliveryCents + lineSharerFeeCents;
       sharerOwnShareCents += lineSharerFeeCents;
+      deliveryAllocatedCents += lineDeliveryCents;
       continue;
     }
 
@@ -3030,6 +3021,7 @@ async function computeClosePaymentBreakdown(
     sharerProductsValueCents +=
       (state.unitBasePriceCents + unitDeliveryCents + unitSharerFeeCents) * state.displayQuantity;
     sharerOwnShareCents += unitSharerFeeCents * state.displayQuantity;
+    deliveryAllocatedCents += unitDeliveryCents * state.displayQuantity;
   }
 
   const currentSharerStoredShareCents = currentSharerItems.reduce(
@@ -3068,8 +3060,9 @@ async function computeClosePaymentBreakdown(
     })),
   ]);
   const platformServiceFeeCents = retainedBreakdown.platformServiceFeeCents;
-  const paymentProviderRetainedCents = retainedBreakdown.paymentProviderRetainedCents;
-  const platformRetainedTargetCents = platformServiceFeeCents + paymentProviderRetainedCents;
+  const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
+  const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
+  const platformRetainedTargetCents = platformServiceFeeCents + platformDeliveryRetainedCents;
   const producerNetTargetCents = Math.max(0, totalEconomicCents - platformRetainedTargetCents);
   const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
   const producerCardNetCents = Math.max(0, cardAmountCents - stripeApplicationFeeAmountCents);
@@ -3082,10 +3075,10 @@ async function computeClosePaymentBreakdown(
     producer_net_target_cents: producerNetTargetCents,
     platform_retained_target_cents: platformRetainedTargetCents,
     platform_service_fee_cents: platformServiceFeeCents,
-    payment_provider_retained_cents: paymentProviderRetainedCents,
+    payment_provider_retained_cents: 0,
     sharer_value_cents: 0,
-    platform_delivery_retained_cents: 0,
-    producer_delivery_cents: 0,
+    platform_delivery_retained_cents: platformDeliveryRetainedCents,
+    producer_delivery_cents: producerDeliveryCents,
     stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
     producer_card_net_cents: producerCardNetCents,
     producer_topup_due_cents: producerTopupDueCents,
@@ -3115,7 +3108,6 @@ async function computeParticipantPaymentBreakdownFromPlans(
   const cardAmountCents = Math.max(0, totalEconomicCents - coopCreditUsedCents);
   const retainedBreakdown = await computeRetainedBreakdownFromPlans(serviceClient, params.plans);
   const platformServiceFeeCents = retainedBreakdown.platformServiceFeeCents;
-  const paymentProviderRetainedCents = retainedBreakdown.paymentProviderRetainedCents;
   const sharerValueCents = params.plans.reduce(
     (sum, plan) => sum + toNonNegativeInteger(plan.unitSharerFeeCents) * toNonNegativeInteger(plan.storedQuantityUnits),
     0,
@@ -3126,8 +3118,7 @@ async function computeParticipantPaymentBreakdownFromPlans(
   );
   const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
   const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
-  const platformRetainedTargetCents =
-    platformServiceFeeCents + paymentProviderRetainedCents + sharerValueCents + platformDeliveryRetainedCents;
+  const platformRetainedTargetCents = platformServiceFeeCents + sharerValueCents + platformDeliveryRetainedCents;
   const producerNetTargetCents = Math.max(0, totalEconomicCents - platformRetainedTargetCents);
   const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
   const producerCardNetCents = Math.max(0, cardAmountCents - stripeApplicationFeeAmountCents);
@@ -3140,7 +3131,7 @@ async function computeParticipantPaymentBreakdownFromPlans(
     producer_net_target_cents: producerNetTargetCents,
     platform_retained_target_cents: platformRetainedTargetCents,
     platform_service_fee_cents: platformServiceFeeCents,
-    payment_provider_retained_cents: paymentProviderRetainedCents,
+    payment_provider_retained_cents: 0,
     sharer_value_cents: sharerValueCents,
     platform_delivery_retained_cents: platformDeliveryRetainedCents,
     producer_delivery_cents: producerDeliveryCents,
@@ -3170,7 +3161,6 @@ async function computeParticipantPaymentBreakdownFromItems(
   }));
   const retainedBreakdown = await computeRetainedBreakdownFromPlans(serviceClient, plans);
   const platformServiceFeeCents = retainedBreakdown.platformServiceFeeCents;
-  const paymentProviderRetainedCents = retainedBreakdown.paymentProviderRetainedCents;
   const sharerValueCents = params.items.reduce(
     (sum, item) => sum + toNonNegativeInteger(item.unit_sharer_fee_cents) * toNonNegativeInteger(item.quantity_units),
     0,
@@ -3181,8 +3171,7 @@ async function computeParticipantPaymentBreakdownFromItems(
   );
   const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
   const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
-  const platformRetainedTargetCents =
-    platformServiceFeeCents + paymentProviderRetainedCents + sharerValueCents + platformDeliveryRetainedCents;
+  const platformRetainedTargetCents = platformServiceFeeCents + sharerValueCents + platformDeliveryRetainedCents;
   const cardAmountCents = Math.max(0, params.totalEconomicCents - params.coopCreditUsedCents);
   const producerNetTargetCents = Math.max(0, params.totalEconomicCents - platformRetainedTargetCents);
   const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
@@ -3195,7 +3184,7 @@ async function computeParticipantPaymentBreakdownFromItems(
     producer_net_target_cents: producerNetTargetCents,
     platform_retained_target_cents: platformRetainedTargetCents,
     platform_service_fee_cents: platformServiceFeeCents,
-    payment_provider_retained_cents: paymentProviderRetainedCents,
+    payment_provider_retained_cents: 0,
     sharer_value_cents: sharerValueCents,
     platform_delivery_retained_cents: platformDeliveryRetainedCents,
     producer_delivery_cents: producerDeliveryCents,
