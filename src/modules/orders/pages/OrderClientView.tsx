@@ -3298,7 +3298,7 @@ const sharerAvatarUpdatedAt =
                           -{formatEurosFromCents(producerStatementData.platformCommissionCents)}
                         </span>
                       </div>
-                      <div className="order-client-view__statement-row order-client-view__statement-row--detail">
+                      <div className="order-client-view__statement-row">
                         <span className="order-client-view__statement-label">
                           Frais de paiement Stripe
                         </span>
