@@ -151,8 +151,13 @@ const mapPaymentBreakdown = (value: Record<string, unknown> | null | undefined):
     0,
     Math.round(Number(value?.stripe_application_fee_amount_cents ?? 0) || 0)
   ),
+  stripeProcessingFeeCents: Math.max(
+    0,
+    Math.round(Number(value?.stripe_processing_fee_cents ?? 0) || 0)
+  ),
   producerCardNetCents: Math.max(0, Math.round(Number(value?.producer_card_net_cents ?? 0) || 0)),
   producerTopupDueCents: Math.max(0, Math.round(Number(value?.producer_topup_due_cents ?? 0) || 0)),
+  producerNetCents: Math.max(0, Math.round(Number(value?.producer_net_cents ?? 0) || 0)),
 });
 
 const normalizeOrderPurchaseDraft = (

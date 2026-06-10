@@ -40,8 +40,10 @@ type PaymentBreakdown = {
   platform_delivery_retained_cents: number;
   producer_delivery_cents: number;
   stripe_application_fee_amount_cents: number;
+  stripe_processing_fee_cents: number;
   producer_card_net_cents: number;
   producer_topup_due_cents: number;
+  producer_net_cents: number;
 };
 
 type CheckoutPaymentSessionRow = {
@@ -99,6 +101,7 @@ type StripeCharge = {
 
 type StripePaymentIntent = {
   id?: string | null;
+  application_fee_amount?: number | null;
   latest_charge?: string | StripeCharge | null;
 };
 
@@ -119,8 +122,10 @@ type DbPaymentRow = {
   platform_delivery_retained_cents: number;
   producer_delivery_cents: number;
   stripe_application_fee_amount_cents: number;
+  stripe_processing_fee_cents: number;
   producer_card_net_cents: number;
   producer_topup_due_cents: number;
+  producer_net_cents: number;
 };
 
 type CheckoutWorkflowStage = {
@@ -402,8 +407,10 @@ const PAYMENT_BREAKDOWN_KEYS = [
   "platform_delivery_retained_cents",
   "producer_delivery_cents",
   "stripe_application_fee_amount_cents",
+  "stripe_processing_fee_cents",
   "producer_card_net_cents",
   "producer_topup_due_cents",
+  "producer_net_cents",
 ] as const;
 
 const emptyPaymentBreakdown = (): PaymentBreakdown => ({
@@ -418,8 +425,10 @@ const emptyPaymentBreakdown = (): PaymentBreakdown => ({
   platform_delivery_retained_cents: 0,
   producer_delivery_cents: 0,
   stripe_application_fee_amount_cents: 0,
+  stripe_processing_fee_cents: 0,
   producer_card_net_cents: 0,
   producer_topup_due_cents: 0,
+  producer_net_cents: 0,
 });
 
 const toNonNegativeInteger = (value: unknown) => Math.max(0, Math.round(Number(value ?? 0) || 0));
@@ -583,11 +592,13 @@ type StripeFeeDetails = {
   stripeChargeId: string | null;
   feeCents: number;
   feeVatCents: number;
+  applicationFeeAmountCents: number | null;
 };
 
 const extractStripeFeeDetailsFromBalanceTransaction = (
   balanceTransaction: StripeBalanceTransaction | null | undefined,
   stripeChargeId: string | null,
+  applicationFeeAmountCents: number | null,
 ): StripeFeeDetails | null => {
   if (!balanceTransaction) return null;
   const feeCents = toNonNegativeInteger(balanceTransaction.fee);
@@ -595,6 +606,28 @@ const extractStripeFeeDetailsFromBalanceTransaction = (
     stripeChargeId,
     feeCents,
     feeVatCents: 0,
+    applicationFeeAmountCents,
+  };
+};
+
+const resolveStripeSettledAmounts = (params: {
+  paymentAmountCents: number;
+  applicationFeeAmountCents: number | null;
+  fallbackApplicationFeeAmountCents?: number | null;
+  totalStripeFeeCents: number;
+}) => {
+  const paymentAmountCents = toNonNegativeInteger(params.paymentAmountCents);
+  const applicationFeeAmountCents =
+    params.applicationFeeAmountCents !== null && params.applicationFeeAmountCents !== undefined
+      ? toNonNegativeInteger(params.applicationFeeAmountCents)
+      : toNonNegativeInteger(params.fallbackApplicationFeeAmountCents);
+  const totalStripeFeeCents = toNonNegativeInteger(params.totalStripeFeeCents);
+  const stripeProcessingFeeCents = Math.max(0, totalStripeFeeCents - applicationFeeAmountCents);
+  const producerNetCents = Math.max(0, paymentAmountCents - applicationFeeAmountCents - stripeProcessingFeeCents);
+  return {
+    applicationFeeAmountCents,
+    stripeProcessingFeeCents,
+    producerNetCents,
   };
 };
 
@@ -607,6 +640,8 @@ async function resolveStripeFeeDetails(params: {
   const expandedPaymentIntent = isRecord(params.stripeSession?.payment_intent)
     ? (params.stripeSession?.payment_intent as StripePaymentIntent)
     : null;
+  let applicationFeeAmountCents =
+    expandedPaymentIntent?.application_fee_amount ?? params.stripeSession?.payment_intent_data?.application_fee_amount ?? null;
   let chargeObject = isRecord(expandedPaymentIntent?.latest_charge)
     ? (expandedPaymentIntent?.latest_charge as StripeCharge)
     : null;
@@ -620,6 +655,7 @@ async function resolveStripeFeeDetails(params: {
         `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`,
         params.stripeAccountId,
       );
+      applicationFeeAmountCents = paymentIntent.application_fee_amount ?? applicationFeeAmountCents;
       chargeObject = isRecord(paymentIntent.latest_charge) ? (paymentIntent.latest_charge as StripeCharge) : null;
       stripeChargeId = readStripeId(paymentIntent.latest_charge) || stripeChargeId;
     }
@@ -641,7 +677,11 @@ async function resolveStripeFeeDetails(params: {
     ? (chargeObject.balance_transaction as StripeBalanceTransaction)
     : null;
   if (expandedBalanceTransaction) {
-    return extractStripeFeeDetailsFromBalanceTransaction(expandedBalanceTransaction, stripeChargeId || null);
+    return extractStripeFeeDetailsFromBalanceTransaction(
+      expandedBalanceTransaction,
+      stripeChargeId || null,
+      applicationFeeAmountCents,
+    );
   }
 
   const balanceTransactionId = readStripeId(chargeObject.balance_transaction);
@@ -652,7 +692,11 @@ async function resolveStripeFeeDetails(params: {
     `/balance_transactions/${encodeURIComponent(balanceTransactionId)}`,
     params.stripeAccountId,
   );
-  return extractStripeFeeDetailsFromBalanceTransaction(balanceTransaction, stripeChargeId || null);
+  return extractStripeFeeDetailsFromBalanceTransaction(
+    balanceTransaction,
+    stripeChargeId || null,
+    applicationFeeAmountCents,
+  );
 }
 
 const mapStripeStatusToInternal = (
@@ -1070,7 +1114,7 @@ async function findExistingPaymentByProviderPaymentId(
   const { data, error } = await serviceClient
     .from("payments")
     .select(
-      "id, participant_id, provider_payment_id, status, amount_cents, total_economic_cents, coop_credit_used_cents, card_amount_cents, producer_net_target_cents, platform_retained_target_cents, platform_service_fee_cents, payment_provider_retained_cents, sharer_value_cents, platform_delivery_retained_cents, producer_delivery_cents, stripe_application_fee_amount_cents, producer_card_net_cents, producer_topup_due_cents",
+      "id, participant_id, provider_payment_id, status, amount_cents, total_economic_cents, coop_credit_used_cents, card_amount_cents, producer_net_target_cents, platform_retained_target_cents, platform_service_fee_cents, payment_provider_retained_cents, sharer_value_cents, platform_delivery_retained_cents, producer_delivery_cents, stripe_application_fee_amount_cents, stripe_processing_fee_cents, producer_card_net_cents, producer_topup_due_cents, producer_net_cents",
     )
     .eq("provider_payment_id", providerPaymentId)
     .limit(1)
@@ -1108,10 +1152,23 @@ async function createPaymentStub(
     paymentBreakdown?: PaymentBreakdown;
     feeCents?: number;
     feeVatCents?: number;
+    stripeApplicationFeeAmountCents?: number;
+    stripeProcessingFeeCents?: number;
+    producerNetCents?: number;
     raw: JsonRecord;
   },
 ) {
   const breakdown = parsePaymentBreakdown(params.paymentBreakdown ?? emptyPaymentBreakdown());
+  const resolvedStripeApplicationFeeAmountCents = toNonNegativeInteger(
+    params.stripeApplicationFeeAmountCents ?? breakdown.stripe_application_fee_amount_cents,
+  );
+  const resolvedStripeProcessingFeeCents = toNonNegativeInteger(
+    params.stripeProcessingFeeCents ?? breakdown.stripe_processing_fee_cents,
+  );
+  const resolvedProducerNetCents = toNonNegativeInteger(
+    params.producerNetCents
+      ?? Math.max(0, toNonNegativeInteger(params.amountCents) - resolvedStripeApplicationFeeAmountCents - resolvedStripeProcessingFeeCents),
+  );
   const { data, error } = await serviceClient
     .from("payments")
     .insert({
@@ -1136,10 +1193,12 @@ async function createPaymentStub(
       sharer_value_cents: breakdown.sharer_value_cents,
       platform_delivery_retained_cents: breakdown.platform_delivery_retained_cents,
       producer_delivery_cents: breakdown.producer_delivery_cents,
-      stripe_application_fee_amount_cents: breakdown.stripe_application_fee_amount_cents,
+      stripe_application_fee_amount_cents: resolvedStripeApplicationFeeAmountCents,
+      stripe_processing_fee_cents: resolvedStripeProcessingFeeCents,
       producer_net_target_cents: breakdown.producer_net_target_cents,
       producer_card_net_cents: breakdown.producer_card_net_cents,
       producer_topup_due_cents: breakdown.producer_topup_due_cents,
+      producer_net_cents: resolvedProducerNetCents,
       fee_cents: toNonNegativeInteger(params.feeCents),
       fee_vat_cents: toNonNegativeInteger(params.feeVatCents),
       raw: params.raw,
@@ -1168,11 +1227,27 @@ export async function syncStripeFeesOnPayment(
   });
   if (!feeDetails) return null;
 
+  const { data: existingPayment, error: existingPaymentError } = await serviceClient
+    .from("payments")
+    .select("amount_cents, stripe_application_fee_amount_cents")
+    .eq("id", params.paymentId)
+    .maybeSingle();
+  if (existingPaymentError) throw existingPaymentError;
+  const settledAmounts = resolveStripeSettledAmounts({
+    paymentAmountCents: toNonNegativeInteger(existingPayment?.amount_cents),
+    applicationFeeAmountCents: feeDetails.applicationFeeAmountCents,
+    fallbackApplicationFeeAmountCents: existingPayment?.stripe_application_fee_amount_cents,
+    totalStripeFeeCents: feeDetails.feeCents,
+  });
+
   const { error } = await serviceClient
     .from("payments")
     .update({
       fee_cents: feeDetails.feeCents,
       fee_vat_cents: feeDetails.feeVatCents,
+      stripe_application_fee_amount_cents: settledAmounts.applicationFeeAmountCents,
+      stripe_processing_fee_cents: settledAmounts.stripeProcessingFeeCents,
+      producer_net_cents: settledAmounts.producerNetCents,
       stripe_charge_id: feeDetails.stripeChargeId,
     })
     .eq("id", params.paymentId);
@@ -3080,8 +3155,10 @@ async function computeClosePaymentBreakdown(
     platform_delivery_retained_cents: platformDeliveryRetainedCents,
     producer_delivery_cents: producerDeliveryCents,
     stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
+    stripe_processing_fee_cents: 0,
     producer_card_net_cents: producerCardNetCents,
     producer_topup_due_cents: producerTopupDueCents,
+    producer_net_cents: producerCardNetCents,
   };
 }
 
@@ -3136,8 +3213,10 @@ async function computeParticipantPaymentBreakdownFromPlans(
     platform_delivery_retained_cents: platformDeliveryRetainedCents,
     producer_delivery_cents: producerDeliveryCents,
     stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
+    stripe_processing_fee_cents: 0,
     producer_card_net_cents: producerCardNetCents,
     producer_topup_due_cents: producerTopupDueCents,
+    producer_net_cents: producerCardNetCents,
   };
 }
 
@@ -3189,8 +3268,10 @@ async function computeParticipantPaymentBreakdownFromItems(
     platform_delivery_retained_cents: platformDeliveryRetainedCents,
     producer_delivery_cents: producerDeliveryCents,
     stripe_application_fee_amount_cents: stripeApplicationFeeAmountCents,
+    stripe_processing_fee_cents: 0,
     producer_card_net_cents: producerCardNetCents,
     producer_topup_due_cents: producerTopupDueCents,
+    producer_net_cents: producerCardNetCents,
   };
 }
 
@@ -3492,6 +3573,12 @@ async function finalizeParticipantCheckoutSession(
           stripeAccountId: producerStripe.stripeAccountId,
         })
         : null;
+    const participantSettledAmounts = resolveStripeSettledAmounts({
+      paymentAmountCents: paymentBreakdown.card_amount_cents,
+      applicationFeeAmountCents: stripeFeeDetails?.applicationFeeAmountCents ?? null,
+      fallbackApplicationFeeAmountCents: paymentBreakdown.stripe_application_fee_amount_cents,
+      totalStripeFeeCents: stripeFeeDetails?.feeCents ?? 0,
+    });
 
     let payment = existingPayment;
     if (!payment) {
@@ -3518,6 +3605,9 @@ async function finalizeParticipantCheckoutSession(
         paymentBreakdown,
         feeCents: stripeFeeDetails?.feeCents ?? 0,
         feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
+        stripeApplicationFeeAmountCents: participantSettledAmounts.applicationFeeAmountCents,
+        stripeProcessingFeeCents: participantSettledAmounts.stripeProcessingFeeCents,
+        producerNetCents: participantSettledAmounts.producerNetCents,
         raw: {
           flow_kind: "participant",
           checkout_payment_session_id: checkoutPaymentSession.id,
@@ -3802,6 +3892,12 @@ async function finalizeCloseCheckoutSession(
           : stripeSession.payment_intent?.id ?? null,
       stripeAccountId: producerStripe.stripeAccountId,
     });
+    const closeSettledAmounts = resolveStripeSettledAmounts({
+      paymentAmountCents: paymentBreakdown.card_amount_cents,
+      applicationFeeAmountCents: stripeFeeDetails?.applicationFeeAmountCents ?? null,
+      fallbackApplicationFeeAmountCents: paymentBreakdown.stripe_application_fee_amount_cents,
+      totalStripeFeeCents: stripeFeeDetails?.feeCents ?? 0,
+    });
 
     currentStage = {
       code: "close_create_payment",
@@ -3824,6 +3920,9 @@ async function finalizeCloseCheckoutSession(
       paymentBreakdown,
       feeCents: stripeFeeDetails?.feeCents ?? 0,
       feeVatCents: stripeFeeDetails?.feeVatCents ?? 0,
+      stripeApplicationFeeAmountCents: closeSettledAmounts.applicationFeeAmountCents,
+      stripeProcessingFeeCents: closeSettledAmounts.stripeProcessingFeeCents,
+      producerNetCents: closeSettledAmounts.producerNetCents,
       raw: {
         flow_kind: "close",
         checkout_payment_session_id: checkoutPaymentSession.id,

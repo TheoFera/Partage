@@ -183,9 +183,11 @@ export type DbPayment = {
   platform_delivery_retained_cents?: number;
   producer_delivery_cents?: number;
   stripe_application_fee_amount_cents?: number;
+  stripe_processing_fee_cents?: number;
   producer_net_target_cents?: number;
   producer_card_net_cents?: number;
   producer_topup_due_cents?: number;
+  producer_net_cents?: number;
   fee_cents: number;
   fee_vat_cents?: number | null;
   refunded_amount_cents: number;
@@ -436,9 +438,11 @@ export type Payment = {
   platformDeliveryRetainedCents: number;
   producerDeliveryCents: number;
   stripeApplicationFeeAmountCents: number;
+  stripeProcessingFeeCents: number;
   producerNetTargetCents: number;
   producerCardNetCents: number;
   producerTopupDueCents: number;
+  producerNetCents: number;
   feeCents: number;
   feeVatCents: number;
   refundedAmountCents: number;

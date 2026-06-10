@@ -124,8 +124,10 @@ export interface PaymentBreakdown {
   platformDeliveryRetainedCents: number;
   producerDeliveryCents: number;
   stripeApplicationFeeAmountCents: number;
+  stripeProcessingFeeCents: number;
   producerCardNetCents: number;
   producerTopupDueCents: number;
+  producerNetCents: number;
 }
 
 export interface Product {

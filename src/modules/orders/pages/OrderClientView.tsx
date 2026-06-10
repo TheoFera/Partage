@@ -1421,14 +1421,26 @@ const sharerAvatarUpdatedAt =
     () => orderFullValue.payments.filter((payment) => PAID_PAYMENT_STATUSES.has(payment.status)),
     [orderFullValue.payments]
   );
+  const stripePaidPayments = React.useMemo(
+    () =>
+      paidPayments.filter(
+        (payment) =>
+          payment.amountCents > 0 &&
+          (payment.provider === 'stripe' ||
+            payment.provider === 'stripe_direct_connect' ||
+            Boolean(payment.stripePaymentIntentId) ||
+            Boolean(payment.stripeChargeId))
+      ),
+    [paidPayments]
+  );
   const paidTotalCents = React.useMemo(
     () => paidPayments.reduce((sum, payment) => sum + payment.amountCents, 0),
     [paidPayments]
   );
   const paymentFeeTotals = React.useMemo(() => {
-    return paidPayments.reduce(
+    return stripePaidPayments.reduce(
       (acc, payment) => {
-        const feeHt = Number.isFinite(payment.feeCents ?? NaN) ? payment.feeCents : 0;
+        const feeHt = Number.isFinite(payment.stripeProcessingFeeCents ?? NaN) ? payment.stripeProcessingFeeCents : 0;
         const feeVat = Number.isFinite(payment.feeVatCents ?? NaN) ? payment.feeVatCents : 0;
         const feeTtc = feeHt + feeVat;
         return {
@@ -1439,7 +1451,7 @@ const sharerAvatarUpdatedAt =
       },
       { feeHt: 0, feeVat: 0, feeTtc: 0 }
     );
-  }, [paidPayments]);
+  }, [stripePaidPayments]);
   const paymentFeeCents = paymentFeeTotals.feeTtc;
   const producerStatementPaymentFeesCents = paymentFeeCents;
   const baseDeliveryFeeCents = Math.max(0, Number.isFinite(order.deliveryFeeCents ?? NaN) ? order.deliveryFeeCents : 0);
