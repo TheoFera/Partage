@@ -10,7 +10,7 @@ import type {
   ProductionLot,
   RepartitionPoste,
 } from '../../../shared/types';
-import { mapDbLotToProductionLot, persistProductionLot } from '../../products/utils/lots';
+import { fetchLotReservationUsageByLotId, mapDbLotToProductionLot, persistProductionLot } from '../../products/utils/lots';
 import { fetchLotBreakdown, saveProducerLotBreakdown } from '../../products/utils/pricing';
 import type { ProducerLotsPlanningLot } from '../utils/lotsPlanning';
 
@@ -172,6 +172,10 @@ export function useProducerLotsPlanning({
           lotsByProductDbId.set(lot.product_id, current);
         });
       }
+      const lotUsageByLotId = await fetchLotReservationUsageByLotId(
+        supabaseClient,
+        Array.from(new Set(Array.from(lotsByProductDbId.values()).flat().map((lot) => lot.id)))
+      );
 
       setItems(
         products.map((product) => {
@@ -181,7 +185,7 @@ export function useProducerLotsPlanning({
             product,
             productDbId,
             lots: dbLots.map((dbLot) => {
-              const lot = mapDbLotToProductionLot(dbLot, product.measurement);
+              const lot = mapDbLotToProductionLot(dbLot, product.measurement, lotUsageByLotId[dbLot.id]);
               return {
                 productId: product.id,
                 productDbId,

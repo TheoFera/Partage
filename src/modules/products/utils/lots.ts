@@ -5,6 +5,21 @@ import { formatUnitWeightLabel } from './weight';
 
 type ProductMeasurement = Product['measurement'];
 type LotStatus = ProductionLot['statut'];
+type LotReservationUsageStatus = 'active' | 'consumed';
+
+type DbLotReservationUsageRow = {
+  lot_id: string;
+  reserved_units: number | null;
+  reserved_kg: number | null;
+  status: LotReservationUsageStatus;
+};
+
+export type LotReservationUsageSummary = {
+  activeUnits: number;
+  activeKg: number;
+  consumedUnits: number;
+  consumedKg: number;
+};
 
 type PersistProductionLotParams = {
   client: SupabaseClient;
@@ -28,9 +43,49 @@ const toQuantityNumber = (value: number | null | undefined) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export const mapDbLotToProductionLot = (lot: DbLot, measurement: ProductMeasurement): ProductionLot => {
-  const quantity = measurement === 'kg' ? toQuantityNumber(lot.stock_kg) : toQuantityNumber(lot.stock_units);
+const createEmptyLotReservationUsageSummary = (): LotReservationUsageSummary => ({
+  activeUnits: 0,
+  activeKg: 0,
+  consumedUnits: 0,
+  consumedKg: 0,
+});
+
+const toMetadataQuantityNumber = (value: unknown) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
+
+const resolveLotQuantitySnapshot = (
+  lot: DbLot,
+  measurement: ProductMeasurement,
+  usage?: LotReservationUsageSummary
+) => {
+  const remainingQuantity = measurement === 'kg' ? toQuantityNumber(lot.stock_kg) : toQuantityNumber(lot.stock_units);
   const metadata = lot.metadata as Record<string, unknown> | null;
+  const metadataTotalQuantity = toMetadataQuantityNumber(metadata?.initial_quantity);
+  const activeQuantity = measurement === 'kg' ? usage?.activeKg ?? 0 : usage?.activeUnits ?? 0;
+  const consumedQuantity = measurement === 'kg' ? usage?.consumedKg ?? 0 : usage?.consumedUnits ?? 0;
+  const derivedTotalQuantity = remainingQuantity + activeQuantity + consumedQuantity;
+  const totalQuantity = Math.max(
+    remainingQuantity,
+    metadataTotalQuantity ?? 0,
+    Number.isFinite(derivedTotalQuantity) ? derivedTotalQuantity : 0
+  );
+  return { metadata, remainingQuantity, totalQuantity };
+};
+
+export const mapDbLotToProductionLot = (
+  lot: DbLot,
+  measurement: ProductMeasurement,
+  usage?: LotReservationUsageSummary
+): ProductionLot => {
+  const { metadata, remainingQuantity, totalQuantity } = resolveLotQuantitySnapshot(lot, measurement, usage);
   // Timeline date mapping uses existing lot fields only:
   // start = metadata.sale_period_start -> produced_at -> created_at
   // end = metadata.sale_period_end
@@ -47,14 +102,45 @@ export const mapDbLotToProductionLot = (lot: DbLot, measurement: ProductMeasurem
     debut: startDate,
     fin: endDate,
     periodeDisponibilite: { debut: startDate, fin: endDate },
-    qteTotale: quantity,
-    qteRestante: quantity,
+    qteTotale: totalQuantity,
+    qteRestante: remainingQuantity,
     DLC_DDM: lot.dlc ?? lot.ddm ?? undefined,
     DLC_aReceptionEstimee: lot.dlc ?? lot.ddm ?? undefined,
     commentaire: lot.notes ?? lot.lot_comment ?? undefined,
     numeroLot: lot.lot_reference ?? undefined,
     statut: mapDbLotStatus(lot.status),
   };
+};
+
+export const fetchLotReservationUsageByLotId = async (
+  client: SupabaseClient,
+  lotIds: string[]
+): Promise<Record<string, LotReservationUsageSummary>> => {
+  const uniqueLotIds = Array.from(new Set(lotIds.filter(Boolean)));
+  if (!uniqueLotIds.length) return {};
+
+  const { data, error } = await client
+    .from('lot_reservations')
+    .select('lot_id, reserved_units, reserved_kg, status')
+    .in('lot_id', uniqueLotIds)
+    .in('status', ['active', 'consumed']);
+
+  if (error) throw error;
+
+  const usageByLotId: Record<string, LotReservationUsageSummary> = {};
+  ((data as DbLotReservationUsageRow[] | null) ?? []).forEach((row) => {
+    const current = usageByLotId[row.lot_id] ?? createEmptyLotReservationUsageSummary();
+    if (row.status === 'active') {
+      current.activeUnits += toQuantityNumber(row.reserved_units);
+      current.activeKg += toQuantityNumber(row.reserved_kg);
+    } else if (row.status === 'consumed') {
+      current.consumedUnits += toQuantityNumber(row.reserved_units);
+      current.consumedKg += toQuantityNumber(row.reserved_kg);
+    }
+    usageByLotId[row.lot_id] = current;
+  });
+
+  return usageByLotId;
 };
 
 export const mapProductionLotStatusToDb = (status: LotStatus): DbLot['status'] => {
@@ -185,6 +271,10 @@ const buildLotPersistencePayload = ({
     typeof normalizedLot.qteRestante === 'number'
       ? normalizedLot.qteRestante
       : resolvedTotalQuantity;
+  const boundedTotalQuantity =
+    resolvedTotalQuantity === undefined && resolvedRemainingQuantity === undefined
+      ? undefined
+      : Math.max(resolvedRemainingQuantity ?? 0, resolvedTotalQuantity ?? 0);
   const stockValue = resolvedRemainingQuantity ?? null;
   const basePayload = {
     status: mapProductionLotStatusToDb(normalizedLot.statut),
@@ -199,12 +289,13 @@ const buildLotPersistencePayload = ({
     metadata: {
       sale_period_start: normalizedLot.debut || null,
       sale_period_end: normalizedLot.fin || null,
+      initial_quantity: boundedTotalQuantity ?? null,
     },
   };
 
   return {
     normalizedLot,
-    resolvedTotalQuantity,
+    resolvedTotalQuantity: boundedTotalQuantity,
     resolvedRemainingQuantity,
     basePayload,
     createPayload: {

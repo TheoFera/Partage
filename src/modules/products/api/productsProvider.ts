@@ -3,7 +3,7 @@ import { getSupabaseClient } from '../../../shared/lib/supabaseClient';
 import { centsToEuros } from '../../../shared/lib/money';
 import { LOT_BREAKDOWN_NOTE, synchronizeLotBreakdownPosts } from '../../../shared/lib/lotPriceBreakdown';
 import { fetchLotByLotCode } from '../utils/pricing';
-import { mapDbLotToProductionLot } from '../utils/lots';
+import { fetchLotReservationUsageByLotId, mapDbLotToProductionLot, type LotReservationUsageSummary } from '../utils/lots';
 import {
   PRODUCER_LABELS_DESCRIPTION_COLUMN,
   PRODUCER_LABELS_TABLE,
@@ -97,7 +97,11 @@ const pickLatestLotForDisplay = (lots: DbLot[]) => {
 const mapListingRowToProduct = (
   row: ProductListingRow,
   client: SupabaseClient | null,
-  options?: { fallbackLot?: DbLot | null; lots?: DbLot[] }
+  options?: {
+    fallbackLot?: DbLot | null;
+    lots?: DbLot[];
+    lotUsageByLotId?: Record<string, LotReservationUsageSummary>;
+  }
 ): Product => {
   const measurement = row.sale_unit === 'kg' ? 'kg' : 'unit';
   const quantity = measurement === 'kg' ? toNumber(row.active_lot_stock_kg) : toNumber(row.active_lot_stock_units);
@@ -132,12 +136,17 @@ const mapListingRowToProduct = (
     inStock,
     measurement,
     weightKg: row.unit_weight_kg ?? undefined,
-    productions: options?.lots?.length ? mapLotsToProductions(options.lots, measurement) : undefined,
+    productions: options?.lots?.length
+      ? mapLotsToProductions(options.lots, measurement, options.lotUsageByLotId)
+      : undefined,
   };
 };
 
-const mapLotsToProductions = (lots: DbLot[], measurement: Product['measurement']): ProductionLot[] =>
-  lots.map((lot) => mapDbLotToProductionLot(lot, measurement));
+const mapLotsToProductions = (
+  lots: DbLot[],
+  measurement: Product['measurement'],
+  lotUsageByLotId: Record<string, LotReservationUsageSummary> = {}
+): ProductionLot[] => lots.map((lot) => mapDbLotToProductionLot(lot, measurement, lotUsageByLotId[lot.id]));
 
 const pickLatestActiveLot = (lots: DbLot[]) => {
   const activeLots = lots.filter((lot) => lot.status === 'active');
@@ -400,6 +409,7 @@ const mapProductDetail = (params: {
   productRow: DbProduct;
   images: DbProductImage[];
   lots: DbLot[];
+  lotUsageByLotId: Record<string, LotReservationUsageSummary>;
   journeySteps: DbProductJourneyStep[];
   lotLabels: DbLotLabel[];
   producerLabels: DbProducerLabel[];
@@ -417,6 +427,7 @@ const mapProductDetail = (params: {
     productRow,
     images,
     lots,
+    lotUsageByLotId,
     journeySteps,
     lotLabels,
     producerLabels,
@@ -523,7 +534,7 @@ const mapProductDetail = (params: {
               .map((step) => ({ label: step.etape, date: step.date as string })),
           }
         : undefined,
-    productions: mapLotsToProductions(lots, product.measurement),
+    productions: mapLotsToProductions(lots, product.measurement, lotUsageByLotId),
     repartitionValeur: mapPriceBreakdown(
       priceBreakdown,
       selectedLot?.price_cents ?? null,
@@ -615,11 +626,20 @@ export const listProducts = async (): Promise<Product[]> => {
     }
   }
 
+  const lotUsageByLotId = await fetchLotReservationUsageByLotId(
+    client,
+    Array.from(new Set(Array.from(lotsByProductId.values()).flat().map((lot) => lot.id)))
+  ).catch((error) => {
+    console.warn('Supabase lot reservations usage error:', error);
+    return {};
+  });
+
   return listingRows.map((row) => {
     const lots = lotsByProductId.get(row.product_id) ?? [];
     return mapListingRowToProduct(row, client, {
       fallbackLot: pickLatestLotForDisplay(lots),
       lots,
+      lotUsageByLotId,
     });
   });
 };
@@ -665,6 +685,13 @@ export const getProductByCode = async (
   ]);
 
   const lots = (lotsResult.data as DbLot[]) ?? [];
+  const lotUsageByLotId = await fetchLotReservationUsageByLotId(
+    client,
+    lots.map((lot) => lot.id)
+  ).catch((error) => {
+    console.warn('Supabase lot reservations usage error:', error);
+    return {};
+  });
   const producerLabels = (producerLabelsResult.data as DbProducerLabel[]) ?? [];
   const selectedLot = pickLatestActiveLot(lots);
   const lotLabelsResult = selectedLot
@@ -691,6 +718,7 @@ export const getProductByCode = async (
     productRow: productRow as DbProduct,
     images: (imagesResult.data as DbProductImage[]) ?? [],
     lots,
+    lotUsageByLotId,
     journeySteps: (journeyResult.data as DbProductJourneyStep[]) ?? [],
     lotLabels: (lotLabelsResult.data as DbLotLabel[]) ?? [],
     producerLabels,
@@ -772,12 +800,21 @@ export const getLotByCode = async (
     (imagesResult.data as DbProductImage[]) ?? []
   );
 
+  const lots = (lotsResult.data as DbLot[]) ?? [];
+  const lotUsageByLotId = await fetchLotReservationUsageByLotId(
+    client,
+    lots.map((lot) => lot.id)
+  ).catch((error) => {
+    console.warn('Supabase lot reservations usage error:', error);
+    return {};
+  });
   const producerLabels = (producerLabelsResult.data as DbProducerLabel[]) ?? [];
   const detail = mapProductDetail({
     product,
     productRow: productRow as DbProduct,
     images: (imagesResult.data as DbProductImage[]) ?? [],
-    lots: (lotsResult.data as DbLot[]) ?? [],
+    lots,
+    lotUsageByLotId,
     journeySteps: (journeyResult.data as DbProductJourneyStep[]) ?? [],
     lotLabels: (lotLabelsResult.data as DbLotLabel[]) ?? [],
     producerLabels,
