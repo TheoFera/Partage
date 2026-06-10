@@ -3545,7 +3545,7 @@ const sharerAvatarUpdatedAt =
             )}
           </div>
 
-            {!isProducer && !isSharerSelectionOnlyMode && (
+            {!isProducer && !isSharerSelectionOnlyMode && isOrderOpen && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-6 space-y-4">
             <div className="order-client-view__payment-summary">
               <div className="order-client-view__payment-row">
@@ -3577,21 +3577,15 @@ const sharerAvatarUpdatedAt =
               ) : null}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
-              {isOrderOpen ? (
-                <button
-                  type="button"
-                  onClick={handlePurchase}
-                  disabled={totalCards === 0 || isWorking}
-                  className="order-client-view__purchase-button"
-                >
-                  <ShoppingCart className="w-4 h-4" />
-                  Payer
-                </button>
-              ) : (
-                <div className="text-xs text-[#6B7280] font-semibold">
-                  Paiement indisponible pour le moment
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={handlePurchase}
+                disabled={totalCards === 0 || isWorking}
+                className="order-client-view__purchase-button"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                Payer
+              </button>
             </div>
             </div>
             )}
@@ -3695,12 +3689,13 @@ const sharerAvatarUpdatedAt =
                 </button>
               </div>
             )}
-            {producerInvoice && (
+            {isProducer && producerInvoice && (
               <div className="order-client-view__pickup-code-card">
                 <p className="order-client-view__pickup-code-label">
-                  Facture producteur :
+                  Votre facture plateforme :
                   <span className="order-client-view__pickup-code">{producerInvoice.numero}</span>
                 </p>
+                <p className="order-client-view__pickup-code-label">Facture Plateforme vers producteur</p>
                 <p className="order-client-view__pickup-code-label">
                   Total TTC :{' '}
                   <span className="order-client-view__pickup-code">
@@ -3713,7 +3708,7 @@ const sharerAvatarUpdatedAt =
                   className="order-client-view__purchase-button"
                   disabled={isInvoiceLoading}
                 >
-                  {producerInvoice.pdfPath ? 'Télecharger (PDF)' : 'PDF en cours de generation'}
+                  {producerInvoice.pdfPath ? 'Télécharger (PDF)' : 'PDF en cours de génération'}
                 </button>
               </div>
             )}

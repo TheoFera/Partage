@@ -3112,10 +3112,11 @@ async function computeClosePaymentBreakdown(
     params.order.delivery_option === "producer_pickup"
       ? toNonNegativeInteger(params.order.pickup_delivery_fee_cents)
       : 0;
-  const totalEconomicCents = Math.max(
-    0,
-    sharerProductsValueCents - (otherParticipantShareCents + sharerOwnShareCents + pickupShareBonusCents),
+  const sharerCreditsAppliedCents = Math.min(
+    sharerProductsValueCents,
+    otherParticipantShareCents + sharerOwnShareCents + pickupShareBonusCents,
   );
+  const totalEconomicCents = Math.max(0, sharerProductsValueCents - sharerCreditsAppliedCents);
   const coopCreditUsedCents = params.useCoopBalance
     ? Math.min(Math.max(0, params.coopBalanceCents), totalEconomicCents)
     : 0;
@@ -3138,7 +3139,9 @@ async function computeClosePaymentBreakdown(
   const platformDeliveryRetainedCents = params.order.delivery_option === "chronofresh" ? deliveryAllocatedCents : 0;
   const producerDeliveryCents = params.order.delivery_option === "producer_delivery" ? deliveryAllocatedCents : 0;
   const platformRetainedTargetCents = platformServiceFeeCents + platformDeliveryRetainedCents;
-  const producerNetTargetCents = Math.max(0, totalEconomicCents - platformRetainedTargetCents);
+  // The sharer's discount lowers what the sharer pays, but it must still be
+  // compensated to the producer via a platform-funded topup.
+  const producerNetTargetCents = Math.max(0, sharerProductsValueCents - platformRetainedTargetCents);
   const stripeApplicationFeeAmountCents = Math.min(cardAmountCents, platformRetainedTargetCents);
   const producerCardNetCents = Math.max(0, cardAmountCents - stripeApplicationFeeAmountCents);
   const producerTopupDueCents = Math.max(0, producerNetTargetCents - producerCardNetCents);
