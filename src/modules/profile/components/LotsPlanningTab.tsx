@@ -748,7 +748,7 @@ export function LotsPlanningTab({
               </div>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-gray-200">
+            <div className="relative isolate overflow-hidden rounded-2xl border border-gray-200">
               <div
                 className="grid min-w-0"
                 style={{
