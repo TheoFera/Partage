@@ -1852,7 +1852,7 @@ export const fetchParticipantInvoices = async (orderId: string, currentProfileId
   fetchInvoices({ orderId, serie: 'PROD_CLIENT', clientProfileId: currentProfileId });
 
 export const fetchProducerInvoices = async (orderId: string, producerProfileId: string): Promise<Facture[]> =>
-  fetchInvoices({ orderId, serie: 'PLAT_PROD', producerProfileId });
+  fetchInvoices({ orderId, serie: 'PLAT_PROD', clientProfileId: producerProfileId });
 
 export const fetchInvoiceLines = async (invoiceId: string): Promise<FactureLigne[]> => {
   const client = getClient();
