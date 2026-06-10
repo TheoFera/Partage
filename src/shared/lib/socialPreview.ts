@@ -13,7 +13,7 @@ type SocialPreviewOptions = {
   urlPath?: string;
 };
 
-export const DEFAULT_SOCIAL_PREVIEW_IMAGE_PATH = '/social-preview-partage-v1.svg';
+export const DEFAULT_SOCIAL_PREVIEW_IMAGE_PATH = '/social-preview-logo.png';
 export const SITE_SOCIAL_PREVIEW_TITLE = 'Partage | Commandez ensemble, achetez en direct';
 export const SITE_SOCIAL_PREVIEW_DESCRIPTION =
   'Entre amis, entre collègues, entre voisins, crée ou participe à des commandes groupées.';
@@ -147,6 +147,18 @@ export const applySocialPreviewMeta = (meta: SocialPreviewMeta) => {
   upsertMetaTag('meta[property="og:image"]', {
     property: 'og:image',
     content: meta.imageUrl,
+  });
+  upsertMetaTag('meta[property="og:image:type"]', {
+    property: 'og:image:type',
+    content: 'image/png',
+  });
+  upsertMetaTag('meta[property="og:image:width"]', {
+    property: 'og:image:width',
+    content: '1200',
+  });
+  upsertMetaTag('meta[property="og:image:height"]', {
+    property: 'og:image:height',
+    content: '630',
   });
   upsertMetaTag('meta[property="og:url"]', {
     property: 'og:url',
