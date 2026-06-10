@@ -2630,7 +2630,7 @@ export default function App() {
             })
             .catch(() => {
               setUser(mapSupabaseUserToProfile(data.session!.user));
-              prevRoleRef.current = (data.session!.user.user_metadata?.role as User['role']) ?? null;
+              prevRoleRef.current = normalizeUserRole(data.session!.user.user_metadata?.role as string | undefined);
             });
         }
       })
@@ -2645,7 +2645,7 @@ export default function App() {
           })
           .catch(() => {
             setUser(mapSupabaseUserToProfile(session.user));
-            prevRoleRef.current = (session.user.user_metadata?.role as User['role']) ?? null;
+            prevRoleRef.current = normalizeUserRole(session.user.user_metadata?.role as string | undefined);
           });
       } else {
         setUser(null);
@@ -5097,10 +5097,7 @@ export default function App() {
           }
           const results = (data ?? [])
             .map((row): ProfileSearchResult | null => {
-              const role =
-                row.role === 'participant' || row.role === 'sharer' || row.role === 'producer'
-                  ? (row.role as UserRole)
-                  : null;
+              const role = normalizeUserRole(row.role as string | undefined);
               if (!role || !row.handle) return null;
               return {
                 id: row.id,
