@@ -48,6 +48,13 @@ import {
   setStoredAuthRedirect,
 } from './shared/lib/authRedirect';
 import { centsToEuros, eurosToCents, formatEurosFromCents } from './shared/lib/money';
+import {
+  applySocialPreviewMeta,
+  orderPreviewMeta,
+  productPreviewMeta,
+  profilePreviewMeta,
+  sitePreviewMeta,
+} from './shared/lib/socialPreview';
 import { buildOwnedStorageObjectPath, getAuthenticatedStorageOwnerId } from './shared/lib/storageObjectPath';
 import { canProducerCreateOrders, fetchProducerStripeState } from './shared/lib/producerStripe';
 import { getLotByCode, getProductByCode, listProducts } from './modules/products/api/productsProvider';
@@ -4611,10 +4618,42 @@ export default function App() {
   const sharePayload = React.useMemo(() => {
     return buildCurrentSharePayload();
   }, [buildCurrentSharePayload]);
+  const currentSocialPreview = React.useMemo(() => {
+    const currentPath = `${location.pathname}${location.search}${location.hash}`;
+    if (isOrderView && selectedOrder) {
+      return orderPreviewMeta(selectedOrder, {
+        urlPath: `/cmd/${selectedOrder.orderCode ?? selectedOrder.id}`,
+      });
+    }
+    if (isProductView && selectedProduct) {
+      return productPreviewMeta(selectedProduct, {
+        urlPath: activeProductShareContext?.sharePath || getProductPath(selectedProduct),
+      });
+    }
+    if (isProfileView && profileShareSource) {
+      return profilePreviewMeta(profileShareSource, { urlPath: location.pathname });
+    }
+    return sitePreviewMeta({ urlPath: currentPath || '/' });
+  }, [
+    activeProductShareContext?.sharePath,
+    getProductPath,
+    isOrderView,
+    isProductView,
+    isProfileView,
+    location.hash,
+    location.pathname,
+    location.search,
+    profileShareSource,
+    selectedOrder,
+    selectedProduct,
+  ]);
   const isOwnProfileView =
     isAuthenticated &&
     (location.pathname === '/profil' ||
       (!!user?.handle && location.pathname === `/profil/${user.handle}`));
+  React.useEffect(() => {
+    applySocialPreviewMeta(currentSocialPreview);
+  }, [currentSocialPreview]);
   React.useEffect(() => {
     if (!isOwnProfileView) return;
     const params = new URLSearchParams(location.search);

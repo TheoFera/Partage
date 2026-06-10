@@ -818,7 +818,7 @@ export function LotsPlanningTab({
                         left: hasHorizontalOverflow ? clampedTodayLineLeft : toTimelinePercent(todayLineOffsetDays),
                         width: 0,
                         height: totalTimelineHeight,
-                        zIndex: 90,
+                        zIndex: 25,
                       }}
                     >
                       <div

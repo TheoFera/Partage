@@ -1,0 +1,54 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="60" x2="1120" y2="570" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF5E6" />
+      <stop offset="1" stop-color="#F4D7B8" />
+    </linearGradient>
+    <linearGradient id="accent" x1="340" y1="120" x2="980" y2="540" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB067" />
+      <stop offset="1" stop-color="#FF6B4A" />
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1200" height="630" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="32" flood-color="#D16B32" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" rx="40" fill="url(#bg)" />
+  <circle cx="1050" cy="95" r="120" fill="#FFE3C2" />
+  <circle cx="170" cy="560" r="170" fill="#F9E2C7" />
+  <path d="M889 112C952 112 1003 163 1003 226C1003 289 952 340 889 340C826 340 775 289 775 226C775 163 826 112 889 112Z" fill="#FFF0DC" />
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="72" width="1060" height="486" rx="34" fill="#FFFDF9" />
+  </g>
+
+  <g transform="translate(118 120)">
+    <line x1="40" y1="97" x2="139" y2="22" stroke="#FF6D4D" stroke-width="24" stroke-linecap="round" />
+    <line x1="40" y1="97" x2="139" y2="171" stroke="#FF6D4D" stroke-width="24" stroke-linecap="round" />
+    <circle cx="40" cy="97" r="40" fill="#FF6D4D" />
+    <circle cx="139" cy="22" r="40" fill="#FF6D4D" />
+    <circle cx="139" cy="171" r="40" fill="#FF6D4D" />
+  </g>
+
+  <text x="300" y="168" fill="#FF6B4A" font-family="Fredoka, Trebuchet MS, Arial, sans-serif" font-size="58" font-weight="600">
+    Partage
+  </text>
+
+  <text x="118" y="288" fill="#1F2937" font-family="Trebuchet MS, Arial, sans-serif" font-size="64" font-weight="700">
+    Commandez ensemble,
+  </text>
+  <text x="118" y="364" fill="#1F2937" font-family="Trebuchet MS, Arial, sans-serif" font-size="64" font-weight="700">
+    achetez en direct
+  </text>
+  <text x="118" y="442" fill="#7C4A28" font-family="Trebuchet MS, Arial, sans-serif" font-size="33" font-weight="500">
+    Entre amis, entre collègues, entre voisins
+  </text>
+
+  <rect x="118" y="478" width="412" height="16" rx="8" fill="url(#accent)" />
+
+  <g opacity="0.92">
+    <path d="M862 423C900 389 954 369 1013 369C1065 369 1112 385 1147 413" stroke="#F2B07A" stroke-width="28" stroke-linecap="round" />
+    <path d="M826 474C881 438 949 418 1024 418C1068 418 1110 425 1148 439" stroke="#FFB067" stroke-width="22" stroke-linecap="round" />
+    <path d="M792 523C857 484 936 462 1024 462C1061 462 1097 466 1131 474" stroke="#FF6B4A" stroke-width="18" stroke-linecap="round" />
+  </g>
+</svg>
