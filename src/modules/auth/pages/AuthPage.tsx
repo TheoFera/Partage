@@ -198,7 +198,7 @@ export function AuthPage({ supabaseClient, onAuthSuccess }: AuthPageProps) {
             emailRedirectTo: authEmailRedirectTo,
             data: {
               full_name: displayName,
-              role: 'sharer',
+              role: 'participant',
               handle: safeHandle,
               phone,
               city,

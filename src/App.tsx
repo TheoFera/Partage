@@ -703,7 +703,7 @@ type AuthRedirectExtras = {
 const normalizeUserRole = (role?: string | null): UserRole => {
   if (role === 'client') return 'participant';
   const allowedRoles: UserRole[] = ['producer', 'sharer', 'participant'];
-  return allowedRoles.includes(role as UserRole) ? (role as UserRole) : 'sharer';
+  return allowedRoles.includes(role as UserRole) ? (role as UserRole) : 'participant';
 };
 
 const mapSupabaseUserToProfile = (authUser: SupabaseAuthUser): User => {
@@ -1127,7 +1127,7 @@ const mapProfileRowToUser = (
   authUser?: SupabaseAuthUser | null,
   legalEntityRow?: LegalEntityRow | null
 ): User => {
-  const rawRole = (row.role as string) || (authUser?.user_metadata?.role as string) || 'sharer';
+  const rawRole = (row.role as string) || (authUser?.user_metadata?.role as string) || 'participant';
   const safeRole = normalizeUserRole(rawRole);
   const fallbackName =
     authUser?.user_metadata?.full_name ||
@@ -2541,7 +2541,7 @@ export default function App() {
               id: authUser.id,
               handle,
               name: authUser.user_metadata?.full_name || authUser.email || handle,
-              role: authUser.user_metadata?.role || 'sharer',
+              role: authUser.user_metadata?.role || 'participant',
               profile_visibility: 'public',
               address_visibility: 'private',
               producer_id: authUser.user_metadata?.producerId,
