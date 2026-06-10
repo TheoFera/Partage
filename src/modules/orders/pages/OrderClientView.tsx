@@ -2027,7 +2027,16 @@ const sharerAvatarUpdatedAt =
     pickupDurationLabel && pickupWindowEndDate
       ? `${pickupDurationLabel} (jusqu'au ${pickupWindowEndDate.toLocaleDateString('fr-FR')})`
       : pickupDurationLabel;
-  const isPickupSelectionOpen = ['delivered', 'distributed', 'finished'].includes(order.status);
+  const isPickupSelectionOpen = [
+    'open',
+    'locked',
+    'confirmed',
+    'preparing',
+    'prepared',
+    'delivered',
+    'distributed',
+    'finished',
+  ].includes(order.status);
   const isAcceptedParticipant = Boolean(
     myParticipant && myParticipant.participationStatus === 'accepted' && myParticipant.role === 'participant'
   );
@@ -2175,7 +2184,7 @@ const sharerAvatarUpdatedAt =
       : null;
   const pickupSlotHeaderStatus = React.useMemo(() => {
     if (!isAcceptedParticipant) return null;
-    if (!isPickupSelectionOpen) return 'Sélection possible après livraison';
+    if (!isPickupSelectionOpen) return 'Réservation indisponible pour cette commande';
     if (isSelectedDatePast) return "Impossible de réserver dans le passé";
     return null;
   }, [isAcceptedParticipant, isPickupSelectionOpen, isSelectedDatePast]);
@@ -3261,7 +3270,11 @@ const sharerAvatarUpdatedAt =
                         </>
                       ) : (
                         <p className="order-client-view__calendar-slots-note">
-                          Une fois la commande reçu par le créateur de la commande, vous pourrez choisir votre rendez-vous de récupération.
+                          {!isAcceptedParticipant
+                            ? 'Votre rendez-vous de récupération sera réservable une fois votre participation acceptée.'
+                            : isPickupSelectionOpen
+                              ? 'Sélectionnez une date sur le calendrier pour voir les créneaux disponibles.'
+                              : 'La réservation du rendez-vous de récupération n’est pas disponible pour cette commande.'}
                         </p>
                       )}
                     </div>
