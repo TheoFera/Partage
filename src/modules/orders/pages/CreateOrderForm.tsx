@@ -2533,6 +2533,7 @@ function ShareProductsCarousel({
 }) {
   const [startIndex, setStartIndex] = React.useState(0);
   const [visibleCount, setVisibleCount] = React.useState(MIN_VISIBLE_CARDS);
+  const [useHorizontalScroll, setUseHorizontalScroll] = React.useState(false);
   const [draftValues, setDraftValues] = React.useState<Record<string, string>>({});
   const [focusedProductId, setFocusedProductId] = React.useState<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -2560,6 +2561,11 @@ function ShareProductsCarousel({
     return Math.max(MIN_VISIBLE_CARDS, Math.floor(available / perCard) || 0);
   }, []);
 
+  const containerMinWidth =
+    MIN_VISIBLE_CARDS * CARD_WIDTH +
+    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
+    CONTAINER_SIDE_PADDING * 2;
+
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -2568,34 +2574,32 @@ function ShareProductsCarousel({
       const width = entry?.contentRect?.width ?? el.clientWidth;
       const next = computeVisible(width);
       setVisibleCount((prev) => (prev === next ? prev : next));
+      setUseHorizontalScroll(width < containerMinWidth);
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [computeVisible]);
+  }, [computeVisible, containerMinWidth]);
 
   React.useEffect(() => {
     const maxIndex = Math.max(0, products.length - visibleCount);
     setStartIndex((prev) => Math.min(prev, maxIndex));
   }, [products.length, visibleCount]);
 
-  const useCarousel = products.length > visibleCount;
+  const useCarousel = !useHorizontalScroll && products.length > visibleCount;
   const maxIndex = Math.max(0, products.length - visibleCount);
 
-  const containerMinWidth =
-    MIN_VISIBLE_CARDS * CARD_WIDTH +
-    (MIN_VISIBLE_CARDS - 1) * CARD_GAP +
-    CONTAINER_SIDE_PADDING * 2;
-
   const containerStyle: React.CSSProperties = {
-    minWidth: `${containerMinWidth}px`,
     width: '100%',
     paddingInline: CONTAINER_SIDE_PADDING,
     position: 'relative',
+    overflow: 'hidden',
   };
 
-  const productsToShow = useCarousel
-    ? products.slice(startIndex, startIndex + visibleCount)
-    : products;
+  const productsToShow = useHorizontalScroll
+    ? products
+    : useCarousel
+      ? products.slice(startIndex, startIndex + visibleCount)
+      : products;
 
   const canScrollLeft = useCarousel && startIndex > 0;
   const canScrollRight = useCarousel && startIndex < maxIndex;
@@ -2614,7 +2618,16 @@ function ShareProductsCarousel({
     <div className="relative" style={containerStyle} ref={containerRef}>
       <div
         className="flex gap-3"
-        style={{ alignItems: 'stretch', justifyContent: useCarousel ? 'flex-start' : 'center' }}
+        style={{
+          alignItems: 'stretch',
+          justifyContent: useHorizontalScroll || useCarousel ? 'flex-start' : 'center',
+          overflowX: useHorizontalScroll ? 'auto' : 'visible',
+          overflowY: 'hidden',
+          paddingBottom: useHorizontalScroll ? 8 : 0,
+          scrollSnapType: useHorizontalScroll ? 'x proximity' : undefined,
+          WebkitOverflowScrolling: useHorizontalScroll ? 'touch' : undefined,
+          touchAction: useHorizontalScroll ? 'pan-x' : undefined,
+        }}
       >
         {productsToShow.map((product) => {
           const quantity = quantities[product.id] ?? 0;
@@ -2632,6 +2645,7 @@ function ShareProductsCarousel({
                 flexDirection: 'column',
                 alignItems: 'center',
                 gap: 10,
+                scrollSnapAlign: useHorizontalScroll ? 'start' : undefined,
               }}
             >
               <ProductResultCard
@@ -2699,9 +2713,16 @@ function ShareProductsCarousel({
           type="button"
           onClick={goLeft}
           aria-label="Défiler vers la gauche"
-          className="order-client-view__carousel-button order-client-view__carousel-button--left"
+          className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full border transition"
+          style={{
+            borderColor: '#FF6B4A',
+            background: '#FF6B4A',
+            boxShadow: '0 12px 26px rgba(255,107,74,0.35)',
+            width: 39,
+            height: 39,
+          }}
         >
-          <ChevronLeft className="w-4 h-4 text-[#FF6B4A] mx-auto" />
+          <ChevronLeft className="text-white mx-auto" style={{ width: 20, height: 20 }} />
         </button>
       )}
 
@@ -2710,9 +2731,16 @@ function ShareProductsCarousel({
           type="button"
           onClick={goRight}
           aria-label="Défiler vers la droite"
-          className="order-client-view__carousel-button order-client-view__carousel-button--right"
+          className="absolute right-0 top-1/2 -translate-y-1/2 rounded-full border transition"
+          style={{
+            borderColor: '#FF6B4A',
+            background: '#FF6B4A',
+            boxShadow: '0 12px 26px rgba(255,107,74,0.35)',
+            width: 39,
+            height: 39,
+          }}
         >
-          <ChevronRight className="w-4 h-4 text-[#FF6B4A] mx-auto" />
+          <ChevronRight className="text-white mx-auto" style={{ width: 20, height: 20 }} />
         </button>
       )}
     </div>

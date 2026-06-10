@@ -16,7 +16,7 @@ type SocialPreviewOptions = {
 export const DEFAULT_SOCIAL_PREVIEW_IMAGE_PATH = '/social-preview-partage-v1.svg';
 export const SITE_SOCIAL_PREVIEW_TITLE = 'Partage | Commandez ensemble, achetez en direct';
 export const SITE_SOCIAL_PREVIEW_DESCRIPTION =
-  'Commandez ensemble, achetez en direct. Entre amis, entre collègues, entre voisins. Découvrez des produits en direct et rejoignez des commandes partagées sur Partage.';
+  'Entre amis, entre collègues, entre voisins, crée ou participe à des commandes groupées.';
 
 const PROFILE_ROLE_DESCRIPTIONS: Record<User['role'], string> = {
   producer: 'Découvrez ce producteur et ses produits directement sur Partage.',
