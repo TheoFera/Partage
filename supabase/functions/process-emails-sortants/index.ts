@@ -11,7 +11,7 @@ const BREVO_SENDER_EMAIL = Deno.env.get("BREVO_SENDER_EMAIL") ?? "";
 const BREVO_SENDER_NAME = Deno.env.get("BREVO_SENDER_NAME") ?? "Partage";
 const BILLING_BUCKET = Deno.env.get("BILLING_BUCKET") ?? "facturation-documents";
 const LOGO_PUBLIC_URL = Deno.env.get("LOGO_PUBLIC_URL") ?? "";
-const FUNCTION_VERSION = "process_emails_sortants_2026_04_09_fix_kg_qty_01";
+const FUNCTION_VERSION = "process_emails_sortants_2026_06_10_remove_client_invoice_attachment_01";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
   <g fill="none" stroke="#FF6D4D" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
@@ -318,21 +318,25 @@ async function sendBrevoEmail(opts: {
   toEmail: string;
   subject: string;
   html: string;
-  attachmentName: string;
-  attachmentBytes: Uint8Array;
+  attachmentName?: string;
+  attachmentBytes?: Uint8Array;
 }) {
   if (!BREVO_API_KEY) throw new Error("BREVO_API_KEY manquant");
   if (!BREVO_SENDER_EMAIL) throw new Error("BREVO_SENDER_EMAIL manquant");
-
-  const b64 = encodeBase64(opts.attachmentBytes);
 
   const payload = {
     sender: { email: BREVO_SENDER_EMAIL, name: BREVO_SENDER_NAME },
     to: [{ email: opts.toEmail }],
     subject: opts.subject,
     htmlContent: opts.html,
-    attachment: [{ name: opts.attachmentName, content: b64 }],
   };
+
+  if (opts.attachmentName && opts.attachmentBytes) {
+    const b64 = encodeBase64(opts.attachmentBytes);
+    Object.assign(payload, {
+      attachment: [{ name: opts.attachmentName, content: b64 }],
+    });
+  }
 
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -722,6 +726,13 @@ Deno.serve(async (req) => {
               : kind === "RELEVE_REGLEMENT"
                 ? "Bonjour, vous trouverez en piece jointe le relevé de réglement de cette commande producteur."
                 : "Bonjour, vous trouverez en piece jointe votre document.";
+      const invoiceDownloadNoticeHtml =
+        kind === "FACTURE_CLIENT"
+          ? `
+        <div style="margin:0 0 18px;padding:12px 14px;background:#f8f8f8;border:1px solid #eee;border-radius:8px;color:#333;font-size:14px;">
+          Facture téléchargeable sur la page de la commande.
+        </div>`
+          : "";
       const paymentLabel = isProducerDocument ? "Paiements participants" : "Paiement";
       const paymentValue = isProducerDocument ? "Carte bancaire / gains de cooperation" : "Carte bancaire";
       const pickupCodeLabel = pickupCode ?? "";
@@ -761,6 +772,7 @@ Deno.serve(async (req) => {
       <div style="padding:24px 28px;">
         <h2 style="margin:0 0 12px;font-size:20px;">${titleText}</h2>
         <p style="margin:0 0 16px;color:#555;">${introText}</p>
+        ${invoiceDownloadNoticeHtml}
         <div style="background:#f8f8f8;border:1px solid #eee;padding:14px 16px;margin-bottom:18px;">
           <table style="width:100%;border-collapse:collapse;font-size:14px;">
             <tr>
@@ -833,12 +845,13 @@ Deno.serve(async (req) => {
   </body>
 </html>`;
 
+      const includeInvoiceAttachment = kind !== "FACTURE_CLIENT";
       const brevoResp = await sendBrevoEmail({
         toEmail,
         subject,
         html,
-        attachmentName: `${kind}-${facture.numero}.pdf`,
-        attachmentBytes: pdfBytes,
+        attachmentName: includeInvoiceAttachment ? `${kind}-${facture.numero}.pdf` : undefined,
+        attachmentBytes: includeInvoiceAttachment ? pdfBytes : undefined,
       });
 
       const { error: updEmailErr } = await supabase
