@@ -842,9 +842,10 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
   const client = getClient();
   const orderRow = await getOrderByCode(orderCode);
 
-  const [slotsRes, participantsRes, itemsRes, paymentsRes, orderProductsRes] = await Promise.all([
+  const [slotsRes, participantsRes, participantCountRes, itemsRes, paymentsRes, orderProductsRes] = await Promise.all([
     client.from('order_pickup_slots').select('*').eq('order_id', orderRow.id),
     client.from('order_participants').select('*').eq('order_id', orderRow.id),
+    client.from('order_participants').select('id', { count: 'exact', head: true }).eq('order_id', orderRow.id),
     client.from('order_items').select('*').eq('order_id', orderRow.id),
     client.from('payments').select('*').eq('order_id', orderRow.id),
     client.from('order_products').select('*').eq('order_id', orderRow.id).order('sort_order', { ascending: true }),
@@ -910,6 +911,7 @@ export const getOrderFullByCode = async (orderCode: string): Promise<OrderFull> 
     order: orderRow,
     productsOffered,
     pickupSlots: ((slotsRes.data as DbOrderPickupSlot[] | null) ?? []).map(mapPickupSlotRow),
+    participantCount: participantCountRes.error ? null : participantCountRes.count ?? null,
     participants: mappedParticipants,
     items: ((itemsRes.data as DbOrderItem[] | null) ?? []).map(mapItemRow),
     payments: ((paymentsRes.data as DbPayment[] | null) ?? []).map(mapPaymentRow),

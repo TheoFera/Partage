@@ -507,6 +507,7 @@ export type OrderFull = {
   order: Order;
   productsOffered: OrderProduct[];
   pickupSlots: OrderPickupSlot[];
+  participantCount: number | null;
   participants: OrderParticipant[];
   items: OrderItem[];
   payments: Payment[];

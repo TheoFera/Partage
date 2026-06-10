@@ -503,6 +503,7 @@ const emptyOrderFull: OrderFull = {
   order: emptyOrder,
   productsOffered: [],
   pickupSlots: [],
+  participantCount: null,
   participants: [],
   items: [],
   payments: [],
@@ -2532,13 +2533,23 @@ const sharerAvatarUpdatedAt =
   const hasVisibleColumns = Object.values(viewerVisibility).some(Boolean);
   const canShowParticipants = isOwner || (isAuthenticated && hasVisibleColumns);
   const shouldShowPickupCodeColumn = canShowPickupCodes;
+  const totalParticipantsCount = orderFullValue.participantCount;
+  const hasOnlyOwnParticipationVisible =
+    !isOwner &&
+    myParticipant?.role === 'participant' &&
+    participantsWithTotals.length === 1 &&
+    participantsWithTotals[0]?.id === myParticipant.id;
   const participantsTitle = !canShowParticipants
     ? 'Liste des participants à la commande'
-    : participantsWithTotals.length
-      ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''} à la commande`
-      : isOwner
-        ? 'Aucun participant pour le moment à la commande'
-        : 'Liste des participants à la commande';
+    : typeof totalParticipantsCount === 'number' && totalParticipantsCount > participantsWithTotals.length
+      ? `${totalParticipantsCount} participant${totalParticipantsCount > 1 ? 's' : ''} à la commande`
+      : hasOnlyOwnParticipationVisible
+        ? 'Liste des participants à la commande'
+        : participantsWithTotals.length
+          ? `${participantsWithTotals.length} participant${participantsWithTotals.length > 1 ? 's' : ''} à la commande`
+          : isOwner
+            ? 'Aucun participant pour le moment à la commande'
+            : 'Liste des participants à la commande';
   const canPrintParticipantsTable = isProducer && canShowParticipants && participantsWithTotals.length > 0;
   const participantsCountFooterLabel = `${participantsWithTotals.length} participant${
     participantsWithTotals.length > 1 ? 's' : ''
