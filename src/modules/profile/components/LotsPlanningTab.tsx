@@ -151,7 +151,7 @@ const formatLotQuantityLabel = (product: Product, lot: ProductionLot) => {
     }
     return String(Math.round(value));
   };
-  return `${formatValue(lot.qteTotale)} ${unitLabel} / ${formatValue(lot.qteRestante)} ${unitLabel}`;
+  return `${formatValue(lot.qteRestante)} ${unitLabel} / ${formatValue(lot.qteTotale)} ${unitLabel}`;
 };
 
 export function LotsPlanningTab({

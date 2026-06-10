@@ -107,6 +107,8 @@ const mapListingRowToProduct = (
   const quantity = measurement === 'kg' ? toNumber(row.active_lot_stock_kg) : toNumber(row.active_lot_stock_units);
   const inStock = Boolean(row.active_lot_code) && quantity > 0;
   const fallbackLot = options?.fallbackLot ?? null;
+  const activeLot =
+    options?.lots?.find((lot) => lot.lot_code === row.active_lot_code) ?? fallbackLot ?? null;
   const priceCents = row.active_lot_price_cents ?? fallbackLot?.price_cents ?? row.display_price_cents ?? 0;
   const imageUrl = buildImageUrl(client, row.primary_image_path);
   const packaging = row.packaging?.trim() || (measurement === 'kg' ? 'kg' : 'piece');
@@ -117,7 +119,7 @@ const mapListingRowToProduct = (
     dbId: row.product_id,
     slug: row.slug,
     activeLotCode: row.active_lot_code ?? undefined,
-    activeLotId: row.active_lot_id ?? undefined,
+    activeLotId: activeLot?.id ?? undefined,
     name: row.name,
     description: row.description ?? '',
     price: centsToEuros(priceCents),
@@ -136,9 +138,6 @@ const mapListingRowToProduct = (
     inStock,
     measurement,
     weightKg: row.unit_weight_kg ?? undefined,
-    productions: options?.lots?.length
-      ? mapLotsToProductions(options.lots, measurement, options.lotUsageByLotId)
-      : undefined,
   };
 };
 
@@ -576,11 +575,11 @@ const mapProductRowToProduct = (row: DbProduct, selectedLot: DbLot | null, clien
     producerId: row.producer_profile_id ?? row.product_code,
     producerName: resolveProducerName(row.producer_name),
     producerLocation: resolveProducerLocation(row.producer_location),
-    producerProfileName: row.producer_profile_name ?? null,
-    producerProfileCity: row.producer_profile_city ?? null,
-    producerProfilePostcode: row.producer_profile_postcode ?? null,
-    producerAvatarPath: row.producer_avatar_path ?? null,
-    producerAvatarUpdatedAt: row.producer_avatar_updated_at ?? null,
+    producerProfileName: null,
+    producerProfileCity: null,
+    producerProfilePostcode: null,
+    producerAvatarPath: null,
+    producerAvatarUpdatedAt: null,
     inStock: Boolean(selectedLot && quantity > 0),
     measurement,
     weightKg: row.unit_weight_kg ?? undefined,
